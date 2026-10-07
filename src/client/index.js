@@ -548,6 +548,15 @@ window.__ModuleLoader__.load({
       return full === '' ? '' : full.slice(0, 5)
     }
 
+    /** Compact token figure: `1.2M` / `840k` / `912` — module-level so the
+     * record mappers (drop-landed) and the panel's ledger share one form. */
+    function compactTok(value) {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return ''
+      if (value >= 1_000_000) return (value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1) + 'M'
+      if (value >= 1_000) return (value / 1_000).toFixed(value >= 100_000 ? 0 : 1) + 'k'
+      return String(Math.round(value))
+    }
+
     /** `HH:MM:SS` for an epoch-millisecond stamp, when it is one. */
     function timeOf(at) {
       if (typeof at !== 'number' || !Number.isFinite(at)) return ''
@@ -1130,11 +1139,6 @@ window.__ModuleLoader__.load({
       const [statusLabel, statusTone] = statusMeta[state.status] ?? [String(state.status), '#8a8f98']
       const pressureValue = pressure === undefined ? undefined : Math.round(pressure)
       const pressureTone = pressureValue === undefined ? 'inherit' : pressureValue >= 85 ? '#e5484d' : pressureValue >= 60 ? '#d08700' : '#22a06b'
-      const compactTok = (value) => value >= 1_000_000
-        ? (value / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M'
-        : value >= 1000
-          ? (value / 1000).toFixed(value >= 10_000 ? 0 : 1).replace(/\.0$/, '') + 'k'
-          : String(value)
 
       /** One dense self-labeled line: figures only, `·`-joined. */
       const kv = (cells) => {
