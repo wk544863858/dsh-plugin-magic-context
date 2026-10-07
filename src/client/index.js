@@ -548,13 +548,20 @@ window.__ModuleLoader__.load({
       return full === '' ? '' : full.slice(0, 5)
     }
 
-    /** Compact token figure: `1.2M` / `840k` / `912` — module-level so the
-     * record mappers (drop-landed) and the panel's ledger share one form. */
+    /** `125k` / `1.2M` / `912` — the ONE token-scale formatter: no bare
+     * five-digit token numbers anywhere in the panel. */
     function compactTok(value) {
       if (typeof value !== 'number' || !Number.isFinite(value)) return ''
-      if (value >= 1_000_000) return (value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1) + 'M'
-      if (value >= 1_000) return (value / 1_000).toFixed(value >= 100_000 ? 0 : 1) + 'k'
+      if (value >= 1_000_000) return (value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1).replace(/\.0$/, '') + 'M'
+      if (value >= 1_000) return (value / 1_000).toFixed(value >= 100_000 ? 0 : 1).replace(/\.0$/, '') + 'k'
       return String(Math.round(value))
+    }
+
+    /** `1,234` — the ONE counting formatter: every 条/个/节点/次 figure gets
+     * a thousands separator, never a bare long number. */
+    function fmtInt(value) {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return ''
+      return Math.round(value).toLocaleString('en-US')
     }
 
     /** `HH:MM:SS` for an epoch-millisecond stamp, when it is one. */
@@ -606,11 +613,12 @@ window.__ModuleLoader__.load({
       return Array.isArray(data[key]) ? data[key].length : undefined
     }
 
-    /** `97,658 tok` / `−9,766 tok`; '' when the Host sent no number. */
+    /** `−70.7k tok`; '' when the Host sent no number. Same compact scale as
+     * every other token figure in the panel — no thousands-separated bills. */
     function tokensOf(value) {
       if (typeof value !== 'number' || !Number.isFinite(value)) return ''
       const sign = value < 0 ? '−' : ''
-      return sign + Math.abs(Math.round(value)).toLocaleString() + ' tok'
+      return sign + compactTok(Math.abs(value)) + ' tok'
     }
 
     /** `135ms` / `9.7s`; '' when the Host sent no number. */
@@ -646,8 +654,9 @@ window.__ModuleLoader__.load({
           // so listing it would bury them under "0 tok" lines.
           const delta = numberField(data, 'tokensDelta')
           if (delta === undefined || delta === 0) return null
+          const passPressure = numberField(data, 'pressure')
           return record('reclaim', '执行回收', [
-            numberField(data, 'pressure') === undefined ? '' : numberField(data, 'pressure') + '%',
+            passPressure === undefined ? '' : Math.round(passPressure) + '%',
             tokensOf(delta),
           ])
         }
@@ -656,9 +665,9 @@ window.__ModuleLoader__.load({
           const seenAgain = arrayLength(data, 'seenAgain')
           const skipped = arrayLength(data, 'skipped')
           return record('write', '记忆提升', [
-            inserted === undefined ? '' : '新增 ' + inserted,
-            seenAgain ? '去重命中 ' + seenAgain : '',
-            skipped ? '跳过 ' + skipped : '',
+            inserted === undefined ? '' : '新增 ' + fmtInt(inserted),
+            seenAgain ? '去重命中 ' + fmtInt(seenAgain) : '',
+            skipped ? '跳过 ' + fmtInt(skipped) : '',
           ])
         }
         case 'tool-call': {
@@ -682,8 +691,8 @@ window.__ModuleLoader__.load({
           const nodes = numberField(data, 'nodes')
           const reclaimed = numberField(data, 'estTokensReclaimed')
           return record('reclaim', '压缩上下文', [
-            nodes === undefined ? '' : '替换 ' + nodes + ' 节点',
-            reclaimed === undefined ? '' : '回收 ' + reclaimed + ' tok',
+            nodes === undefined ? '' : '替换 ' + fmtInt(nodes) + ' 节点',
+            reclaimed === undefined ? '' : '回收 ' + compactTok(reclaimed) + ' tok',
           ])
         }
         case 'baseline': {
@@ -693,14 +702,14 @@ window.__ModuleLoader__.load({
           const bytes = numberField(data, 'bytes')
           const est = numberField(data, 'estTokens')
           return record('reclaim', '基线重建 (HARD)', [
-            bytes === undefined ? '' : bytes + ' B',
-            est === undefined ? '' : est + ' tok',
+            bytes === undefined ? '' : compactTok(bytes) + ' B',
+            est === undefined ? '' : compactTok(est) + ' tok',
           ])
         }
         case 'emergency-reclaim': {
           const dropped = numberField(data, 'dropped')
           return record('drop', '丢弃上下文', [
-            dropped === undefined ? '' : '丢弃 ' + dropped + ' 条工具输出',
+            dropped === undefined ? '' : '丢弃 ' + fmtInt(dropped) + ' 条工具输出',
             data !== undefined && typeof data.reason === 'string' ? data.reason : '',
           ])
         }
@@ -708,7 +717,7 @@ window.__ModuleLoader__.load({
           const count = numberField(data, 'count')
           const est = numberField(data, 'estTokens')
           return record('drop', '丢弃落地', [
-            count === undefined ? '' : count + ' 条工具输出',
+            count === undefined ? '' : fmtInt(count) + ' 条工具输出',
             est === undefined ? '' : '回收 ' + compactTok(est) + ' tok',
           ])
         }
@@ -726,18 +735,19 @@ window.__ModuleLoader__.load({
           }
           if (phase !== 'stored') return null // start/done are the run's inner beat
           const facts = numberField(data, 'facts')
+          const nodes = numberField(data, 'nodes')
           return record('archive', '归档已存', [
             data !== undefined && typeof data.compartmentId === 'number' ? '§C' + String(data.compartmentId) + '§' : '',
-            facts === undefined ? '' : 'facts ' + facts,
-            numberField(data, 'nodes') === undefined ? '' : numberField(data, 'nodes') + ' 节点',
+            facts === undefined ? '' : 'facts ' + fmtInt(facts),
+            nodes === undefined ? '' : fmtInt(nodes) + ' 节点',
             spanOf(numberField(data, 'durationMs')),
           ])
         }
         case 'maintenance': {
           const parts = [
-            numberField(data, 'expired') === undefined ? '' : 'TTL 归档 ' + String(data.expired),
-            numberField(data, 'verified') === undefined ? '' : '验证 ' + String(data.verified),
-            numberField(data, 'updated') === undefined ? '' : '修订 ' + String(data.updated),
+            numberField(data, 'expired') === undefined ? '' : 'TTL 归档 ' + fmtInt(data.expired),
+            numberField(data, 'verified') === undefined ? '' : '验证 ' + fmtInt(data.verified),
+            numberField(data, 'updated') === undefined ? '' : '修订 ' + fmtInt(data.updated),
           ]
           if (parts.every((part) => part === '')) {
             return record('maintain', '维护巡检', ['无需处理'])
@@ -1038,7 +1048,7 @@ window.__ModuleLoader__.load({
           : errors > 0
             ? errors + ' 个错误'
             : pressureText !== ''
-              ? '上下文已用 ' + pressureText + (health.projectMemories !== undefined ? ' · 记忆 ' + health.projectMemories + ' 条' : '')
+              ? '上下文已用 ' + pressureText + (health.projectMemories !== undefined ? ' · 记忆 ' + fmtInt(health.projectMemories) + ' 条' : '')
               : 'Magic Context 运行中'
 
       const inDock = placement === 'statusbar'
@@ -1161,10 +1171,10 @@ window.__ModuleLoader__.load({
           health.lastTokens !== undefined && health.lastContextWindow
             ? '压缩后账面 ' + compactTok(health.lastTokens) + ' / ' + compactTok(health.lastContextWindow) + ' tok'
             : '',
-          projectTotal !== undefined ? '记忆 ' + projectTotal + ' 条' : '',
-          health.promote24h > 0 ? '24h 提升 ' + health.promote24h : '',
+          projectTotal !== undefined ? '记忆 ' + fmtInt(projectTotal) + ' 条' : '',
+          health.promote24h > 0 ? '24h 提升 ' + fmtInt(health.promote24h) : '',
           health.memoryStats !== undefined && health.memoryStats.unverified !== undefined
-            ? '待验证 ' + health.memoryStats.unverified
+            ? '待验证 ' + fmtInt(health.memoryStats.unverified)
             : '',
         ]),
         health.maintenanceLast !== undefined
