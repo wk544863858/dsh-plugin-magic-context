@@ -4,12 +4,18 @@
  * in the DSH checkout — this repository has no node_modules and cannot resolve bare
  * vitest. Keep the two files identical; this header is the only intended difference.
  */
+
 import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { detectProjectDrift } from '<path>'
+
+// Real git spawns under a parallel vitest pool can stall past the default 5s
+// test timeout (antivirus scans, worker contention) — the detector's own 3s
+// probe timeout then fails a fixture through no fault of the logic.
+vi.setConfig({ testTimeout: 30_000 })
 
 const tempDirs: string[] = []
 

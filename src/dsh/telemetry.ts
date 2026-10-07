@@ -155,14 +155,21 @@ export function createTelemetryService(deps: TelemetryDeps): TelemetryService {
     // the current build already fixed (the historian token-cap failures stayed
     // red for a day until this existed).
     const bootSince = deps.startedAt === undefined ? since : Math.max(deps.startedAt, since)
-    let passes24h = 0
+    /** First-wins capture: journal rows iterate newest-first, so the newest
+     * reading for a field simply arrives first. */
+    const firstNum = (current: number | undefined, value: unknown): number | undefined =>
+      current === undefined && typeof value === 'number' ? value : current
+    // 24h counters: kind → aggregate field (single scan; error level handled inline).
+    const KIND_COUNTS: Record<string, 'passes24h' | 'drops24h' | 'compartments24h' | 'emergency24h' | 'promote24h'> = {
+      pass: 'passes24h',
+      'drop-landed': 'drops24h',
+      'compartment-published': 'compartments24h',
+      'emergency-reclaim': 'emergency24h',
+      'memory-promote': 'promote24h',
+    }
+    const h: Record<string, number> = { passes24h: 0, drops24h: 0, compartments24h: 0, emergency24h: 0, promote24h: 0 }
     let errors24h = 0
     let errorsSinceBoot = 0
-    let drops24h = 0
-    let compartments24h = 0
-    let memoriesRecalled = 0
-    let emergency24h = 0
-    let promote24h = 0
     let reclaimed24h = 0
     let lastPressure: number | undefined
     let lastTokens: number | undefined
@@ -171,18 +178,13 @@ export function createTelemetryService(deps: TelemetryDeps): TelemetryService {
     let surfaceWindow: number | undefined
     try {
       for (const row of deps.stores.journalByKind(since, sessionId)) {
-        if (row.kind === 'pass') passes24h += row.count
         if (row.level === 'error') errors24h += row.count
-        if (row.kind === 'drop-landed') drops24h += row.count
-        if (row.kind === 'compartment-published') compartments24h += row.count
-        if (row.kind === 'emergency-reclaim') emergency24h += row.count
-        if (row.kind === 'memory-promote') promote24h += row.count
+        const field = KIND_COUNTS[row.kind]
+        if (field !== undefined) h[field] += row.count
       }
       for (const row of deps.stores.journalByKind(bootSince, sessionId)) {
         if (row.level === 'error') errorsSinceBoot += row.count
       }
-      const rows = latestRecall(sessionId)?.data?.rows
-      if (typeof rows === 'number') memoriesRecalled = rows
       // The pill's one number: the newest pressure reading, plus the 24h net
       // reclaim the execute band actually produced (sum of negative deltas).
       for (const entry of deps.stores.listJournal({ limit: 300, ...(sessionId === undefined ? {} : { sessionId }) })) {
@@ -191,55 +193,50 @@ export function createTelemetryService(deps: TelemetryDeps): TelemetryService {
           // projected occupancy answers the NEXT request, while the pass
           // ledger below only moves when a management pass runs. Preferred
           // whenever a reading exists — newest row wins by iteration order.
-          const projected = entry.data.projectedTokens
-          const window = entry.data.contextWindow
-          if (lastTokens === undefined && typeof projected === 'number') lastTokens = projected
-          if (lastContextWindow === undefined && typeof window === 'number') lastContextWindow = window
-          if (lastPressure === undefined && typeof projected === 'number' && typeof window === 'number' && window > 0) {
-            lastPressure = projected / window * 100
+          lastTokens = firstNum(lastTokens, entry.data.projectedTokens)
+          lastContextWindow = firstNum(lastContextWindow, entry.data.contextWindow)
+          if (lastPressure === undefined && typeof entry.data.projectedTokens === 'number' && typeof entry.data.contextWindow === 'number' && entry.data.contextWindow > 0) {
+            lastPressure = entry.data.projectedTokens / entry.data.contextWindow * 100
           }
           continue
         }
         if (entry.kind !== 'pass' || entry.data === undefined) continue
-        const pressure = entry.data.pressure
-        if (lastPressure === undefined && typeof pressure === 'number') lastPressure = pressure
-        // Absolute context size for the panel: the newest pass's ledger
-        // (tokensBefore) over the window it was measured against — the
-        // post-compaction SURFACE account, kept separate from the projected
-        // occupancy above because the two are different denominators of truth.
-        if (typeof entry.data.tokensBefore === 'number' && entry.data.decision === 'execute') {
-          if (surfaceTokens === undefined) surfaceTokens = entry.data.tokensBefore
-          if (surfaceWindow === undefined && typeof entry.data.contextWindow === 'number') surfaceWindow = entry.data.contextWindow
-        }
-        if (lastTokens === undefined && typeof entry.data.tokensBefore === 'number') lastTokens = entry.data.tokensBefore
-        if (lastContextWindow === undefined && typeof entry.data.contextWindow === 'number') lastContextWindow = entry.data.contextWindow
+        lastPressure = firstNum(lastPressure, entry.data.pressure)
+        // The post-compaction SURFACE account (execute passes only), separate
+        // from the projected occupancy above: different denominators of truth.
         if (entry.data.decision === 'execute') {
+          surfaceTokens = firstNum(surfaceTokens, entry.data.tokensBefore)
+          surfaceWindow = firstNum(surfaceWindow, entry.data.contextWindow)
           const delta = entry.data.tokensDelta
           if (typeof delta === 'number' && delta < 0) reclaimed24h += -delta
         }
+        lastTokens = firstNum(lastTokens, entry.data.tokensBefore)
+        lastContextWindow = firstNum(lastContextWindow, entry.data.contextWindow)
       }
     } catch {
       /* a locked or missing table must not break the UI */
     }
-    let journalRows = 0
-    let lastEventAt: number | undefined
+    // Bounds are global-store facts: read once, serve both the scoped and the
+    // whole-store fields (a failed read leaves them at zero — diagnostic only).
+    let boundsRows = 0
+    let boundsNewest: number | undefined
     try {
-      journalRows = sessionId === undefined
-        ? deps.stores.journalBounds().rows
-        : deps.stores.journalByKind(undefined, sessionId).reduce((total, row) => total + row.count, 0)
-      lastEventAt = sessionId === undefined
-        ? deps.stores.journalBounds().newest
-        : newestOf(sessionId)?.at
+      const bounds = deps.stores.journalBounds()
+      boundsRows = bounds.rows
+      boundsNewest = bounds.newest
     } catch {
-      journalRows = 0
+      /* diagnostic fields degrade to zero */
     }
-    // Whole-store row count: kept alongside the scoped one for diagnosis.
-    let journalRowsAll = 0
-    try {
-      journalRowsAll = deps.stores.journalBounds().rows
-    } catch {
-      journalRowsAll = journalRows
-    }
+    const journalRows = sessionId === undefined
+      ? boundsRows
+      : (() => {
+        try {
+          return deps.stores.journalByKind(undefined, sessionId).reduce((total, row) => total + row.count, 0)
+        } catch {
+          return 0
+        }
+      })()
+    const lastEventAt = sessionId === undefined ? boundsNewest : newestOf(sessionId)?.at
     let memoryStats: Record<string, unknown> | undefined
     let maintenanceLast: Record<string, unknown> | undefined
     try {
@@ -250,20 +247,24 @@ export function createTelemetryService(deps: TelemetryDeps): TelemetryService {
     }
     return {
       journalRows,
-      journalRowsAll,
+      journalRowsAll: boundsRows,
       lastEventAt,
-      passes24h,
+      passes24h: h.passes24h,
       errors24h,
       errorsSinceBoot,
-      drops24h,
-      compartments24h,
-      memoriesRecalled,
-      emergency24h,
-      promote24h,
+      drops24h: h.drops24h,
+      compartments24h: h.compartments24h,
+      emergency24h: h.emergency24h,
+      promote24h: h.promote24h,
       reclaimed24h,
       lastPressure,
       lastTokens,
       lastContextWindow,
+      // Frozen summary shape (telemetry.spec asserts it): same value as
+      // project.memories, kept for JSON-consumer compatibility.
+      memoriesRecalled: typeof latestRecall(sessionId)?.data?.rows === 'number'
+        ? latestRecall(sessionId)?.data?.rows
+        : 0,
       // The post-compaction SURFACE account (newest execute pass), separate
       // from the projected occupancy: the panel labels the two explicitly.
       ...(surfaceTokens !== undefined ? { surfaceLedger: { tokens: surfaceTokens, ...(surfaceWindow !== undefined ? { window: surfaceWindow } : {}) } } : {}),

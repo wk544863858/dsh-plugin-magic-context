@@ -61,7 +61,7 @@ import { detectProjectDrift } from './dsh/project-drift.ts'
 import { DEFAULT_POLICY, decidePass, pressurePercent, type PressurePolicy } from './core/policy.ts'
 import z from '@deepseek-ai/schemastery'
 import { ensureTag, tagPrefix } from './core/tagger.ts'
-import { DEFAULT_SHARE_CATEGORIES, defaultMemoryDbPath, MEMORY_SCHEMA_MAX_VERSION, openMemoryBridge, resolveProjectIdentity } from './core/memory-bridge.ts'
+import { DEFAULT_SHARE_CATEGORIES, defaultMemoryDbPath, MEMORY_SCHEMA_MAX_VERSION, openMemoryBridge, resolveIdentitySpec } from './core/memory-bridge.ts'
 import { openMemoryWriter, type MemoryWriter } from './core/memory-write.ts'
 import { runMaintenanceTick, type MaintenanceLlm } from './core/maintenance.ts'
 import { openMemorySearch, type MemorySearch } from './core/memory-search.ts'
@@ -532,9 +532,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
         const projectSpec = config.memory?.project ?? payload.agent.session.header.cwd
         const memoryIdentity = projectSpec === undefined
           ? undefined
-          : projectSpec.startsWith('git:') || projectSpec.startsWith('dir:')
-            ? projectSpec
-            : resolveProjectIdentity(projectSpec)
+          : resolveIdentitySpec(projectSpec)
         // The maintenance sweep maintains every identity this process has
         // actually served (the configured project is added unconditionally),
         // and the session→identity map scopes the telemetry panel's stats to
@@ -906,17 +904,15 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
           },
           resolveIdentity: exec => {
             const spec = config.memory?.project ?? exec?.agent?.session.header.cwd
-            if (spec === undefined) return undefined
-            return spec.startsWith('git:') || spec.startsWith('dir:') ? spec : resolveProjectIdentity(spec)
+            return spec === undefined ? undefined : resolveIdentitySpec(spec)
           },
           // The `project` argument's resolver: an explicit absolute path (another
           // project the model is working on) through the same normalizer. DSH has
           // no per-turn working directory, so the model naming the project is the
           // only cross-project scoping signal we have.
           resolveIdentityOf: spec => {
-            if (spec.startsWith('git:') || spec.startsWith('dir:')) return spec
             try {
-              return resolveProjectIdentity(spec)
+              return resolveIdentitySpec(spec)
             } catch {
               return undefined
             }
@@ -936,9 +932,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
             const spec = (request as { identity?: string }).identity
               ?? config.memory?.project
               ?? (exec === undefined ? undefined : exec.agent?.session.header.cwd)
-            const project = spec === undefined || spec.startsWith('git:') || spec.startsWith('dir:')
-              ? spec
-              : resolveProjectIdentity(spec)
+            const project = spec === undefined ? undefined : resolveIdentitySpec(spec)
             // A fenced/unreadable store must say so: `{ empty: true }` would read
             // as "this project has no memories", which is a different fact.
             if (!memoryRecall.status.ok) {

@@ -515,7 +515,6 @@ window.__ModuleLoader__.load({
         errors24h: health.errors24h,
         drops24h: health.drops24h,
         compartments24h: health.compartments24h,
-        memoriesRecalled: health.memoriesRecalled,
         // The density pass: the numbers a user actually acts on.
         lastPressure: typeof health.lastPressure === 'number' ? health.lastPressure : undefined,
         emergency24h: typeof health.emergency24h === 'number' ? health.emergency24h : undefined,

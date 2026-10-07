@@ -296,6 +296,14 @@ export function resolveProjectIdentity(directory: string): string {
   return gitProjectIdentity(directory) ?? directoryIdentity(directory)
 }
 
+/** The one identity normalizer: `git:`/`dir:` identities pass through, any
+ * other string resolves as a directory. Every caller (session scope, the
+ * `ctx_memory` `project` argument, recall scoping) shares this spelling. */
+export function resolveIdentitySpec(spec: string): string | undefined {
+  if (spec.startsWith('git:') || spec.startsWith('dir:')) return spec
+  return resolveProjectIdentity(spec)
+}
+
 function identityCandidates(project: string | undefined): string[] {
   if (project === undefined || project.length === 0) return []
   if (project.startsWith('git:') || project.startsWith('dir:')) return [project]
