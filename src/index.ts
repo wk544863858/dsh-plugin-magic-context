@@ -1024,6 +1024,21 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
         memoryWrite: stores.getMeta('memory_write'),
         toolsMode: toolMode,
       }),
+      // Dreamer-slice KPIs for the panel: primary identity's verification
+      // coverage + the newest maintenance tally. Lazy getters — the panel
+      // polls them, nothing runs at mount.
+      memoryStats: () => {
+        if (memoryWriter === undefined) return undefined
+        const identity = config.memory?.project ?? [...seenIdentities][0]
+        if (identity === undefined) return undefined
+        try {
+          const stats = memoryWriter.stats(identity)
+          return { total: stats.rows, verified: stats.verified, unverified: stats.unverified }
+        } catch {
+          return undefined
+        }
+      },
+      maintenanceLast: () => maintenanceLast,
       startedAt,
     })
     const service = telemetry
@@ -1048,6 +1063,8 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
   // identity this process resolved for a session. Fail-open end to end: a
   // broken tick journals and waits for the next one.
   const seenIdentities = new Set<string>()
+  /** Newest maintenance tally, surfaced by the telemetry panel (dreamer KPI). */
+  let maintenanceLast: { at: number; expired: number; verified: number; updated: number; archived: number } | undefined
   let maintenanceBusy = false
   const runMaintenance = async (): Promise<void> => {
     if (maintenanceBusy || adapterDisposed || stores.closed || journal === undefined) return
@@ -1070,6 +1087,13 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
         })
         // A writer-level problem applies to every identity — stop the sweep.
         if (outcome.reason === 'writer-unavailable' || outcome.reason === 'read-only') break
+        maintenanceLast = {
+          at: Date.now(),
+          expired: outcome.expired,
+          verified: outcome.verified,
+          updated: outcome.updated,
+          archived: outcome.archived,
+        }
       }
     } catch (error) {
       journal.error('maintenance', `maintenance tick failed: ${error instanceof Error ? error.message : String(error)}`)

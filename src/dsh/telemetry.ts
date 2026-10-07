@@ -53,6 +53,23 @@ export interface TelemetryDeps {
   readonly now?: () => number
   /** Stream poll interval; tests shrink it. */
   readonly pollMs?: number
+  /**
+   * Dreamer-slice KPIs for the panel: the primary project's verification
+   * coverage and the newest maintenance tick's tally. Optional getters — the
+   * composition root wires them only when the memory writer is writable.
+   */
+  readonly memoryStats?: () => {
+    readonly total?: number
+    readonly verified?: number
+    readonly unverified?: number
+  } | undefined
+  readonly maintenanceLast?: () => {
+    readonly at?: number
+    readonly expired?: number
+    readonly verified?: number
+    readonly updated?: number
+    readonly archived?: number
+  } | undefined
 }
 
 export interface TelemetryService {
@@ -147,6 +164,8 @@ export function createTelemetryService(deps: TelemetryDeps): TelemetryService {
     let promote24h = 0
     let reclaimed24h = 0
     let lastPressure: number | undefined
+    let lastTokens: number | undefined
+    let lastContextWindow: number | undefined
     try {
       for (const row of deps.stores.journalByKind(since, sessionId)) {
         if (row.kind === 'pass') passes24h += row.count
@@ -167,6 +186,10 @@ export function createTelemetryService(deps: TelemetryDeps): TelemetryService {
         if (entry.kind !== 'pass' || entry.data === undefined) continue
         const pressure = entry.data.pressure
         if (lastPressure === undefined && typeof pressure === 'number') lastPressure = pressure
+        // Absolute context size for the panel: the newest pass's ledger
+        // (tokensBefore) over the window it was measured against.
+        if (lastTokens === undefined && typeof entry.data.tokensBefore === 'number') lastTokens = entry.data.tokensBefore
+        if (lastContextWindow === undefined && typeof entry.data.contextWindow === 'number') lastContextWindow = entry.data.contextWindow
         if (entry.data.decision === 'execute') {
           const delta = entry.data.tokensDelta
           if (typeof delta === 'number' && delta < 0) reclaimed24h += -delta
@@ -194,6 +217,14 @@ export function createTelemetryService(deps: TelemetryDeps): TelemetryService {
     } catch {
       journalRowsAll = journalRows
     }
+    let memoryStats: Record<string, unknown> | undefined
+    let maintenanceLast: Record<string, unknown> | undefined
+    try {
+      memoryStats = deps.memoryStats?.() as Record<string, unknown> | undefined
+      maintenanceLast = deps.maintenanceLast?.() as Record<string, unknown> | undefined
+    } catch {
+      /* stats are panel decoration; never let them break the summary */
+    }
     return {
       journalRows,
       journalRowsAll,
@@ -208,6 +239,10 @@ export function createTelemetryService(deps: TelemetryDeps): TelemetryService {
       promote24h,
       reclaimed24h,
       lastPressure,
+      lastTokens,
+      lastContextWindow,
+      ...(memoryStats !== undefined ? { memoryStats } : {}),
+      ...(maintenanceLast !== undefined ? { maintenanceLast } : {}),
     }
   }
 

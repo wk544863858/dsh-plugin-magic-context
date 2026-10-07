@@ -278,6 +278,9 @@ export interface MemoryWriter {
     readonly rows: number
     readonly mutationLog: number
     readonly epoch: number
+    /** Verification coverage (the dreamer slice's KPI): verified_at banked vs pending. */
+    readonly verified: number
+    readonly unverified: number
   }
   /**
    * `write`: dedup on `(project_path, category, normalized_hash)` inside one
@@ -622,6 +625,13 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
     const statsRows = db.prepare('SELECT COUNT(*) AS c FROM memories WHERE project_path = ?')
     const statsMutations = db.prepare('SELECT COUNT(*) AS c FROM memory_mutation_log WHERE project_path = ?')
     const statsEpoch = db.prepare('SELECT project_memory_epoch AS e FROM project_state WHERE project_path = ?')
+    // Verification coverage for the telemetry panel: the dreamer slice's own KPI.
+    const statsVerification = db.prepare(
+      `SELECT
+         COALESCE(SUM(CASE WHEN verified_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS verified,
+         COALESCE(SUM(CASE WHEN verified_at IS NULL THEN 1 ELSE 0 END), 0) AS unverified
+       FROM memories WHERE project_path = ? AND status IN ('active','permanent')`,
+    )
 
     // Agent write path (contract §11). Prepared once; the whole projection is
     // required, so a pre-v94 database disables the writer at probe time rather
@@ -780,13 +790,16 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
       },
       stats: identity => {
         try {
+          const coverage = statsVerification.get(identity) as { verified: number; unverified: number }
           return {
             rows: (statsRows.get(identity) as { c: number }).c,
             mutationLog: (statsMutations.get(identity) as { c: number }).c,
             epoch: ((statsEpoch.get(identity) as { e: number } | undefined)?.e) ?? 0,
+            verified: Number(coverage.verified),
+            unverified: Number(coverage.unverified),
           }
         } catch {
-          return { rows: 0, mutationLog: 0, epoch: 0 }
+          return { rows: 0, mutationLog: 0, epoch: 0, verified: 0, unverified: 0 }
         }
       },
       promoteFacts: (input) => {

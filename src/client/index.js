@@ -117,6 +117,8 @@ window.__ModuleLoader__.load({
     const SettingsForm = typeof ui.SettingsForm === 'function' ? ui.SettingsForm : undefined
     const SettingsValueField = typeof ui.SettingsValueField === 'function' ? ui.SettingsValueField : undefined
     const Switch = typeof ui.Switch === 'function' ? ui.Switch : undefined
+    /** The official dark tooltip bubble (side top, 200ms delay) — same skin as the context meter's. */
+    const Tooltip = typeof ui.Tooltip === 'function' ? ui.Tooltip : undefined
 
     /* ------------------------------------------------------------------ *
      * The editable settings surface
@@ -519,6 +521,24 @@ window.__ModuleLoader__.load({
         emergency24h: typeof health.emergency24h === 'number' ? health.emergency24h : undefined,
         promote24h: typeof health.promote24h === 'number' ? health.promote24h : undefined,
         reclaimed24h: typeof health.reclaimed24h === 'number' ? health.reclaimed24h : undefined,
+        // Panel v3: absolute context size + the dreamer-slice KPIs.
+        lastTokens: typeof health.lastTokens === 'number' ? health.lastTokens : undefined,
+        lastContextWindow: typeof health.lastContextWindow === 'number' ? health.lastContextWindow : undefined,
+        memoryStats: health.memoryStats !== null && typeof health.memoryStats === 'object'
+          ? {
+            verified: typeof health.memoryStats.verified === 'number' ? health.memoryStats.verified : undefined,
+            unverified: typeof health.memoryStats.unverified === 'number' ? health.memoryStats.unverified : undefined,
+          }
+          : undefined,
+        maintenanceLast: health.maintenanceLast !== null && typeof health.maintenanceLast === 'object'
+          ? {
+            at: typeof health.maintenanceLast.at === 'number' ? health.maintenanceLast.at : undefined,
+            expired: typeof health.maintenanceLast.expired === 'number' ? health.maintenanceLast.expired : undefined,
+            verified: typeof health.maintenanceLast.verified === 'number' ? health.maintenanceLast.verified : undefined,
+            updated: typeof health.maintenanceLast.updated === 'number' ? health.maintenanceLast.updated : undefined,
+            archived: typeof health.maintenanceLast.archived === 'number' ? health.maintenanceLast.archived : undefined,
+          }
+          : undefined,
       }
     }
 
@@ -557,6 +577,7 @@ window.__ModuleLoader__.load({
       read: { icon: '🔎', label: '加载记忆', tone: '#2f81f7' },
       reclaim: { icon: '✂️', label: '压缩上下文', tone: '#22a06b' },
       drop: { icon: '🗑️', label: '丢弃上下文', tone: '#d08700' },
+      maintain: { icon: '🧰', label: '维护', tone: '#8250df' },
       archive: { icon: '🧭', label: '历史归档', tone: '#8a8f98' },
       error: { icon: '⚠️', label: '失败', tone: '#e5484d' },
     }
@@ -676,7 +697,16 @@ window.__ModuleLoader__.load({
         }
         case 'historian': {
           const phase = data === undefined || typeof data.phase !== 'string' ? '' : data.phase
-          if (phase === 'failed') return record('error', '历史归档失败', [typeof data.reason === 'string' ? data.reason.slice(0, 60) : ''])
+          if (phase === 'failed') {
+            // A remount-killed run is repaired host-side at the next mount —
+            // it is bookkeeping, not an operation failure, so it reads as a
+            // dim archive row instead of a red one.
+            if (data !== undefined && data.kind === 'adapter-remount') {
+              return record('maintain', '重挂载恢复', ['补记中断的历史归档'])
+            }
+            const reason = typeof data.reason === 'string' ? data.reason : ''
+            return record('error', '历史归档失败', [reason.slice(0, 42)])
+          }
           if (phase !== 'stored') return null // start/done are the run's inner beat
           const facts = numberField(data, 'facts')
           return record('archive', '归档已存', [
@@ -685,6 +715,17 @@ window.__ModuleLoader__.load({
             numberField(data, 'nodes') === undefined ? '' : numberField(data, 'nodes') + ' 节点',
             spanOf(numberField(data, 'durationMs')),
           ])
+        }
+        case 'maintenance': {
+          const parts = [
+            numberField(data, 'expired') === undefined ? '' : 'TTL 归档 ' + String(data.expired),
+            numberField(data, 'verified') === undefined ? '' : '验证 ' + String(data.verified),
+            numberField(data, 'updated') === undefined ? '' : '修订 ' + String(data.updated),
+          ]
+          if (parts.every((part) => part === '')) {
+            return record('maintain', '维护巡检', ['无需处理'])
+          }
+          return record('maintain', '维护巡检', parts)
         }
         case 'session-notice':
           // The notice is the conversation's own inline row; mirroring it here
@@ -928,6 +969,17 @@ window.__ModuleLoader__.load({
         document.addEventListener('pointerdown', onPointerDown, true)
         document.addEventListener('keydown', onKeyDown, true)
         window.addEventListener('blur', onWindowBlur)
+        // The pill's hover skin is the official pill's own token pair
+        // (ContextMeter.module.css .trigger:hover); inline styles cannot
+        // express :hover, so one shared stylesheet does it once.
+        if (document.getElementById('mc-pill-skin') === null) {
+          const skin = document.createElement('style')
+          skin.id = 'mc-pill-skin'
+          skin.textContent = 'button[data-mc-surface="1"]{transition:background-color .12s ease}'
+            + 'button[data-mc-surface="1"]:hover,button[data-mc-surface="1"][aria-expanded="true"]'
+            + '{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.16));color:var(--dsw-alias-label-secondary,inherit)}'
+          document.head.appendChild(skin)
+        }
         return () => {
           document.removeEventListener('pointerdown', onPointerDown, true)
           document.removeEventListener('keydown', onKeyDown, true)
@@ -970,25 +1022,27 @@ window.__ModuleLoader__.load({
               : 'MC · ' + passes + ' pass'
       const lastSeen = timeOf(health.lastEventAt)
       const scopeLabel = health.scope === 'session' ? 'this session' : 'all sessions'
-      const title = state.status === 'unavailable'
-        ? 'Magic Context · telemetry unavailable (this Host serves no /mc-telemetry route)'
+      // The pill's hover bubble mirrors the native pills' tooltip (one dark
+      // rounded line); the full diagnostic title lives on the panel only.
+      const tipText = state.status === 'unavailable'
+        ? '遥测不可用'
         : state.status !== 'ok'
-          ? 'Magic Context · connecting to ' + eventsUrl
-          : 'Magic Context · ' + scopeLabel
-            + (pressureText === '' ? '' : ' · 压力 ' + pressureText + '（上次请求账面，阈值判定用它；原生状态条为即时估算）')
-            + (health.projectIdentity === undefined ? '' : ' · ' + health.projectIdentity)
-            + ' · pass ' + passes + ' · err ' + errors + ' (24h ' + (health.errors24h ?? '?') + ')'
-            + (health.journalRows === undefined ? '' : ' · journal ' + health.journalRows)
-            + (lastSeen === '' ? '' : ' · last ' + lastSeen)
-            + ' — click for details'
+          ? '连接中…'
+          : errors > 0
+            ? errors + ' 个错误'
+            : pressureText !== ''
+              ? '上下文已用 ' + pressureText + (health.projectMemories !== undefined ? ' · 记忆 ' + health.projectMemories + ' 条' : '')
+              : 'Magic Context 运行中'
 
       const inDock = placement === 'statusbar'
-      const pill = el('button', {
+      // The official pill skin: hover + open keep the interactive background
+      // (injected once — inline styles cannot express :hover), and the pill
+      // rides in the official Tooltip bubble when the primitives module exists.
+      const pillCore = el('button', {
         type: 'button',
         'data-mc-surface': '1',
         ref: pillRef,
-        title,
-        'aria-label': title,
+        'aria-label': tipText,
         'aria-expanded': open,
         onClick: () => {
           if (!open) setAnchor(anchorAbove(pillRef === null || pillRef === undefined ? null : pillRef.current))
@@ -1005,7 +1059,7 @@ window.__ModuleLoader__.load({
           font: inDock ? 'inherit' : '11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace',
           fontVariantNumeric: inDock ? 'tabular-nums' : undefined,
           padding: inDock ? '1px 8px' : '4px 9px',
-          borderRadius: 999,
+          borderRadius: inDock ? 'var(--dsw-radius-sm, 6px)' : 999,
           border: inDock ? 'none' : '1px solid var(--dsw-alias-border-secondary, rgba(127,127,127,.35))',
           background: 'transparent',
           color: errors > 0 && state.status === 'ok'
@@ -1030,6 +1084,9 @@ window.__ModuleLoader__.load({
         }),
         el('span', { key: 'text' }, collapsed),
       ])
+      const pill = Tooltip !== undefined
+        ? el(Tooltip, { label: tipText, side: 'top', delayMs: 200, disabled: open }, pillCore)
+        : pillCore
 
       const place = anchor === null ? PANEL_FALLBACK_ANCHOR : anchor
 
@@ -1051,60 +1108,94 @@ window.__ModuleLoader__.load({
           }, pill)
       }
 
-      const rows = []
-      /** One flex row: dim label, right-aligned value. */
-      const row = (label, value) => {
-        if (value === undefined || value === null || value === '') return
-        rows.push(el('div', { key: 'row-' + rows.length, style: { display: 'flex', gap: 8, justifyContent: 'space-between' } }, [
-          el('span', { key: 'k', style: { opacity: 0.65 } }, label),
-          el('span', { key: 'v', style: { textAlign: 'right', wordBreak: 'break-all' } }, String(value)),
-        ]))
+      // ---- Panel v3: status dot + pressure gauge, label-grid summary,
+      // categorized operation feed. System font for prose, tabular numerals
+      // for figures; the old full-monospace panel read like a debug console.
+      const statusMeta = {
+        ok: ['正常', '#22a06b'],
+        connecting: ['连接中', '#d08700'],
+        unavailable: ['不可用', '#e5484d'],
       }
-      /** One dense self-labeled line: `压力 37% · 记忆 40 · 提升 6`. */
-      const line = (items) => {
-        const cells = items
-          .filter((pair) => pair[1] !== undefined && pair[1] !== null && pair[1] !== '')
-          .map((pair) => pair[0] + ' ' + pair[1])
-        if (cells.length === 0) return
-        rows.push(el('div', { key: 'line-' + rows.length, style: { opacity: 0.9 } }, cells.join(' · ')))
+      const [statusLabel, statusTone] = statusMeta[state.status] ?? [String(state.status), '#8a8f98']
+      const pressureValue = pressure === undefined ? undefined : Math.round(pressure)
+      const pressureTone = pressureValue === undefined ? 'inherit' : pressureValue >= 85 ? '#e5484d' : pressureValue >= 60 ? '#d08700' : '#22a06b'
+      const compactTok = (value) => value >= 1_000_000
+        ? (value / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M'
+        : value >= 1000
+          ? (value / 1000).toFixed(value >= 10_000 ? 0 : 1).replace(/\.0$/, '') + 'k'
+          : String(value)
+
+      /** One summary line: dim fixed-width label + tabular figures. */
+      const kv = (label, cells) => {
+        const text = cells.filter((cell) => cell !== '' && cell !== undefined && cell !== null).join(' · ')
+        if (text === '') return null
+        return el('div', { key: 'kv-' + label, style: { display: 'flex', gap: 10, padding: '2.5px 0' } }, [
+          el('span', { key: 'k', style: { flex: '0 0 44px', opacity: 0.5 } }, label),
+          el('span', { key: 'v', style: { flex: '1 1 auto', fontVariantNumeric: 'tabular-nums', minWidth: 0 } }, text),
+        ])
       }
-      // Two dense lines answer "what is this conversation doing"; everything
-      // else (process identity, internal versions, row counts) lives in the
-      // pill's hover title only.
-      line([
-        ['压力', health.lastPressure === undefined ? undefined : Math.round(health.lastPressure) + '%'],
-        ['记忆', health.projectMemories],
-        ['24h 提升', health.promote24h],
-      ])
-      line([
-        ['24h', [
-          health.compartments24h > 0 ? '压缩 ' + health.compartments24h : undefined,
-          health.reclaimed24h > 0 ? '回收 ' + (health.reclaimed24h >= 1000 ? Math.round(health.reclaimed24h / 100) / 10 + 'k' : String(health.reclaimed24h)) + ' tok' : undefined,
-          health.emergency24h > 0 ? '丢弃 ' + health.emergency24h : undefined,
-        ].filter(Boolean).join(' · ') || undefined],
-      ])
-      if (errors > 0) row('⚠️ 本进程错误', errors)
+
+      const summaryRows = [
+        kv('上下文', [
+          health.lastTokens !== undefined && health.lastContextWindow
+            ? compactTok(health.lastTokens) + ' / ' + compactTok(health.lastContextWindow) + ' tok'
+            : '',
+          pressureValue !== undefined ? pressureValue + '%' : '',
+        ]),
+        kv('记忆', [
+          health.projectMemories !== undefined ? health.projectMemories + ' 条' : '',
+          health.promote24h > 0 ? '24h 提升 ' + health.promote24h : '',
+          health.memoryStats !== undefined && health.memoryStats.unverified !== undefined
+            ? '待验证 ' + health.memoryStats.unverified
+            : '',
+        ]),
+        health.maintenanceLast !== undefined
+          ? kv('维护', [
+            typeof health.maintenanceLast.at === 'number' ? timeShort(health.maintenanceLast.at) : '',
+            health.maintenanceLast.expired ? 'TTL 归档 ' + health.maintenanceLast.expired : '',
+            health.maintenanceLast.verified ? '验证 ' + health.maintenanceLast.verified : '',
+            health.maintenanceLast.updated ? '修订 ' + health.maintenanceLast.updated : '',
+          ])
+          : null,
+        errors > 0 ? kv('异常', ['本进程 ' + errors + ' · 24h ' + (health.errors24h ?? '?')]) : null,
+      ].filter(Boolean)
 
       const records = recordsOf(state.recent)
-      // The chips row went with the density pass: the record list plus the
-      // beat line carry the same information without a third rendering of it.
       const noise = noiseLine(state.recent)
       const recordNodes = records.length === 0
-        ? [el('div', { key: 'empty', style: { opacity: 0.6 } }, state.status === 'unavailable' ? 'no telemetry route on this Host' : '暂无操作记录')]
+        ? [el('div', { key: 'empty', style: { padding: '4px 0', opacity: 0.55 } }, state.status === 'unavailable' ? '此宿主未挂遥测路由' : '暂无操作记录')]
         : records.slice(0, MAX_RECORDS).map((record, index) => {
           const meta = RECORD_CATEGORIES[record.category] === undefined ? RECORD_CATEGORIES.archive : RECORD_CATEGORIES[record.category]
           const body = record.detail !== '' ? record.detail : typeof record.summary === 'string' ? record.summary : ''
-          const detail = record.count > 1 ? body + ' ×' + record.count : body
+          const folded = record.count > 1 ? body + ' · ' + record.count + ' 次' : body
           return el('div', {
             key: 'record-' + index,
-            title: meta.label,
-            style: { display: 'flex', gap: 6, padding: '3px 0', borderTop: index === 0 ? 'none' : '1px solid rgba(127,127,127,.16)' },
+            title: meta.label + (record.count > 1 ? ' ×' + record.count : '') + (record.summary !== '' && record.summary !== body ? '\n' + record.summary : ''),
+            style: {
+              display: 'flex',
+              gap: 8,
+              alignItems: 'center',
+              padding: '5px 0',
+              borderTop: index === 0 ? 'none' : '1px solid rgba(127,127,127,.12)',
+            },
           }, [
-            el('span', { key: 'icon', style: { flex: '0 0 auto' } }, meta.icon),
-            el('span', { key: 'detail', style: { flex: '1 1 auto', minWidth: 0, opacity: 0.85, wordBreak: 'break-word' } }, detail),
-            el('span', { key: 'at', style: { flex: '0 0 auto', opacity: 0.5 } }, timeShort(record.at)),
+            el('span', { key: 'dot', style: { flex: '0 0 auto', width: 7, height: 7, borderRadius: 4, background: meta.tone } }),
+            el('span', { key: 'label', style: { flex: '0 0 auto' } }, meta.label),
+            el('span', {
+              key: 'detail',
+              style: { flex: '1 1 auto', minWidth: 0, opacity: 0.6, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+            }, folded),
+            el('span', { key: 'at', style: { flex: '0 0 auto', opacity: 0.45, fontVariantNumeric: 'tabular-nums' } }, timeShort(record.at)),
           ])
         })
+
+      const sectionTitle = (key, title, extra) => el('div', {
+        key,
+        style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', margin: '10px 0 3px' },
+      }, [
+        el('span', { key: 't', style: { fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', opacity: 0.5 } }, title),
+        extra === undefined ? null : el('span', { key: 'e', style: { fontSize: 10.5, opacity: 0.5 } }, extra),
+      ])
 
       const panel = el('div', {
         'data-mc-surface': '1',
@@ -1114,30 +1205,40 @@ window.__ModuleLoader__.load({
           bottom: place.bottom,
           zIndex: 60,
           pointerEvents: 'auto',
-          width: 340,
+          width: 352,
           maxWidth: 'calc(100vw - 24px)',
           maxHeight: place.maxHeight,
           overflowY: 'auto',
-          padding: '10px 12px',
-          borderRadius: 10,
-          border: '1px solid var(--dsw-alias-border-secondary, rgba(127,127,127,.35))',
-          background: 'var(--dsw-alias-bg-layer-1, rgba(24,24,27,.96))',
+          padding: '12px 14px 10px',
+          borderRadius: 12,
+          border: '1px solid var(--dsw-alias-border-secondary, rgba(127,127,127,.3))',
+          background: 'var(--dsw-alias-bg-layer-1, rgba(24,24,27,.97))',
           color: 'var(--dsw-alias-label-primary, #e6e6e6)',
-          boxShadow: '0 8px 24px rgba(0,0,0,.28)',
-          font: '11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace',
+          boxShadow: '0 12px 32px rgba(0,0,0,.22)',
+          font: '12px/1.55 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
         },
       }, [
-        el('div', { key: 'head', style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 } }, [
-          el('strong', { key: 'title', style: { fontSize: 11, letterSpacing: '.04em' } }, 'MAGIC CONTEXT'),
-          el('span', { key: 'status', style: { color: tone } }, state.status),
+        el('div', { key: 'head', style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } }, [
+          el('div', { key: 'who', style: { display: 'flex', alignItems: 'center', gap: 7 } }, [
+            el('span', { key: 'dot', style: { width: 8, height: 8, borderRadius: 4, background: statusTone, boxShadow: '0 0 6px ' + statusTone } }),
+            el('strong', { key: 'title', style: { fontSize: 12.5, fontWeight: 600, letterSpacing: '.01em' } }, 'Magic Context'),
+            el('span', { key: 'status', style: { fontSize: 10.5, opacity: 0.55 } }, statusLabel),
+          ]),
+          pressureValue === undefined
+            ? el('span', { key: 'p', style: { fontSize: 10.5, opacity: 0.4 } }, '—')
+            : el('span', {
+              key: 'p',
+              style: { fontSize: 17, fontWeight: 600, lineHeight: 1, color: pressureTone, fontVariantNumeric: 'tabular-nums' },
+            }, pressureValue + '%'),
         ]),
-        el('div', { key: 'health', style: { display: 'grid', gap: 2 } }, rows),
-        el('div', { key: 'records-head', style: { marginTop: 8, display: 'flex', justifyContent: 'space-between', opacity: 0.75 } }, [
-          el('span', { key: 'title' }, '操作记录'),
-          el('span', { key: 'count', style: { opacity: 0.7 } }, records.length === 0 ? '' : '共 ' + records.length + ' 条'),
-        ]),
-        el('div', { key: 'records', style: { display: 'grid', gap: 0 } }, recordNodes),
-        el('div', { key: 'noise', style: { marginTop: 6, opacity: 0.5 } }, noise === '' ? '' : '节拍: ' + noise),
+        el('div', { key: 'summary', style: { marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(127,127,127,.14)' } }, summaryRows),
+        sectionTitle('records-head', '最近操作', records.length === 0 ? undefined : '近 ' + records.length + ' 项'),
+        el('div', { key: 'records', style: { display: 'grid' } }, recordNodes),
+        el('div', {
+          key: 'foot',
+          title: noise === '' ? undefined : '节拍: ' + noise,
+          style: { marginTop: 8, paddingTop: 6, borderTop: '1px solid rgba(127,127,127,.14)', opacity: 0.45, fontSize: 10.5 },
+        }, '悬停条目看详情 · /ctx-status 看全量'),
       ])
 
       return placement === 'overlay'
