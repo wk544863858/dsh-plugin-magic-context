@@ -879,6 +879,12 @@ window.__ModuleLoader__.load({
       const [anchor, setAnchor] = useState(null)
       const [hovered, setHovered] = useState(false)
       const pillRef = useRef(null)
+      /** The one summary fetch: `ok → json`, anything else rejects. Lives at
+       * component scope — both the SSE effect (probe) and the open-panel
+       * effect (refresh) call it. */
+      const fetchSummaryJson = () => Promise.resolve(fetch(summaryUrl, { headers: { accept: 'application/json' } })).then(
+        (response) => (response !== undefined && response.ok ? response.json() : Promise.reject(new Error('unavailable'))),
+      )
 
       useEffect(() => {
         let disposed = false
@@ -911,10 +917,6 @@ window.__ModuleLoader__.load({
             /* a malformed frame must not break the badge */
           }
         }
-        /** The one summary fetch: `ok → json`, anything else rejects. */
-        const fetchSummaryJson = () => Promise.resolve(fetch(summaryUrl, { headers: { accept: 'application/json' } })).then(
-          (response) => (response !== undefined && response.ok ? response.json() : Promise.reject(new Error('unavailable'))),
-        )
         const probe = () => {
           if (disposed || sawSnapshot || typeof fetch !== 'function') return
           fetchSummaryJson().then((payload) => {
