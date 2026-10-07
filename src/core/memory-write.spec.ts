@@ -18,6 +18,27 @@
  * the embedding/verification child tables. The user's real
  * `context.db` is never opened, let alone written.
  */
+import { DatabaseSync } from 'node:sqlite'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import type { MemoryWriteResult } from '<path>'
+import {
+  isWritableMemoryCategory,
+  normalizedMemoryHash,
+  openMemoryWriter,
+} from '<path>'
+import { V2_MEMORY_CATEGORIES } from '<path>'
+
+const OWN = 'git:1111111111111111111111111111111111111111'
+const OTHER = 'git:2222222222222222222222222222222222222222'
+const RACE = 'git:3333333333333333333333333333333333333333'
+
+const T0 = 1_700_000_000_000
+const DAY_MS = 24 * 60 * 60 * 1000
+const AUTHORITY_ABORT = 'context.db memory writes are managed by the Rust module'
+/** MC's storage version, and the version this adapter understands. */
 const SCHEMA_VERSION = 94
 const WRITER_SOURCE = '<path>'
 

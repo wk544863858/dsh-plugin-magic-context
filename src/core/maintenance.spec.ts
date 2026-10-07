@@ -10,6 +10,14 @@
  * stale → `updateMemory`, wrong → `archiveMemory`. MC basis:
  * packages/plugin/src/features/magic-context/dreamer/verify.ts, constants.ts.
  */
+/**
+ * Maintenance tick — the adapter's slice of MC's dreamer without a hidden
+ * agent. Expiry archives through the contract action (mutation log + authority
+ * guard stay authoritative); verification applies MC verify's host-side
+ * manifest: keep → per-memory `verified_at` (metadata only, no mutation log),
+ * stale → `updateMemory`, wrong → `archiveMemory`. MC basis:
+ * packages/plugin/src/features/magic-context/dreamer/verify.ts, constants.ts.
+ */
 import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -415,18 +423,26 @@ describe('maintenance tick — verification (dreamer verify slice)', () => {
     const path = createDb()
     const id = seedRow(path, { category: 'ARCHITECTURE', content: 'unsure', verificationStatus: 'unverified' })
     const writer = openMemoryWriter({ dbPath: path, logger: silentLogger, now: () => T0 })
+    const journal = fakeJournal()
     try {
       const outcome = await runMaintenanceTick({
         writer,
         identity: OWN,
         sessionId: 'mc-maintenance',
-        journal: fakeJournal(),
+        journal,
         llm: fakeLlm(new Error('provider down')),
         route: ROUTE,
         now: () => T0,
       })
       expect(outcome.reason).toBe('llm-failed')
       expect(rowSnapshot(path, id).verifiedAt).toBeNull()
+      // Diagnosability is part of the contract: six live ticks failed with a
+      // row that named no cause, which is why the string/budget bugs hid.
+      const failure = journal.entries.at(-1)
+      expect(failure?.level).toBe('warn')
+      expect(String(failure?.data?.why)).toContain('provider down')
+      expect(failure?.data?.route).toBe('deepseek/test-model')
+      expect(failure?.data?.candidates).toBe(1)
     } finally {
       writer.close()
     }

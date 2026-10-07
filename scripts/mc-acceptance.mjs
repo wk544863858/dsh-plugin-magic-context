@@ -196,6 +196,33 @@ if (dsh) {
     add('WARN', 'historian.noSuccess', `窗口内 ${counts.start} 次运行没有任何成功（stored=0），检查 historianMaxTokens 是否过小`);
   }
 
+  // ────────────────────────────────── 6b. maintenance：verify 扫描确实在推进且失败可诊断
+  // 6 个真实缺陷曾整条逃过单元测试与验收：扫描在跑但从不成功、失败行不写原因。
+  // 这里以数据为准：有失败行必须带 why；跑了多轮却零入账即视为机制失效。
+  const maint = dsh.prepare(`SELECT at, level, summary, data FROM journal WHERE kind='maintenance' AND at > ? ORDER BY id ASC`).all(SINCE)
+    .map((r) => ({ at: r.at, level: r.level, summary: r.summary, d: safeParse(r.data) }));
+  if (maint.length === 0) {
+    add('WARN', 'maintenance.ran', '窗口内没有 maintenance 行：扫描未运行（维护关闭、无身份登记，或进程刚重启尚未到首个 tick）');
+  } else {
+    const failedRows = maint.filter((m) => m.level === 'warn' || m.level === 'error');
+    const banked = maint.filter((m) => Number(m.d.verified ?? 0) + Number(m.d.updated ?? 0) + Number(m.d.archived ?? 0) > 0);
+    const undiagnosed = failedRows.filter((m) => String(m.d.why ?? m.d.reason ?? '').trim().length === 0);
+    // Only the newest failures judge the CURRENT code: earlier rows predate the
+    // diagnosability fix and stay as a count, not as a gate.
+    const recentFailures = failedRows.slice(-3);
+    const undiagnosedRecent = recentFailures.filter((m) => String(m.d.why ?? m.d.reason ?? '').trim().length === 0);
+    const last = maint[maint.length - 1];
+    const historical = undiagnosed.length - undiagnosedRecent.length;
+    add(undiagnosedRecent.length === 0 ? 'PASS' : 'FAIL', 'maintenance.diagnosable',
+      undiagnosedRecent.length === 0
+        ? `最近 ${recentFailures.length} 次失败均带原因（why/route）${historical > 0 ? `；更早的 ${historical} 条属修复前历史行，仅记录` : ''}`
+        : `${undiagnosedRecent.length}/${recentFailures.length} 条最近的失败行没有原因字段（静默失败，无法定位）`,
+      undiagnosedRecent.length === 0 ? undefined : { samples: undiagnosedRecent.map((m) => String(m.summary).slice(0, 80)) });
+    add(banked.length > 0 ? 'PASS' : (failedRows.length >= 3 ? 'FAIL' : 'WARN'), 'maintenance.progress',
+      `窗口内 ${maint.length} 次 tick、失败 ${failedRows.length} 次、有入账 ${banked.length} 次；最新 ${hhmmss(last.at)} ${last.level}: ${String(last.summary).slice(0, 90)}`,
+      banked.length === 0 ? { failures: failedRows.slice(-3).map((m) => String(m.d.why ?? m.summary).slice(0, 100)) } : undefined);
+  }
+
   // ─────────────────────────────────────────────────────── 7. promotion：字段契约 + 纯追加
   const promotes = dsh.prepare(`SELECT at, data FROM journal WHERE kind='memory-promote' AND at > ? ORDER BY id ASC`).all(SINCE)
     .map((r) => ({ at: r.at, d: safeParse(r.data) }));
@@ -247,7 +274,10 @@ if (dsh) {
         if (r.scope !== 'project') problems.push(`scope=${r.scope}`);
         if (Number(r.shareable) !== 0) problems.push(`shareable=${r.shareable}`);
         if (r.status !== 'active') problems.push(`status=${r.status}`);
-        if (r.verification_status !== 'unverified') problems.push(`verification=${r.verification_status}`);
+        // Promotion writes 'unverified' by contract; the maintenance sweep then
+        // legitimately moves the row to 'verified' (§9). Both are the designed
+        // lifecycle, so only a value outside it is a violation.
+        if (r.verification_status !== 'unverified' && r.verification_status !== 'verified') problems.push(`verification=${r.verification_status}`);
         if (!wasUpdated && Number(r.retrieval_count) !== 0 && r.last_retrieved_at === null) problems.push(`retrieval_count=${r.retrieval_count} 但 last_retrieved_at 为空`);
         if (Number(r.seen_count) < 1) problems.push(`seen_count=${r.seen_count}`);
         if (!touched && (Number(r.created_at) !== Number(r.updated_at) || Number(r.created_at) !== Number(r.last_seen_at))) problems.push('时间戳不一致');
