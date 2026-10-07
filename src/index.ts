@@ -500,6 +500,26 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
       // observation only; never fail the turn for it
     }
 
+    // Register the session's project identity for the maintenance sweep HERE,
+    // not only in the pass-execute branch: a quiet conversation never crosses
+    // the compaction threshold, and the sweep then had no identity to serve —
+    // every tick spun empty (measured live 18:24, zero maintenance rows after
+    // a remount despite an active session).
+    try {
+      const projectSpec = config.memory?.project ?? payload.agent.session.header.cwd
+      const memoryIdentity = projectSpec === undefined ? undefined : resolveIdentitySpec(projectSpec)
+      if (memoryIdentity !== undefined) {
+        seenIdentities.add(memoryIdentity)
+        sessionIdentity.set(sessionId, memoryIdentity)
+        if (sessionIdentity.size > 512) {
+          const oldest = sessionIdentity.keys().next().value
+          if (oldest !== undefined) sessionIdentity.delete(oldest)
+        }
+      }
+    } catch {
+      // registration is advisory; never fail the turn for it
+    }
+
     // ── Pressure decision + the execute-band management pass (Phase 1 + 2) ──
     // The session surface is only mutated inside the execute band: that is
     // the one permission under which a priced bust buys reclaim (MC's

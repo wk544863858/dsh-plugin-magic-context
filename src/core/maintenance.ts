@@ -103,14 +103,19 @@ function parseVerdicts(text: string): Array<{ id: number; verdict: string; conte
   return out
 }
 
-/** One LLM round trip; returns the raw text or undefined on any failure. */
-async function collectText(llm: MaintenanceLlm, deps: MaintenanceDeps, userPrompt: string): Promise<string | undefined> {
+/** One LLM round trip. Returns the raw text, or the reason it produced none —
+ * the reason is journaled (a bare "verify call failed" hid six live ticks
+ * worth of root cause). */
+async function collectText(llm: MaintenanceLlm, deps: MaintenanceDeps, userPrompt: string): Promise<{ ok: true; text: string } | { ok: false; why: string }> {
   const byIndex = new Map<number, string>()
   try {
     const chunks = llm.stream({
       provider: deps.route!.provider,
       model: deps.route!.model,
-      messages: [{ role: 'user', content: userPrompt }],
+      // The DSH llm seam takes content BLOCKS, not a bare string (the host
+      // calls content.some(...) — a string threw "content.some is not a
+      // function" and failed every tick silently).
+      messages: [{ role: 'user', content: [{ type: 'text', text: userPrompt }] }],
       maxTokens: VERIFY_MAX_TOKENS,
       sessionId: deps.sessionId,
       purpose: 'compaction',
@@ -120,14 +125,22 @@ async function collectText(llm: MaintenanceLlm, deps: MaintenanceDeps, userPromp
       if (chunk.type === 'text-delta' && typeof chunk.index === 'number' && typeof chunk.text === 'string') {
         byIndex.set(chunk.index, (byIndex.get(chunk.index) ?? '') + chunk.text)
       } else if (chunk.type === 'finish') {
-        const reason = (raw as { reason?: { kind?: string } }).reason?.kind
-        if (reason === 'error' || reason === 'aborted' || reason === 'max-tokens') return undefined
+        // Same terminal-reason semantics as the historian's collector:
+        // error/aborted fail with the failure detail, max-tokens is a
+        // (truncating) failure, anything else is a normal stop.
+        const reason = (raw as { reason?: { kind?: string; failure?: { message?: string; code?: string } } }).reason
+        if (reason !== undefined && (reason.kind === 'error' || reason.kind === 'aborted' || reason.kind === 'max-tokens')) {
+          const detail = reason.failure?.message ?? reason.failure?.code
+          return { ok: false, why: `stream finished (${reason.kind})${detail === undefined ? '' : `: ${detail}`}` }
+        }
       }
     }
-  } catch {
-    return undefined
+  } catch (error) {
+    return { ok: false, why: error instanceof Error ? error.message : String(error) }
   }
-  return [...byIndex.entries()].sort(([a], [b]) => a - b).map(([, value]) => value).join('')
+  const text = [...byIndex.entries()].sort(([a], [b]) => a - b).map(([, value]) => value).join('')
+  if (text.length === 0) return { ok: false, why: 'stream produced no text deltas' }
+  return { ok: true, text }
 }
 
 function renderRow(row: MemoryRecord, nowMs: number): string {
@@ -171,11 +184,16 @@ export async function runMaintenanceTick(deps: MaintenanceDeps): Promise<Mainten
   const prompt = VERIFY_INSTRUCTION
     + '\n\nProject identity: ' + identity + '\nMemories:\n'
     + candidates.map(row => renderRow(row, now)).join('\n')
-  const text = await collectText(deps.llm, deps, prompt)
-  if (text === undefined) {
-    deps.journal.warn('maintenance', 'maintenance: verify call failed (retried next tick)', { candidates: candidates.length })
+  const call = await collectText(deps.llm, deps, prompt)
+  if (!call.ok) {
+    deps.journal.warn('maintenance', `maintenance: verify call failed (retried next tick): ${call.why}`, {
+      candidates: candidates.length,
+      why: call.why,
+      route: `${deps.route!.provider}/${deps.route!.model}`,
+    })
     return { ...tally, reason: 'llm-failed' }
   }
+  const text = call.text
   const verdicts = parseVerdicts(text)
   const verifiedIds: number[] = []
   const known = new Set(candidates.map(row => row.id))

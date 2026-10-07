@@ -1,16 +1,14 @@
 // @ts-nocheck
+// MIRROR of packages/test-support/mc-dsh-poc/tests/maintenance.spec.ts (DSH checkout).
+// Keep byte-identical to the POC copy below the header; regenerate after POC edits.
+
 /**
- * MIRROR of the runnable suite at
- * `packages/test-support/mc-dsh-poc/tests/maintenance.spec.ts` in the DSH
- * checkout — vitest runs that copy, because this repository has no
- * `node_modules` and therefore cannot resolve the bare `vitest` specifier.
- * Keep the two files identical apart from this header; `@ts-nocheck` keeps
- * this package's `tsc --noEmit` green (vitest is not a dependency of this
- * package).
- *
- * Maintenance tick — the adapter's slice of MC's dreamer: TTL expiry through
- * the archive contract action, and LLM verification applying MC verify's
- * host-side manifest (keep → verified_at, stale → update, wrong → archive).
+ * Maintenance tick — the adapter's slice of MC's dreamer without a hidden
+ * agent. Expiry archives through the contract action (mutation log + authority
+ * guard stay authoritative); verification applies MC verify's host-side
+ * manifest: keep → per-memory `verified_at` (metadata only, no mutation log),
+ * stale → `updateMemory`, wrong → `archiveMemory`. MC basis:
+ * packages/plugin/src/features/magic-context/dreamer/verify.ts, constants.ts.
  */
 import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -219,10 +217,17 @@ function fakeJournal(): Journal & { readonly entries: JournalEntry[] } {
   } as Journal & { readonly entries: JournalEntry[] }
 }
 
-/** A one-shot LLM that replies with the given text (or throws). */
-function fakeLlm(reply: string | Error): { stream(): AsyncGenerator<unknown> } {
+/** A one-shot LLM that replies with the given text (or throws). It enforces the
+ * shape the real host requires: message content must be a BLOCK ARRAY, because
+ * the host calls content.some(...) — a bare string threw "content.some is not
+ * a function" and failed every live tick before this assertion existed. */
+function fakeLlm(reply: string | Error): { stream(options: { messages: readonly { content: unknown }[] }): AsyncGenerator<unknown> } {
   return {
-    async *stream() {
+    async *stream(options) {
+      const content = options.messages[0]?.content
+      if (!Array.isArray(content) || typeof (content as { some?: unknown }).some !== 'function') {
+        throw new TypeError('content.some is not a function')
+      }
       if (reply instanceof Error) throw reply
       yield { type: 'text-delta', index: 0, text: reply }
       yield { type: 'finish', reason: { kind: 'stop' } }
