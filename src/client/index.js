@@ -1150,6 +1150,9 @@ window.__ModuleLoader__.load({
       }
       const [statusLabel, statusTone] = statusMeta[state.status] ?? [String(state.status), '#8a8f98']
       const pressureValue = pressure === undefined ? undefined : Math.round(pressure)
+      /** Ledger precision: two decimals, so O and the big %-age can differ
+       * honestly (73.00% vs the rounded 73%). */
+      const pressureExact = pressure === undefined ? undefined : pressure.toFixed(2)
       const pressureTone = pressureValue === undefined ? 'inherit' : pressureValue >= 85 ? '#e5484d' : pressureValue >= 60 ? '#d08700' : '#22a06b'
 
       /** One dense self-labeled line: figures only, `·`-joined. */
@@ -1159,35 +1162,35 @@ window.__ModuleLoader__.load({
         return el('div', { key: 'kv-' + text.slice(0, 8), style: { padding: '2.5px 0', fontVariantNumeric: 'tabular-nums', minWidth: 0 } }, text)
       }
 
-      // The project ledger must read from ONE source: the stats' total row
-      // count. Two occupancy figures are shown and LABELLED because they are
-      // different truths: 占用 = the native meter's own projection (the next
-      // request's answer); 压缩后账面 = the post-compaction surface account,
-      // which only moves when a management pass runs.
+      // The single-letter ledger (compact enough to stay on ONE line):
+      //   O occupancy % (native projection, 2dp)   L post-compaction ledger
+      //   M memories in this project               P promoted in 24h
+      //   U unverified rows                        T last maintenance tick
+      //   K ttl-killed / V verified / R revised    E errors
       const projectTotal = health.memoryStats !== undefined && health.memoryStats.total !== undefined
         ? health.memoryStats.total
         : health.projectMemories
       const summaryRows = [
         kv([
-          pressureValue !== undefined ? '占用 ' + pressureValue + '%' : '',
+          pressureExact !== undefined ? 'O ' + pressureExact + '%' : '',
           health.lastTokens !== undefined && health.lastContextWindow
-            ? '压缩后账面 ' + compactTok(health.lastTokens) + ' / ' + compactTok(health.lastContextWindow) + ' tok'
+            ? 'L ' + compactTok(health.lastTokens) + '/' + compactTok(health.lastContextWindow)
             : '',
-          projectTotal !== undefined ? '记忆 ' + fmtInt(projectTotal) + ' 条' : '',
-          health.promote24h > 0 ? '24h 提升 ' + fmtInt(health.promote24h) : '',
+          projectTotal !== undefined ? 'M ' + fmtInt(projectTotal) : '',
+          health.promote24h > 0 ? 'P ' + fmtInt(health.promote24h) : '',
           health.memoryStats !== undefined && health.memoryStats.unverified !== undefined
-            ? '待验证 ' + fmtInt(health.memoryStats.unverified)
+            ? 'U ' + fmtInt(health.memoryStats.unverified)
             : '',
         ]),
         health.maintenanceLast !== undefined
           ? kv([
-            typeof health.maintenanceLast.at === 'number' ? '维护 ' + timeShort(health.maintenanceLast.at) : '维护',
-            health.maintenanceLast.expired ? 'TTL 归档 ' + health.maintenanceLast.expired : '',
-            health.maintenanceLast.verified ? '验证 ' + health.maintenanceLast.verified : '',
-            health.maintenanceLast.updated ? '修订 ' + health.maintenanceLast.updated : '',
+            typeof health.maintenanceLast.at === 'number' ? 'T ' + timeShort(health.maintenanceLast.at) : 'T',
+            health.maintenanceLast.expired ? 'K ' + fmtInt(health.maintenanceLast.expired) : '',
+            health.maintenanceLast.verified ? 'V ' + fmtInt(health.maintenanceLast.verified) : '',
+            health.maintenanceLast.updated ? 'R ' + fmtInt(health.maintenanceLast.updated) : '',
           ])
           : null,
-        errors > 0 ? kv(['异常 本进程 ' + errors + ' · 24h ' + (health.errors24h ?? '?')]) : null,
+        errors > 0 ? kv(['E ' + fmtInt(errors) + ' · 24h ' + (health.errors24h !== undefined ? fmtInt(health.errors24h) : '?')]) : null,
       ].filter(Boolean)
 
       const records = recordsOf(state.recent)
