@@ -1,0 +1,20 @@
+# The Magic Context bundle layer for DeepSeek Harness.
+#
+# This patch is what makes the package a *bundle*: the profile loader applies
+# it as one layer of the composition, so the plugin appears in the Web
+# "Plugins" page (which lists bundles and their declared rows) and can be
+# enabled or disabled per profile.
+#
+# Conservative first install: `registerCompactionEngine: false` leaves the
+# host's own compaction engine in place, so this layer reclaims context
+# (tags, drops, the historian, the baseline) without seizing `ctx.compaction`.
+# Flip it to true *and* disable the host engine row in the profile patch to
+# let Magic Context own compaction:
+#   - id: compaction-basic
+#     name: '@deepseek-ai/dsh-compaction-basic'
+#     disabled: true
+- insert:
+    - id: magic-context-dsh
+      name: '@cortexkit/dsh-magic-context'
+      config:
+        registerCompactionEngine: false
