@@ -695,6 +695,14 @@ window.__ModuleLoader__.load({
             data !== undefined && typeof data.reason === 'string' ? data.reason : '',
           ])
         }
+        case 'drop-landed': {
+          const count = numberField(data, 'count')
+          const est = numberField(data, 'estTokens')
+          return record('drop', '丢弃落地', [
+            count === undefined ? '' : count + ' 条工具输出',
+            est === undefined ? '' : '回收 ' + compactTok(est) + ' tok',
+          ])
+        }
         case 'historian': {
           const phase = data === undefined || typeof data.phase !== 'string' ? '' : data.phase
           if (phase === 'failed') {
@@ -1128,39 +1136,34 @@ window.__ModuleLoader__.load({
           ? (value / 1000).toFixed(value >= 10_000 ? 0 : 1).replace(/\.0$/, '') + 'k'
           : String(value)
 
-      /** One summary line: dim fixed-width label + tabular figures. */
-      const kv = (label, cells) => {
+      /** One dense self-labeled line: figures only, `·`-joined. */
+      const kv = (cells) => {
         const text = cells.filter((cell) => cell !== '' && cell !== undefined && cell !== null).join(' · ')
         if (text === '') return null
-        return el('div', { key: 'kv-' + label, style: { display: 'flex', gap: 10, padding: '2.5px 0' } }, [
-          el('span', { key: 'k', style: { flex: '0 0 44px', opacity: 0.5 } }, label),
-          el('span', { key: 'v', style: { flex: '1 1 auto', fontVariantNumeric: 'tabular-nums', minWidth: 0 } }, text),
-        ])
+        return el('div', { key: 'kv-' + text.slice(0, 8), style: { padding: '2.5px 0', fontVariantNumeric: 'tabular-nums', minWidth: 0 } }, text)
       }
 
       const summaryRows = [
-        kv('上下文', [
+        kv([
           health.lastTokens !== undefined && health.lastContextWindow
             ? compactTok(health.lastTokens) + ' / ' + compactTok(health.lastContextWindow) + ' tok'
             : '',
           pressureValue !== undefined ? pressureValue + '%' : '',
-        ]),
-        kv('记忆', [
-          health.projectMemories !== undefined ? health.projectMemories + ' 条' : '',
+          health.projectMemories !== undefined ? '记忆 ' + health.projectMemories + ' 条' : '',
           health.promote24h > 0 ? '24h 提升 ' + health.promote24h : '',
           health.memoryStats !== undefined && health.memoryStats.unverified !== undefined
             ? '待验证 ' + health.memoryStats.unverified
             : '',
         ]),
         health.maintenanceLast !== undefined
-          ? kv('维护', [
-            typeof health.maintenanceLast.at === 'number' ? timeShort(health.maintenanceLast.at) : '',
+          ? kv([
+            typeof health.maintenanceLast.at === 'number' ? '维护 ' + timeShort(health.maintenanceLast.at) : '维护',
             health.maintenanceLast.expired ? 'TTL 归档 ' + health.maintenanceLast.expired : '',
             health.maintenanceLast.verified ? '验证 ' + health.maintenanceLast.verified : '',
             health.maintenanceLast.updated ? '修订 ' + health.maintenanceLast.updated : '',
           ])
           : null,
-        errors > 0 ? kv('异常', ['本进程 ' + errors + ' · 24h ' + (health.errors24h ?? '?')]) : null,
+        errors > 0 ? kv(['异常 本进程 ' + errors + ' · 24h ' + (health.errors24h ?? '?')]) : null,
       ].filter(Boolean)
 
       const records = recordsOf(state.recent)
@@ -1236,7 +1239,7 @@ window.__ModuleLoader__.load({
         ]),
         el('div', { key: 'summary', style: { marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(127,127,127,.14)' } }, summaryRows),
         sectionTitle('records-head', '最近操作', records.length === 0 ? undefined : '近 ' + records.length + ' 项'),
-        el('div', { key: 'records', style: { display: 'grid' } }, recordNodes),
+        el('div', { key: 'records', style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)' } }, recordNodes),
         el('div', {
           key: 'foot',
           title: noise === '' ? undefined : '节拍: ' + noise,

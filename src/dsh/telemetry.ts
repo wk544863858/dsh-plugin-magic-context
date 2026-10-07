@@ -54,11 +54,12 @@ export interface TelemetryDeps {
   /** Stream poll interval; tests shrink it. */
   readonly pollMs?: number
   /**
-   * Dreamer-slice KPIs for the panel: the primary project's verification
-   * coverage and the newest maintenance tick's tally. Optional getters — the
-   * composition root wires them only when the memory writer is writable.
+   * Dreamer-slice KPIs for the panel: the session's project verification
+   * coverage and the newest maintenance tick's tally. Receives the summary's
+   * sessionId so per-session panels answer for their own project; the
+   * composition root decides the fallback (the configured project).
    */
-  readonly memoryStats?: () => {
+  readonly memoryStats?: (sessionId?: string) => {
     readonly total?: number
     readonly verified?: number
     readonly unverified?: number
@@ -220,7 +221,7 @@ export function createTelemetryService(deps: TelemetryDeps): TelemetryService {
     let memoryStats: Record<string, unknown> | undefined
     let maintenanceLast: Record<string, unknown> | undefined
     try {
-      memoryStats = deps.memoryStats?.() as Record<string, unknown> | undefined
+      memoryStats = deps.memoryStats?.(sessionId) as Record<string, unknown> | undefined
       maintenanceLast = deps.maintenanceLast?.() as Record<string, unknown> | undefined
     } catch {
       /* stats are panel decoration; never let them break the summary */

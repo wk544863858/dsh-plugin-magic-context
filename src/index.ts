@@ -515,8 +515,19 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
             ? projectSpec
             : resolveProjectIdentity(projectSpec)
         // The maintenance sweep maintains every identity this process has
-        // actually served (the configured project is added unconditionally).
-        if (memoryIdentity !== undefined) seenIdentities.add(memoryIdentity)
+        // actually served (the configured project is added unconditionally),
+        // and the session→identity map scopes the telemetry panel's stats to
+        // the project the viewed conversation is working on.
+        if (memoryIdentity !== undefined) {
+          seenIdentities.add(memoryIdentity)
+          if (sessionId !== undefined) {
+            sessionIdentity.set(sessionId, memoryIdentity)
+            if (sessionIdentity.size > 512) {
+              const oldest = sessionIdentity.keys().next().value
+              if (oldest !== undefined) sessionIdentity.delete(oldest)
+            }
+          }
+        }
         const memories = memoryRecall?.recall({
           ...projectSpec === undefined ? {} : { project: projectSpec },
           workspaceProjects: config.memory?.workspaceProjects,
@@ -1024,12 +1035,14 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
         memoryWrite: stores.getMeta('memory_write'),
         toolsMode: toolMode,
       }),
-      // Dreamer-slice KPIs for the panel: primary identity's verification
-      // coverage + the newest maintenance tally. Lazy getters — the panel
-      // polls them, nothing runs at mount.
-      memoryStats: () => {
+      // Dreamer-slice KPIs for the panel: the viewed session's project
+      // verification coverage + the newest maintenance tally. Lazy getters —
+      // the panel polls them, nothing runs at mount.
+      memoryStats: (sessionId?: string) => {
         if (memoryWriter === undefined) return undefined
-        const identity = config.memory?.project ?? [...seenIdentities][0]
+        const identity = config.memory?.project
+          ?? (sessionId !== undefined ? sessionIdentity.get(sessionId) : undefined)
+          ?? [...seenIdentities][0]
         if (identity === undefined) return undefined
         try {
           const stats = memoryWriter.stats(identity)
@@ -1063,6 +1076,8 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
   // identity this process resolved for a session. Fail-open end to end: a
   // broken tick journals and waits for the next one.
   const seenIdentities = new Set<string>()
+  /** Session → project identity, so panel stats answer for the viewed project. */
+  const sessionIdentity = new Map<string, string>()
   /** Newest maintenance tally, surfaced by the telemetry panel (dreamer KPI). */
   let maintenanceLast: { at: number; expired: number; verified: number; updated: number; archived: number } | undefined
   let maintenanceBusy = false
