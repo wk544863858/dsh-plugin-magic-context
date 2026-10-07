@@ -29,7 +29,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/copy-client.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check:i18n": "node scripts/mc-i18n-check.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",

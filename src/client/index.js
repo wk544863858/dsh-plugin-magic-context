@@ -8,8 +8,14 @@
  * copies this file verbatim to `lib/client.js`; there is no compile step, so the
  * served artifact and this source are byte-identical by construction.
  *
- * The half contributes two surfaces, both of which degrade to nothing when the
+ * The half contributes three surfaces, all of which degrade to nothing when the
  * deployment does not offer their seat or data:
+ *
+ *  0. The `magic-context` locale namespace. Every string the two surfaces below
+ *     render goes through a typed dictionary (`ctx.locale.register`), and each
+ *     registration declares `locale: LOCALE_NS` so the slot renderer hands the
+ *     component the framework `t` seat — the panel follows General → Language
+ *     with no reload. See the Localization section.
  *
  *  1. `shell.overlay` — a telemetry badge/pill. It follows the Host half's
  *     `/mc-telemetry/events` SSE stream (falling back to one
@@ -572,6 +578,215 @@ window.__ModuleLoader__.load({
     }
 
     /* ------------------------------------------------------------------ *
+     * Localization
+     * ------------------------------------------------------------------ */
+
+    /**
+     * The locale namespace this half registers its dictionaries under.
+     *
+     * The shell's locale service (`@deepseek-ai/dsh-client-locale`) merges the
+     * namespace into whatever language is active; a slot entry that declares
+     * `locale: LOCALE_NS` receives the matching `t` seat as a prop, and every
+     * outlet re-renders on a switch — the panel and the pill follow General →
+     * Language with no reload. `ctx.locale.bind` returns a STABLE function that
+     * resolves the active language on every call, so a `t` captured once in
+     * `apply` (the slot label thunks) stays correct across switches.
+     */
+    const LOCALE_NS = 'magic-context'
+
+    /**
+     * The shipped dictionaries. Both locales must carry the same key set:
+     * registration is runtime-only (this half is hand-written JS, so no
+     * compiler checks the union) and a missing key renders as the key itself.
+     * `__diagnostics.dictionaryKeys` exists so the key parity can be asserted
+     * outside a browser.
+     */
+    const DICTIONARIES = {
+      zh: {
+        // Operation categories (the chips / row labels).
+        'category.write': '写入记忆',
+        'category.read': '加载记忆',
+        'category.reclaim': '压缩上下文',
+        'category.drop': '丢弃上下文',
+        'category.maintain': '维护',
+        'category.archive': '历史归档',
+        'category.error': '失败',
+        // Per-turn beats folded into one line.
+        'noise.memoryRecall': '加载记忆',
+        'noise.baselineRefresh': '基线刷新',
+        // Record titles.
+        'record.reclaimPass': '执行回收',
+        'record.promotion': '记忆提升',
+        'record.memoryWritten': '写入记忆',
+        'record.memorySearch': '检索记忆',
+        'record.compacted': '压缩上下文',
+        'record.baselineHard': '基线重建 (HARD)',
+        'record.emergencyDrop': '丢弃上下文',
+        'record.dropLanded': '丢弃落地',
+        'record.remountRecovery': '重挂载恢复',
+        'record.historianFailed': '历史归档失败',
+        'record.archived': '归档已存',
+        'record.maintenance': '维护巡检',
+        'record.failed': '执行失败',
+        // Record details ({n} figures).
+        'detail.added': '新增 {n}',
+        'detail.seenAgain': '去重命中 {n}',
+        'detail.skipped': '跳过 {n}',
+        'detail.verb.write': '写入',
+        'detail.verb.update': '更新',
+        'detail.verb.archive': '归档',
+        'detail.verb.merge': '合并',
+        'detail.verb.list': '检索',
+        'detail.verb.get': '读取',
+        'detail.rejected': '被拒',
+        'detail.replacedNodes': '替换 {n} 节点',
+        'detail.nodes': '{n} 节点',
+        'detail.reclaimed': '回收 {n} tok',
+        'detail.droppedToolOutputs': '丢弃 {n} 条工具输出',
+        'detail.toolOutputs': '{n} 条工具输出',
+        'detail.backfilled': '补记中断的历史归档',
+        'detail.ttlExpired': 'TTL 归档 {n}',
+        'detail.verified': '验证 {n}',
+        'detail.revised': '修订 {n}',
+        'detail.nothingToDo': '无需处理',
+        'detail.facts': 'facts {n}',
+        // Panel status + pill tooltip.
+        'status.ok': '正常',
+        'status.connecting': '连接中',
+        'status.unavailable': '不可用',
+        'tip.unavailable': '遥测不可用',
+        'tip.connecting': '连接中…',
+        'tip.errors': '{n} 个错误',
+        'tip.pressure': '上下文已用 {pressure}',
+        'tip.pressureWithMemories': '上下文已用 {pressure} · 记忆 {memories} 条',
+        'tip.live': 'Magic Context 运行中',
+        // The single-letter ledger's hover names.
+        'ledger.O': '占用（原生投影：下一次请求将看到多少）',
+        'ledger.L': '压缩后账面（最近一次压缩后的 surface 量）',
+        'ledger.M': '本项目记忆总数',
+        'ledger.P': '24h 提升的记忆',
+        'ledger.U': '待验证记忆',
+        'ledger.T': '最近维护 tick',
+        'ledger.K': 'TTL 到期归档',
+        'ledger.V': '维护验证通过',
+        'ledger.R': '维护修订',
+        'ledger.E': '本进程错误',
+        // Operation feed.
+        'records.empty': '暂无操作记录',
+        'records.noRoute': '此宿主未挂遥测路由',
+        'records.folded': '{n} 次',
+        'records.head': '最近操作',
+        'records.count': '近 {n} 项',
+        'records.foot': '悬停条目看详情 · /ctx-status 看全量',
+        'records.beats': '节拍: {beats}',
+        // Slot labels (ledger rows the shell projects).
+        'title': 'Magic Context',
+        'label.telemetry': 'Magic Context 遥测',
+      },
+      en: {
+        'category.write': 'Memory written',
+        'category.read': 'Memory loaded',
+        'category.reclaim': 'Context reclaimed',
+        'category.drop': 'Context dropped',
+        'category.maintain': 'Maintenance',
+        'category.archive': 'Archived',
+        'category.error': 'Failed',
+        'noise.memoryRecall': 'memories loaded',
+        'noise.baselineRefresh': 'baseline refreshed',
+        'record.reclaimPass': 'Reclaim pass',
+        'record.promotion': 'Memory promotion',
+        'record.memoryWritten': 'Memory written',
+        'record.memorySearch': 'Memory search',
+        'record.compacted': 'Context compacted',
+        'record.baselineHard': 'Baseline rebuild (HARD)',
+        'record.emergencyDrop': 'Emergency drop',
+        'record.dropLanded': 'Drop landed',
+        'record.remountRecovery': 'Remount recovery',
+        'record.historianFailed': 'Historian failed',
+        'record.archived': 'Compartment stored',
+        'record.maintenance': 'Maintenance sweep',
+        'record.failed': 'Operation failed',
+        'detail.added': 'added {n}',
+        'detail.seenAgain': 'seen again {n}',
+        'detail.skipped': 'skipped {n}',
+        'detail.verb.write': 'write',
+        'detail.verb.update': 'update',
+        'detail.verb.archive': 'archive',
+        'detail.verb.merge': 'merge',
+        'detail.verb.list': 'list',
+        'detail.verb.get': 'read',
+        'detail.rejected': 'rejected',
+        'detail.replacedNodes': 'replaced {n} nodes',
+        'detail.nodes': '{n} nodes',
+        'detail.reclaimed': 'reclaimed {n} tok',
+        'detail.droppedToolOutputs': 'dropped {n} tool outputs',
+        'detail.toolOutputs': '{n} tool outputs',
+        'detail.backfilled': 'backfilled the interrupted archive',
+        'detail.ttlExpired': 'TTL expired {n}',
+        'detail.verified': 'verified {n}',
+        'detail.revised': 'revised {n}',
+        'detail.nothingToDo': 'nothing to do',
+        'detail.facts': 'facts {n}',
+        'status.ok': 'healthy',
+        'status.connecting': 'connecting',
+        'status.unavailable': 'unavailable',
+        'tip.unavailable': 'Telemetry unavailable',
+        'tip.connecting': 'Connecting…',
+        'tip.errors': '{n} errors',
+        'tip.pressure': '{pressure} of context used',
+        'tip.pressureWithMemories': '{pressure} of context used · {memories} memories',
+        'tip.live': 'Magic Context live',
+        'ledger.O': 'Occupancy (native projection: what the next request sees)',
+        'ledger.L': 'Post-compaction ledger (surface after the last compaction)',
+        'ledger.M': 'Memories in this project',
+        'ledger.P': 'Memories promoted in 24h',
+        'ledger.U': 'Unverified memories',
+        'ledger.T': 'Last maintenance tick',
+        'ledger.K': 'TTL-expired archives',
+        'ledger.V': 'Maintenance verifications passed',
+        'ledger.R': 'Maintenance revisions',
+        'ledger.E': 'Errors in this process',
+        'records.empty': 'No operations recorded yet',
+        'records.noRoute': 'This host exposes no telemetry route',
+        'records.folded': '×{n}',
+        'records.head': 'Recent operations',
+        'records.count': 'last {n}',
+        'records.foot': 'Hover a row for detail · /ctx-status for the full ledger',
+        'records.beats': 'Beats: {beats}',
+        'title': 'Magic Context',
+        'label.telemetry': 'Magic Context telemetry',
+      },
+    }
+
+    /**
+     * A dictionary-backed translator in the same shape as the slot `t` seat:
+     * `t(key, params)` interpolates `{name}` and falls back en → key. Used as
+     * the default for the pure record functions, whose direct callers
+     * (`__diagnostics`, the records-check script) read the shipped zh copy;
+     * every rendered string goes through the framework `t` instead.
+     */
+    function dictionaryTranslator(locale) {
+      const table = DICTIONARIES[locale] !== undefined ? DICTIONARIES[locale] : DICTIONARIES.en
+      const fallback = DICTIONARIES.en
+      return (key, params) => {
+        const template = table[key] !== undefined ? table[key] : fallback[key] !== undefined ? fallback[key] : key
+        if (params === undefined || params === null) return template
+        return template.replace(/\{(\w+)\}/g, (match, name) => (name in params ? String(params[name]) : match))
+      }
+    }
+
+    /** The reference translator for callers that pass no `t`. */
+    const REFERENCE_T = dictionaryTranslator('zh')
+
+    /** Every key the dictionaries carry, for the parity check outside a browser. */
+    function dictionaryKeys() {
+      return {
+        zh: Object.keys(DICTIONARIES.zh).sort(),
+        en: Object.keys(DICTIONARIES.en).sort(),
+      }
+    }
+
+    /* ------------------------------------------------------------------ *
      * Operation records (what the adapter just did, in the operator's words)
      * ------------------------------------------------------------------ */
 
@@ -586,13 +801,13 @@ window.__ModuleLoader__.load({
      * bury the handful of real operations.
      */
     const RECORD_CATEGORIES = {
-      write: { icon: '🧠', label: '写入记忆', tone: '#a371f7' },
-      read: { icon: '🔎', label: '加载记忆', tone: '#2f81f7' },
-      reclaim: { icon: '✂️', label: '压缩上下文', tone: '#22a06b' },
-      drop: { icon: '🗑️', label: '丢弃上下文', tone: '#d08700' },
-      maintain: { icon: '🧰', label: '维护', tone: '#8250df' },
-      archive: { icon: '🧭', label: '历史归档', tone: '#8a8f98' },
-      error: { icon: '⚠️', label: '失败', tone: '#e5484d' },
+      write: { icon: '🧠', labelKey: 'category.write', tone: '#a371f7' },
+      read: { icon: '🔎', labelKey: 'category.read', tone: '#2f81f7' },
+      reclaim: { icon: '✂️', labelKey: 'category.reclaim', tone: '#22a06b' },
+      drop: { icon: '🗑️', labelKey: 'category.drop', tone: '#d08700' },
+      maintain: { icon: '🧰', labelKey: 'category.maintain', tone: '#8250df' },
+      archive: { icon: '🧭', labelKey: 'category.archive', tone: '#8a8f98' },
+      error: { icon: '⚠️', labelKey: 'category.error', tone: '#e5484d' },
     }
     /** Kinds that are process noise unless they carry a real operation. */
     // Telemetry-only kinds: real signals, but never operation rows — they
@@ -637,15 +852,25 @@ window.__ModuleLoader__.load({
      * `detail` reads numbers off the SSE payload; the snapshot strip carries no
      * `data`, so those rows fall back to the Host's one-line summary (rendered
      * by the caller) instead of losing their content entirely.
+     *
+     * `t` is the active translator (the slot `t` seat in the panel, the shipped
+     * zh dictionary for `__diagnostics` callers that pass none), so every
+     * string this returns is already in the reader's language.
      */
-    function recordOf(event) {
+    function recordOf(event, t = REFERENCE_T) {
       if (event === null || typeof event !== 'object') return null
       const kind = typeof event.kind === 'string' ? event.kind : 'event'
       const data = event.data !== null && typeof event.data === 'object' ? event.data : undefined
       const level = typeof event.level === 'string' ? event.level : 'info'
       const at = typeof event.at === 'number' ? event.at : undefined
       const action = data !== undefined && typeof data.action === 'string' ? data.action : undefined
-      const record = (category, text, detail) => ({ category, text, detail: joinDetail(detail), at, summary: event.summary })
+      const record = (category, key, params, detail) => ({
+        category,
+        text: t(key, params),
+        detail: joinDetail(detail),
+        at,
+        summary: event.summary,
+      })
       switch (kind) {
         case 'pass': {
           if (data === undefined || data.decision !== 'execute') return null
@@ -655,7 +880,7 @@ window.__ModuleLoader__.load({
           const delta = numberField(data, 'tokensDelta')
           if (delta === undefined || delta === 0) return null
           const passPressure = numberField(data, 'pressure')
-          return record('reclaim', '执行回收', [
+          return record('reclaim', 'record.reclaimPass', undefined, [
             passPressure === undefined ? '' : Math.round(passPressure) + '%',
             tokensOf(delta),
           ])
@@ -664,21 +889,19 @@ window.__ModuleLoader__.load({
           const inserted = arrayLength(data, 'inserted')
           const seenAgain = arrayLength(data, 'seenAgain')
           const skipped = arrayLength(data, 'skipped')
-          return record('write', '记忆提升', [
-            inserted === undefined ? '' : '新增 ' + fmtInt(inserted),
-            seenAgain ? '去重命中 ' + fmtInt(seenAgain) : '',
-            skipped ? '跳过 ' + fmtInt(skipped) : '',
+          return record('write', 'record.promotion', undefined, [
+            inserted === undefined ? '' : t('detail.added', { n: fmtInt(inserted) }),
+            seenAgain ? t('detail.seenAgain', { n: fmtInt(seenAgain) }) : '',
+            skipped ? t('detail.skipped', { n: fmtInt(skipped) }) : '',
           ])
         }
         case 'tool-call': {
           const writeish = action === 'write' || action === 'update' || action === 'archive' || action === 'merge'
           const readish = action === 'list' || action === 'get'
           if (!writeish && !readish) return null
-          const verbs = { write: '写入', update: '更新', archive: '归档', merge: '合并', list: '检索', get: '读取' }
-          const verb = action !== undefined && verbs[action] !== undefined ? verbs[action] : action
-          return record(writeish ? 'write' : 'read', writeish ? '写入记忆' : '检索记忆', [
-            verb,
-            data !== undefined && data.ok === false ? '被拒' : '',
+          return record(writeish ? 'write' : 'read', writeish ? 'record.memoryWritten' : 'record.memorySearch', undefined, [
+            t('detail.verb.' + String(action)),
+            data !== undefined && data.ok === false ? t('detail.rejected') : '',
             spanOf(numberField(data, 'ms')),
           ])
         }
@@ -690,9 +913,9 @@ window.__ModuleLoader__.load({
         case 'compartment-published': {
           const nodes = numberField(data, 'nodes')
           const reclaimed = numberField(data, 'estTokensReclaimed')
-          return record('reclaim', '压缩上下文', [
-            nodes === undefined ? '' : '替换 ' + fmtInt(nodes) + ' 节点',
-            reclaimed === undefined ? '' : '回收 ' + compactTok(reclaimed) + ' tok',
+          return record('reclaim', 'record.compacted', undefined, [
+            nodes === undefined ? '' : t('detail.replacedNodes', { n: fmtInt(nodes) }),
+            reclaimed === undefined ? '' : t('detail.reclaimed', { n: compactTok(reclaimed) }),
           ])
         }
         case 'baseline': {
@@ -701,24 +924,24 @@ window.__ModuleLoader__.load({
           if (data === undefined || data.mode !== 'hard') return null
           const bytes = numberField(data, 'bytes')
           const est = numberField(data, 'estTokens')
-          return record('reclaim', '基线重建 (HARD)', [
+          return record('reclaim', 'record.baselineHard', undefined, [
             bytes === undefined ? '' : compactTok(bytes) + ' B',
             est === undefined ? '' : compactTok(est) + ' tok',
           ])
         }
         case 'emergency-reclaim': {
           const dropped = numberField(data, 'dropped')
-          return record('drop', '丢弃上下文', [
-            dropped === undefined ? '' : '丢弃 ' + fmtInt(dropped) + ' 条工具输出',
+          return record('drop', 'record.emergencyDrop', undefined, [
+            dropped === undefined ? '' : t('detail.droppedToolOutputs', { n: fmtInt(dropped) }),
             data !== undefined && typeof data.reason === 'string' ? data.reason : '',
           ])
         }
         case 'drop-landed': {
           const count = numberField(data, 'count')
           const est = numberField(data, 'estTokens')
-          return record('drop', '丢弃落地', [
-            count === undefined ? '' : fmtInt(count) + ' 条工具输出',
-            est === undefined ? '' : '回收 ' + compactTok(est) + ' tok',
+          return record('drop', 'record.dropLanded', undefined, [
+            count === undefined ? '' : t('detail.toolOutputs', { n: fmtInt(count) }),
+            est === undefined ? '' : t('detail.reclaimed', { n: compactTok(est) }),
           ])
         }
         case 'historian': {
@@ -728,39 +951,39 @@ window.__ModuleLoader__.load({
             // it is bookkeeping, not an operation failure, so it reads as a
             // dim archive row instead of a red one.
             if (data !== undefined && data.kind === 'adapter-remount') {
-              return record('maintain', '重挂载恢复', ['补记中断的历史归档'])
+              return record('maintain', 'record.remountRecovery', undefined, [t('detail.backfilled')])
             }
             const reason = typeof data.reason === 'string' ? data.reason : ''
-            return record('error', '历史归档失败', [reason.slice(0, 42)])
+            return record('error', 'record.historianFailed', undefined, [reason.slice(0, 42)])
           }
           if (phase !== 'stored') return null // start/done are the run's inner beat
           const facts = numberField(data, 'facts')
           const nodes = numberField(data, 'nodes')
-          return record('archive', '归档已存', [
+          return record('archive', 'record.archived', undefined, [
             data !== undefined && typeof data.compartmentId === 'number' ? '§C' + String(data.compartmentId) + '§' : '',
-            facts === undefined ? '' : 'facts ' + fmtInt(facts),
-            nodes === undefined ? '' : fmtInt(nodes) + ' 节点',
+            facts === undefined ? '' : t('detail.facts', { n: fmtInt(facts) }),
+            nodes === undefined ? '' : t('detail.nodes', { n: fmtInt(nodes) }),
             spanOf(numberField(data, 'durationMs')),
           ])
         }
         case 'maintenance': {
           const parts = [
-            numberField(data, 'expired') === undefined ? '' : 'TTL 归档 ' + fmtInt(data.expired),
-            numberField(data, 'verified') === undefined ? '' : '验证 ' + fmtInt(data.verified),
-            numberField(data, 'updated') === undefined ? '' : '修订 ' + fmtInt(data.updated),
+            numberField(data, 'expired') === undefined ? '' : t('detail.ttlExpired', { n: fmtInt(data.expired) }),
+            numberField(data, 'verified') === undefined ? '' : t('detail.verified', { n: fmtInt(data.verified) }),
+            numberField(data, 'updated') === undefined ? '' : t('detail.revised', { n: fmtInt(data.updated) }),
           ]
           if (parts.every((part) => part === '')) {
-            return record('maintain', '维护巡检', ['无需处理'])
+            return record('maintain', 'record.maintenance', undefined, [t('detail.nothingToDo')])
           }
-          return record('maintain', '维护巡检', parts)
+          return record('maintain', 'record.maintenance', undefined, parts)
         }
         case 'session-notice':
           // The notice is the conversation's own inline row; mirroring it here
           // duplicates what the transcript already shows.
           return null
         default:
-          if (level === 'error') return record('error', '执行失败', [kind])
-          return NOISE_KINDS[kind] === true ? null : record('archive', kind, [])
+          if (level === 'error') return record('error', 'record.failed', undefined, [kind])
+          return NOISE_KINDS[kind] === true ? null : record('archive', kind, undefined, [])
       }
     }
 
@@ -773,10 +996,10 @@ window.__ModuleLoader__.load({
      * records therefore collapse into one with a `×N` count (the same way a
      * repeated tool call reads in a coding agent's transcript).
      */
-    function recordsOf(events) {
+    function recordsOf(events, t = REFERENCE_T) {
       const out = []
       for (const event of events) {
-        const record = recordOf(event)
+        const record = recordOf(event, t)
         if (record === null) continue
         const last = out.length === 0 ? undefined : out[out.length - 1]
         if (last !== undefined && last.category === record.category && last.text === record.text && last.detail === record.detail) {
@@ -788,27 +1011,31 @@ window.__ModuleLoader__.load({
       return out
     }
 
-    /** `[{category, icon, label, tone, count}]`, only for categories that occurred. */
-    function recordCounts(records) {
+    /** `[{category, icon, label, labelKey, tone, count}]`, only for categories that occurred. */
+    function recordCounts(records, t = REFERENCE_T) {
       const out = []
       for (const key of Object.keys(RECORD_CATEGORIES)) {
         let count = 0
         for (const record of records) if (record.category === key) count++
-        if (count > 0) out.push({ key, count, ...RECORD_CATEGORIES[key] })
+        const meta = RECORD_CATEGORIES[key]
+        if (count > 0) out.push({ key, count, ...meta, label: t(meta.labelKey) })
       }
       return out
     }
 
     /** The per-turn beats worth one folded line: routine injections only. */
-    function noiseLine(events) {
-      const counts = {}
+    function noiseLine(events, t = REFERENCE_T) {
+      let recalled = 0
+      let refreshed = 0
       for (const event of events) {
         if (event === null || typeof event !== 'object' || typeof event.kind !== 'string') continue
-        if (event.kind === 'memory-recall') counts['加载记忆'] = (counts['加载记忆'] || 0) + 1
-        else if (event.kind === 'baseline' && !(event.data !== null && typeof event.data === 'object' && event.data.mode === 'hard')) counts['基线刷新'] = (counts['基线刷新'] || 0) + 1
+        if (event.kind === 'memory-recall') recalled += 1
+        else if (event.kind === 'baseline' && !(event.data !== null && typeof event.data === 'object' && event.data.mode === 'hard')) refreshed += 1
       }
-      return Object.keys(counts).sort((a, b) => counts[b] - counts[a])
-        .map((kind) => kind + ' ×' + counts[kind]).join(' · ')
+      return [
+        recalled === 0 ? undefined : t('noise.memoryRecall') + ' ×' + recalled,
+        refreshed === 0 ? undefined : t('noise.baselineRefresh') + ' ×' + refreshed,
+      ].filter((line) => line !== undefined).join(' · ')
     }
 
     /* ------------------------------------------------------------------ *
@@ -872,6 +1099,11 @@ window.__ModuleLoader__.load({
       const sessionId = props !== undefined && typeof props.sessionId === 'string' && props.sessionId !== ''
         ? props.sessionId
         : undefined
+      // The locale seat the shell injects for a `locale`-declaring entry. The
+      // outlet re-renders on a switch, so this resolves to the new language
+      // without any subscription of our own; the shipped zh copy is the
+      // fallback for a shell that hands us none.
+      const t = props !== undefined && typeof props.t === 'function' ? props.t : REFERENCE_T
       const eventsUrl = telemetryUrl(EVENTS_URL, sessionId)
       const summaryUrl = telemetryUrl(SUMMARY_URL, sessionId)
       const [state, setState] = useState({ status: 'connecting', summary: null, recent: [] })
@@ -1044,14 +1276,16 @@ window.__ModuleLoader__.load({
       // The pill's hover bubble mirrors the native pills' tooltip (one dark
       // rounded line); the full diagnostic title lives on the panel only.
       const tipText = state.status === 'unavailable'
-        ? '遥测不可用'
+        ? t('tip.unavailable')
         : state.status !== 'ok'
-          ? '连接中…'
+          ? t('tip.connecting')
           : errors > 0
-            ? errors + ' 个错误'
+            ? t('tip.errors', { n: errors })
             : pressureText !== ''
-              ? '上下文已用 ' + pressureText + (health.projectMemories !== undefined ? ' · 记忆 ' + fmtInt(health.projectMemories) + ' 条' : '')
-              : 'Magic Context 运行中'
+              ? health.projectMemories !== undefined
+                ? t('tip.pressureWithMemories', { pressure: pressureText, memories: fmtInt(health.projectMemories) })
+                : t('tip.pressure', { pressure: pressureText })
+              : t('tip.live')
 
       const inDock = placement === 'statusbar'
       // The official pill skin: hover + open keep the interactive background
@@ -1144,9 +1378,9 @@ window.__ModuleLoader__.load({
       // categorized operation feed. System font for prose, tabular numerals
       // for figures; the old full-monospace panel read like a debug console.
       const statusMeta = {
-        ok: ['正常', '#22a06b'],
-        connecting: ['连接中', '#d08700'],
-        unavailable: ['不可用', '#e5484d'],
+        ok: [t('status.ok'), '#22a06b'],
+        connecting: [t('status.connecting'), '#d08700'],
+        unavailable: [t('status.unavailable'), '#e5484d'],
       }
       const [statusLabel, statusTone] = statusMeta[state.status] ?? [String(state.status), '#8a8f98']
       const pressureValue = pressure === undefined ? undefined : Math.round(pressure)
@@ -1157,16 +1391,16 @@ window.__ModuleLoader__.load({
 
       /** Ledger cell → the full name a hover shows (official Tooltip). */
       const LEDGER_LABELS = {
-        O: '占用（原生投影：下一次请求将看到多少）',
-        L: '压缩后账面（最近一次压缩后的 surface 量）',
-        M: '本项目记忆总数',
-        P: '24h 提升的记忆',
-        U: '待验证记忆',
-        T: '最近维护 tick',
-        K: 'TTL 到期归档',
-        V: '维护验证通过',
-        R: '维护修订',
-        E: '本进程错误',
+        O: t('ledger.O'),
+        L: t('ledger.L'),
+        M: t('ledger.M'),
+        P: t('ledger.P'),
+        U: t('ledger.U'),
+        T: t('ledger.T'),
+        K: t('ledger.K'),
+        V: t('ledger.V'),
+        R: t('ledger.R'),
+        E: t('ledger.E'),
       }
 
       /** One dense single-letter line; every cell is hoverable and shows its
@@ -1222,17 +1456,18 @@ window.__ModuleLoader__.load({
         ]),
       ]
 
-      const records = recordsOf(state.recent)
-      const noise = noiseLine(state.recent)
+      const records = recordsOf(state.recent, t)
+      const noise = noiseLine(state.recent, t)
       const recordNodes = records.length === 0
-        ? [el('div', { key: 'empty', style: { padding: '4px 0', opacity: 0.55 } }, state.status === 'unavailable' ? '此宿主未挂遥测路由' : '暂无操作记录')]
+        ? [el('div', { key: 'empty', style: { padding: '4px 0', opacity: 0.55 } }, state.status === 'unavailable' ? t('records.noRoute') : t('records.empty'))]
         : records.slice(0, MAX_RECORDS).map((record, index) => {
           const meta = RECORD_CATEGORIES[record.category] === undefined ? RECORD_CATEGORIES.archive : RECORD_CATEGORIES[record.category]
+          const label = t(meta.labelKey)
           const body = record.detail !== '' ? record.detail : typeof record.summary === 'string' ? record.summary : ''
-          const folded = record.count > 1 ? body + ' · ' + record.count + ' 次' : body
+          const folded = record.count > 1 ? body + ' · ' + t('records.folded', { n: record.count }) : body
           return el('div', {
             key: 'record-' + index,
-            title: meta.label + (record.count > 1 ? ' ×' + record.count : '') + (record.summary !== '' && record.summary !== body ? '\n' + record.summary : ''),
+            title: label + (record.count > 1 ? ' ×' + record.count : '') + (record.summary !== '' && record.summary !== body ? '\n' + record.summary : ''),
             style: {
               display: 'flex',
               gap: 8,
@@ -1242,7 +1477,7 @@ window.__ModuleLoader__.load({
             },
           }, [
             el('span', { key: 'dot', style: { flex: '0 0 auto', width: 7, height: 7, borderRadius: 4, background: meta.tone } }),
-            el('span', { key: 'label', style: { flex: '0 0 auto' } }, meta.label),
+            el('span', { key: 'label', style: { flex: '0 0 auto' } }, label),
             el('span', {
               key: 'detail',
               style: { flex: '1 1 auto', minWidth: 0, opacity: 0.6, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
@@ -1294,13 +1529,13 @@ window.__ModuleLoader__.load({
             }, pressureValue + '%'),
         ]),
         el('div', { key: 'summary', style: { marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(127,127,127,.14)' } }, summaryRows),
-        sectionTitle('records-head', '最近操作', records.length === 0 ? undefined : '近 ' + records.length + ' 项'),
+        sectionTitle('records-head', t('records.head'), records.length === 0 ? undefined : t('records.count', { n: records.length })),
         el('div', { key: 'records', style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)' } }, recordNodes),
         el('div', {
           key: 'foot',
-          title: noise === '' ? undefined : '节拍: ' + noise,
+          title: noise === '' ? undefined : t('records.beats', { beats: noise }),
           style: { marginTop: 8, paddingTop: 6, borderTop: '1px solid rgba(127,127,127,.14)', opacity: 0.45, fontSize: 10.5 },
-        }, '悬停条目看详情 · /ctx-status 看全量'),
+        }, t('records.foot')),
       ])
 
       return placement === 'overlay'
@@ -1331,12 +1566,16 @@ window.__ModuleLoader__.load({
       return TelemetryBadge({
         placement: 'statusbar',
         sessionId: props === undefined || props === null ? undefined : props.sessionId,
+        t: props === undefined || props === null ? undefined : props.t,
       })
     }
 
     /** The floating pill (`shell.overlay`), used only when the status seat never appears. */
-    function OverlayBadge() {
-      return TelemetryBadge({ placement: 'overlay' })
+    function OverlayBadge(props) {
+      return TelemetryBadge({
+        placement: 'overlay',
+        t: props === undefined || props === null ? undefined : props.t,
+      })
     }
 
     /* ------------------------------------------------------------------ *
@@ -1371,6 +1610,18 @@ window.__ModuleLoader__.load({
       // (src/dsh/session-notice.ts) and rendered natively by the transcript.
       // The pill + panel below remain the real-time/telemetry surface.
 
+      // The dictionaries are registered in an effect so a reload re-registers
+      // them: `locale.register` throws on a duplicate namespace+locale, and the
+      // effect's disposer drops the entries before the re-run.
+      ctx.effect(
+        () => ctx.locale.register(LOCALE_NS, { zh: DICTIONARIES.zh, en: DICTIONARIES.en }),
+        'magic-context: dictionaries',
+      )
+      // `bind` returns one stable function that resolves the ACTIVE language on
+      // every call, so these thunks follow a switch without being re-created.
+      const t = ctx.locale.bind(LOCALE_NS)
+      const telemetryLabel = () => t('label.telemetry')
+
       ctx.effect(() => {
         let overlayOff
         let seatTaken = false
@@ -1380,7 +1631,8 @@ window.__ModuleLoader__.load({
             name: 'shell.overlay',
             id: 'magic-context.telemetry',
             order: 100,
-            label: 'Magic Context telemetry',
+            label: telemetryLabel,
+            locale: LOCALE_NS,
           }, OverlayBadge))
         }
         const unmountOverlay = () => {
@@ -1397,7 +1649,8 @@ window.__ModuleLoader__.load({
             name: STATUS_SEAT,
             id: 'magic-context.telemetry',
             order: STATUS_SEAT_ORDER,
-            label: 'Magic Context telemetry',
+            label: telemetryLabel,
+            locale: LOCALE_NS,
           }, StatusBarBadge)
           unmountOverlay()
           return offPill
@@ -1417,12 +1670,14 @@ window.__ModuleLoader__.load({
             name: 'plugins.item',
             id: CFG_NS,
             order: 20,
-            label: 'Magic Context',
+            label: () => t('title'),
+            locale: LOCALE_NS,
           }, Card))
           const offRow = ctx.slots.inject('plugins.row.config', () => ctx.slots.register({
             name: 'plugins.row.config',
             key: ROW_CONFIG_KEY,
             order: 20,
+            locale: LOCALE_NS,
           }, Card))
           return () => {
             offItem()
@@ -1438,6 +1693,11 @@ window.__ModuleLoader__.load({
      * (this repo has no client test runner): feed it journal rows and compare
      * what the panel would print. It is pure and reads nothing.
      */
-    return { name: 'magic-context-client', inject: ['slots'], apply, __diagnostics: { recordOf, recordsOf, recordCounts, noiseLine } }
+    return {
+      name: 'magic-context-client',
+      inject: ['slots', 'locale'],
+      apply,
+      __diagnostics: { recordOf, recordsOf, recordCounts, noiseLine, dictionaryKeys, dictionaryTranslator, dictionaries: DICTIONARIES },
+    }
   },
 })

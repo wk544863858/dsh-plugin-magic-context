@@ -12,6 +12,14 @@ import { randomUUID } from 'node:crypto'
  * it IS model-visible: keep it to a couple of short lines and only emit it
  * when something actually happened. The 120-char summary bound mirrors the
  * host's `boundContextSummary` (llm message.ts `CONTEXT_SUMMARY_MAX_CHARS`).
+ *
+ * The copy is English on purpose. The locale service is a browser-side layer
+ * (`@deepseek-ai/dsh-client-locale`); no Host package consumes the stored
+ * `locale.preference`, and every shipped Host surface (compaction, commands,
+ * agent instructions) writes English — these rows sit in that same
+ * model-visible stream, where a mid-session language flip would also churn the
+ * cached prefix. The user-facing translation lives in the browser half's
+ * `magic-context` dictionaries instead.
  */
 
 /** The slice of {@link ManagementPassResult} the notice needs. */
@@ -52,6 +60,11 @@ function grouped(n: number): string {
   return n.toLocaleString('en-US')
 }
 
+/** `1 compartment` / `2 compartments`; the notice carries no plural-rule table. */
+function plural(count: number, one: string, many: string): string {
+  return count === 1 ? one : many
+}
+
 /**
  * The one-line account of a pass, or null when nothing notable happened.
  * Baseline-only refreshes (a negative token delta with no discrete action)
@@ -61,17 +74,22 @@ function grouped(n: number): string {
 export function sessionNoticeSummary(result: SessionNoticeResult): string | null {
   const parts: string[] = []
   const delta = result.tokensAfter - result.tokensBefore
-  if (result.forceDropped > 0) parts.push(`紧急丢弃 ${grouped(result.forceDropped)} 条工具输出`)
+  if (result.forceDropped > 0) {
+    parts.push(`emergency-dropped ${grouped(result.forceDropped)} `
+      + plural(result.forceDropped, 'tool output', 'tool outputs'))
+  }
   if (result.published.length > 0) {
-    parts.push(`压缩 ${grouped(result.published.length)} 个区段`
+    parts.push(`compacted ${grouped(result.published.length)} `
+      + plural(result.published.length, 'compartment', 'compartments')
       + ` ${result.published.map(id => `§C${String(id)}§`).join(' ')}`
-      + (delta < 0 ? ` · 回收 ${grouped(-delta)} tok` : ''))
+      + (delta < 0 ? ` · reclaimed ${grouped(-delta)} tok` : ''))
   } else if (delta < 0 && result.forceDropped > 0) {
-    parts.push(`回收 ${grouped(-delta)} tok`)
+    parts.push(`reclaimed ${grouped(-delta)} tok`)
   }
   if (result.factsPromoted > 0) {
-    parts.push(`记忆提升 新增 ${grouped(result.factsPromoted)} 条`
-      + (result.factsSeenAgain > 0 ? `（另 ${grouped(result.factsSeenAgain)} 条已知）` : ''))
+    parts.push(`promoted ${grouped(result.factsPromoted)} `
+      + plural(result.factsPromoted, 'memory', 'memories')
+      + (result.factsSeenAgain > 0 ? ` (${grouped(result.factsSeenAgain)} already known)` : ''))
   }
   if (parts.length === 0) return null
   return boundSummary(`Magic Context · ${parts.join(' · ')}`)
@@ -86,7 +104,7 @@ export function appendSessionNotice(input: SessionNoticeInput): SessionNoticeOut
   const summary = sessionNoticeSummary(input.result)
   if (summary === null) return { ok: false, reason: 'not-notable' }
   const lines: string[] = [summary]
-  if (input.result.baselineUpdated) lines.push('基线已刷新（m[0] 冻结点前移）')
+  if (input.result.baselineUpdated) lines.push('Baseline refreshed (m[0] frozen point advanced)')
   const message = {
     id: randomUUID(),
     role: 'user',

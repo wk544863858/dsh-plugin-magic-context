@@ -334,6 +334,21 @@ pnpm vitest run packages/test-support/mc-dsh-poc/tests/poc.spec.ts --coverage.en
 跨仓库 vite-tsconfig-paths match-all 使其内部 `@deepseek-ai/*` 导入正确解析）。
 阶段 1 应将本包作为 devDependency（`link:`）挂入 harness 工作区消除绝对路径。
 
+不依赖 harness 的可跑检查（本机 `node` 直接跑，不需要 DB / 浏览器）：
+
+```sh
+node packages/dsh-plugin/scripts/mc-i18n-check.mjs                 # 多语言：宿主 notice 英文 + 字典键对齐 + 槽位接线
+node packages/dsh-plugin/scripts/mc-records-check.mjs [adapterDb]  # 用真实 journal 验证面板分类（需库文件）
+```
+
+## 多语言（2026-10-07）
+
+语言开关（设置 → 通用）是**浏览器侧**机制：client 半侧注册 `magic-context` 命名空间字典（zh/en 各 71 键），
+四个槽位注册项都声明 `locale: 'magic-context'`，文案一律走框架注入的 `t`，切换语言即时生效、无需刷新。
+宿主（node）侧没有 locale 服务，写进会话流、**模型可见**的 `session-notice` 保持英文常量（与其它宿主面
+一致，也避免同一会话中途换语言造成 cached prefix 抖动）。机制与理由见
+[docs/dsh-plugin-ui-telemetry-contract.md 勘误 §7](../../docs/dsh-plugin-ui-telemetry-contract.md)。
+
 ## 阶段 1 衔接点（下一步）
 
 1. `ctx_reduce`/`ctx_expand` 工具注册（`ctx.tools.register`），drop 队列写入

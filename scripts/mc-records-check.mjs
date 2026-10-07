@@ -26,7 +26,7 @@ const api = definition.factory((name) => {
   if (name === 'react') return stubReact;
   throw new Error('unexpected require: ' + name);
 });
-const { recordOf, recordsOf, recordCounts, noiseLine } = api.__diagnostics;
+const { recordOf, recordsOf, recordCounts, noiseLine, dictionaryKeys, dictionaryTranslator } = api.__diagnostics;
 
 // 取每类 kind 的最新一行 + 最近 80 行，覆盖所有分类分支。
 const db = new DatabaseSync(DB, { readOnly: true });
@@ -76,5 +76,20 @@ const promote = records.find((r) => r.text === '记忆提升');
 check('promotion 记录带真实条数', promote !== undefined && /新增 \d+/.test(promote.detail), promote?.detail ?? '(无样本)');
 const recall = records.find((r) => r.text === '加载记忆');
 check('recall 记录带 m[0]/m[1] 条数', recall !== undefined && /m\[0\]/.test(recall.detail), recall?.detail ?? '(无样本)');
+
+// ── i18n：字典键集合必须对齐，英文渲染不得回退到中文
+const keys = dictionaryKeys();
+const keyDrift = keys.zh.filter((k) => !keys.en.includes(k)).concat(keys.en.filter((k) => !keys.zh.includes(k)));
+check('zh/en 字典键集合一致', keyDrift.length === 0, keyDrift.length ? keyDrift.join(', ') : `${keys.zh.length} keys`);
+const en = dictionaryTranslator('en');
+const enRecords = recordsOf(rows, en);
+const cjk = /[\u4e00-\u9fff]/;
+check('英文渲染不含中文残留', enRecords.every((r) => !cjk.test(r.text + r.detail)),
+  enRecords.filter((r) => cjk.test(r.text + r.detail)).map((r) => r.text).join(', ') || `${enRecords.length} 行`);
+check('参数插值生效', en('records.folded', { n: 3 }) === '×3' && en('detail.added', { n: '9' }) === 'added 9');
+check('未知键回退为键名', en('nope.missing') === 'nope.missing');
+console.log('\n=== 英文渲染（en 字典）===');
+for (const record of enRecords.slice(0, 6)) console.log(`  ${record.category.padEnd(9)} │ ${record.text.padEnd(20)} │ ${record.detail.slice(0, 56)}`);
+
 console.log(`\n${failures === 0 ? 'ALL PASS' : failures + ' FAIL'}`);
 process.exit(failures === 0 ? 0 : 1);

@@ -8,6 +8,10 @@
  * import below; `@ts-nocheck` keeps this package's `tsc --noEmit` green
  * (vitest is not a dependency of this package).
  *
+ * NOTE 2026-10-07: the notice copy moved to English (Host-side text has no
+ * locale service; see the module header). The mirror copy must carry the same
+ * assertion change — it was not reachable from this machine.
+ *
  * Session-notice (Channel A of the live session stream) — contract tests.
  *
  * The transcript renders every `user/message` whose `source.kind` is a
@@ -49,21 +53,26 @@ describe('sessionNoticeSummary', () => {
   it('names the published compartments and the net reclaim', () => {
     const summary = sessionNoticeSummary({ ...base, published: [2], tokensAfter: base.tokensBefore - 104_146 })
     expect(summary).toContain('Magic Context · ')
-    expect(summary).toContain('压缩 1 个区段')
+    expect(summary).toContain('compacted 1 compartment')
     expect(summary).toContain('§C2§')
-    expect(summary).toContain('回收 104,146 tok')
+    expect(summary).toContain('reclaimed 104,146 tok')
+  })
+
+  it('pluralizes the compartment count', () => {
+    const summary = sessionNoticeSummary({ ...base, published: [1, 2], tokensAfter: base.tokensBefore - 1000 })
+    expect(summary).toContain('compacted 2 compartments')
   })
 
   it('reports fact promotion with the seen-again count', () => {
     const summary = sessionNoticeSummary({ ...base, factsPromoted: 9, factsSeenAgain: 2 })
-    expect(summary).toContain('记忆提升 新增 9 条')
-    expect(summary).toContain('另 2 条已知')
+    expect(summary).toContain('promoted 9 memories')
+    expect(summary).toContain('(2 already known)')
   })
 
   it('reports force-band drops', () => {
     const summary = sessionNoticeSummary({ ...base, forceDropped: 3, tokensAfter: base.tokensBefore - 12_000 })
-    expect(summary).toContain('紧急丢弃 3 条工具输出')
-    expect(summary).toContain('回收 12,000 tok')
+    expect(summary).toContain('emergency-dropped 3 tool outputs')
+    expect(summary).toContain('reclaimed 12,000 tok')
   })
 
   it('bounds the one-line account to the host notice budget', () => {
@@ -100,7 +109,19 @@ describe('appendSessionNotice', () => {
     const content = call.data.content as Array<{ type: string; text: string }>
     expect(content).toHaveLength(1)
     expect(content[0]!.type).toBe('text')
-    expect(content[0]!.text).toContain('压缩 1 个区段')
+    expect(content[0]!.text).toContain('compacted 1 compartment')
+  })
+
+  it('appends the English baseline line when the baseline moved', () => {
+    const calls: Array<{ data: Record<string, unknown> }> = []
+    const session = { append: (_type: string, data: Record<string, unknown>) => { calls.push({ data }); return 7 } }
+    const outcome = appendSessionNotice({
+      session,
+      result: { ...base, published: [3], baselineUpdated: true, tokensAfter: base.tokensBefore - 500 },
+    })
+    expect(outcome.ok).toBe(true)
+    const content = calls[0]!.data.content as Array<{ type: string; text: string }>
+    expect(content[0]!.text).toContain('Baseline refreshed (m[0] frozen point advanced)')
   })
 
   it('stays quiet on a nothing-notable pass and never calls append', () => {
