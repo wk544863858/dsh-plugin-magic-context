@@ -207,6 +207,14 @@ export interface ListMemoriesOptions {
   readonly limit?: number
   /** Frozen expiry cutoff (§4.4); defaults to the writer's `now()`. */
   readonly now?: number
+  /**
+   * Keep only rows whose verification is still pending. The maintenance sweep
+   * needs this at SQL level: filtering a fixed 64-row render window after the
+   * fact stalls forever once those rows are verified (they keep their place —
+   * verification deliberately does not touch `updated_at`), leaving every row
+   * outside the window unreachable.
+   */
+  readonly unverifiedOnly?: boolean
 }
 
 /** The v2 taxonomy is the only category set the agent write path accepts (§3.1). */
@@ -447,11 +455,18 @@ const APPEND_MUTATION = `
 `
 
 /** `list` (§11.6): injectable rows of one project, in MC's render order. */
-const LIST_MEMORIES = `
-  SELECT ${MEMORY_SELECT_COLUMNS} FROM memories
-   WHERE project_path = ? AND status IN ('active','permanent') AND (expires_at IS NULL OR expires_at > ?)
-   ORDER BY category ASC, updated_at DESC, id ASC
-`
+const listMemoriesSql = (unverifiedOnly: boolean): string =>
+  `SELECT ${MEMORY_SELECT_COLUMNS} FROM memories
+   WHERE project_path = ? AND status IN ('active','permanent') AND (expires_at IS NULL OR expires_at > ?)`
+  + (unverifiedOnly ? ` AND verification_status = 'unverified'` : '')
+  + ' ORDER BY category ASC, updated_at DESC, id ASC'
+
+const LIST_MEMORIES = listMemoriesSql(false)
+
+/** Candidates for the maintenance sweep: the ORDER BY window stays the same,
+ * but the unverified filter is applied BEFORE the limit, so verification
+ * progress always advances through the whole project. */
+const LIST_MEMORIES_UNVERIFIED = listMemoriesSql(true)
 
 /** The trigger's RAISE text (§8.4) — the database-level second gate. */
 const AUTHORITY_ABORT_TEXT = 'context.db memory writes are managed by the Rust module'
@@ -647,6 +662,8 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
     const appendMutation = db.prepare(APPEND_MUTATION)
     const listMemoriesAll = db.prepare(LIST_MEMORIES)
     const listMemoriesLimited = db.prepare(`${LIST_MEMORIES} LIMIT ?`)
+    const listUnverifiedAll = db.prepare(LIST_MEMORIES_UNVERIFIED)
+    const listUnverifiedLimited = db.prepare(`${LIST_MEMORIES_UNVERIFIED} LIMIT ?`)
     // The guard's second half: sees whether the trigger is armed. The privileged
     // writer flips this inside its own IMMEDIATE transaction, so a second
     // connection can only ever observe `enabled = 0` (contract §8.4).
@@ -1198,11 +1215,13 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
         try {
           const cutoff = listOptions?.now ?? now()
           const limit = listOptions?.limit
+          const all = listOptions?.unverifiedOnly === true ? listUnverifiedAll : listMemoriesAll
+          const limited = listOptions?.unverifiedOnly === true ? listUnverifiedLimited : listMemoriesLimited
           if (limit !== undefined) {
             if (!Number.isInteger(limit) || limit <= 0) return []
-            return asMemoryRecords(listMemoriesLimited.all(identity, cutoff, limit))
+            return asMemoryRecords(limited.all(identity, cutoff, limit))
           }
-          return asMemoryRecords(listMemoriesAll.all(identity, cutoff))
+          return asMemoryRecords(all.all(identity, cutoff))
         } catch {
           return []
         }

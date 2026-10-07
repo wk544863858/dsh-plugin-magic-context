@@ -64,7 +64,9 @@ const EXPIRE_BATCH = 200
 const VERIFY_BATCH = 3
 /** Per-row content budget in the verification prompt. */
 const CONTENT_PREVIEW = 400
-const VERIFY_MAX_TOKENS = 2048
+/** Output cap. Reasoning models spend most of it before the JSON (the same
+ * lesson as the historian's 8192 floor): 2048 truncated every live call. */
+const VERIFY_MAX_TOKENS = 8192
 
 const VERIFY_INSTRUCTION = [
   'You are auditing project memories for a coding agent. For each memory, judge whether it is still true and useful for this project:',
@@ -76,16 +78,53 @@ const VERIFY_INSTRUCTION = [
   'Reply with ONLY a JSON object: {"verdicts":[{"id":<number>,"verdict":"verified"|"stale"|"wrong"|"skip","content"?:string,"reason"?:string}]}',
 ].join('\n')
 
+/** Salvage complete `{...}` objects from a truncated verdict array. A reasoning
+ * model that runs out of output mid-array still yields usable leading verdicts;
+ * discarding the whole call would just retry the same truncation next tick. */
+function salvageObjects(inner: string): unknown[] {
+  const out: unknown[] = []
+  let depth = 0
+  let start = -1
+  let inString = false
+  let escaped = false
+  for (let i = 0; i < inner.length; i += 1) {
+    const ch = inner[i] as string
+    if (inString) {
+      if (escaped) escaped = false
+      else if (ch === '\\') escaped = true
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') { inString = true; continue }
+    if (ch === '{') {
+      if (depth === 0) start = i
+      depth += 1
+      continue
+    }
+    if (ch === '}') {
+      depth -= 1
+      if (depth === 0 && start >= 0) {
+        try { out.push(JSON.parse(inner.slice(start, i + 1))) } catch { /* skip malformed object */ }
+        start = -1
+      }
+    }
+  }
+  return out
+}
+
 /** Extract the first JSON object from a model reply (tolerates prose fences). */
 function parseVerdicts(text: string): Array<{ id: number; verdict: string; content?: string; reason?: string }> {
   const start = text.indexOf('{')
   const end = text.lastIndexOf('}')
   if (start < 0 || end <= start) return []
+  const slice = text.slice(start, end + 1)
   let parsed: unknown
   try {
-    parsed = JSON.parse(text.slice(start, end + 1))
+    parsed = JSON.parse(slice)
   } catch {
-    return []
+    const arrayStart = slice.indexOf('[')
+    if (arrayStart < 0) return []
+    parsed = { verdicts: salvageObjects(slice.slice(arrayStart + 1)) }
   }
   const verdicts = (parsed as { verdicts?: unknown }).verdicts
   if (!Array.isArray(verdicts)) return []
@@ -106,8 +145,9 @@ function parseVerdicts(text: string): Array<{ id: number; verdict: string; conte
 /** One LLM round trip. Returns the raw text, or the reason it produced none —
  * the reason is journaled (a bare "verify call failed" hid six live ticks
  * worth of root cause). */
-async function collectText(llm: MaintenanceLlm, deps: MaintenanceDeps, userPrompt: string): Promise<{ ok: true; text: string } | { ok: false; why: string }> {
+async function collectText(llm: MaintenanceLlm, deps: MaintenanceDeps, userPrompt: string): Promise<{ ok: true; text: string; truncated: boolean } | { ok: false; why: string }> {
   const byIndex = new Map<number, string>()
+  let truncated = false
   try {
     const chunks = llm.stream({
       provider: deps.route!.provider,
@@ -126,21 +166,25 @@ async function collectText(llm: MaintenanceLlm, deps: MaintenanceDeps, userPromp
         byIndex.set(chunk.index, (byIndex.get(chunk.index) ?? '') + chunk.text)
       } else if (chunk.type === 'finish') {
         // Same terminal-reason semantics as the historian's collector:
-        // error/aborted fail with the failure detail, max-tokens is a
-        // (truncating) failure, anything else is a normal stop.
+        // error/aborted fail with the failure detail. max-tokens is NOT fatal
+        // here: the verdict list is a flat JSON array, so whatever objects made
+        // it out before the cap are still worth banking (MC's "a timed-out
+        // batch banks what it verified"); rows without a verdict stay
+        // unverified and are retried on a later tick.
         const reason = (raw as { reason?: { kind?: string; failure?: { message?: string; code?: string } } }).reason
-        if (reason !== undefined && (reason.kind === 'error' || reason.kind === 'aborted' || reason.kind === 'max-tokens')) {
+        if (reason !== undefined && (reason.kind === 'error' || reason.kind === 'aborted')) {
           const detail = reason.failure?.message ?? reason.failure?.code
           return { ok: false, why: `stream finished (${reason.kind})${detail === undefined ? '' : `: ${detail}`}` }
         }
+        if (reason?.kind === 'max-tokens') truncated = true
       }
     }
   } catch (error) {
     return { ok: false, why: error instanceof Error ? error.message : String(error) }
   }
   const text = [...byIndex.entries()].sort(([a], [b]) => a - b).map(([, value]) => value).join('')
-  if (text.length === 0) return { ok: false, why: 'stream produced no text deltas' }
-  return { ok: true, text }
+  if (text.length === 0) return { ok: false, why: truncated ? 'stream hit max-tokens with no text' : 'stream produced no text deltas' }
+  return { ok: true, text, truncated }
 }
 
 function renderRow(row: MemoryRecord, nowMs: number): string {
@@ -172,9 +216,11 @@ export async function runMaintenanceTick(deps: MaintenanceDeps): Promise<Mainten
     })
     return { ...tally }
   }
-  const candidates = writer.listMemories(identity, { limit: 64, now })
-    .filter(row => row.verificationStatus === 'unverified')
-    .slice(0, VERIFY_BATCH)
+  // The unverified filter runs in SQL (before the limit): filtering a fixed
+  // render window instead let the sweep stall once its first rows were
+  // verified, because verification deliberately leaves `updated_at` alone and
+  // those rows keep their window slots.
+  const candidates = writer.listMemories(identity, { limit: VERIFY_BATCH, now, unverifiedOnly: true })
   if (candidates.length === 0) {
     deps.journal.info('maintenance', `maintenance: expired ${String(tally.expired)} (nothing to verify)`, {
       expired: tally.expired,
@@ -213,7 +259,8 @@ export async function runMaintenanceTick(deps: MaintenanceDeps): Promise<Mainten
   deps.journal.info(
     'maintenance',
     `maintenance: expired ${String(tally.expired)} · verified ${String(tally.verified)}`
-      + ` · updated ${String(tally.updated)} · archived ${String(tally.archived)}`,
+      + ` · updated ${String(tally.updated)} · archived ${String(tally.archived)}`
+      + (call.truncated ? ` (truncated: banked ${String(verdicts.length)}/${String(candidates.length)} verdicts)` : ''),
     {
       expired: tally.expired,
       verified: tally.verified,
@@ -221,6 +268,8 @@ export async function runMaintenanceTick(deps: MaintenanceDeps): Promise<Mainten
       archived: tally.archived,
       candidates: candidates.length,
       verdicts: verdicts.length,
+      ...call.truncated ? { truncated: true } : {},
+      route: `${deps.route!.provider}/${deps.route!.model}`,
     },
   )
   return { ...tally }

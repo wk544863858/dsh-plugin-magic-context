@@ -344,6 +344,73 @@ describe('maintenance tick — verification (dreamer verify slice)', () => {
     }
   })
 
+  it('banks the verdicts a truncated (max-tokens) reply still carried', async () => {
+    const path = createDb()
+    const banked = seedRow(path, { category: 'ARCHITECTURE', content: 'still true', verificationStatus: 'unverified' })
+    const cut = seedRow(path, { category: 'CONFIG_VALUES', content: 'old value 10', verificationStatus: 'unverified' })
+    const writer = openMemoryWriter({ dbPath: path, logger: silentLogger, now: () => T0 })
+    const journal = fakeJournal()
+    // Strict JSON.parse fails (the array and object never close) — the salvage
+    // scanner must still recover the one complete verdict object.
+    const truncated = '{"verdicts":[{"id":' + String(banked) + ',"verdict":"verified"},{"id":'
+      + String(cut) + ',"verdict":"stale","content":"old value 1'
+    const llm = {
+      async *stream(options: { messages: readonly { content: unknown }[] }) {
+        const content = options.messages[0]?.content
+        if (!Array.isArray(content)) throw new TypeError('content.some is not a function')
+        yield { type: 'text-delta', index: 0, text: truncated }
+        yield { type: 'finish', reason: { kind: 'max-tokens' } }
+      },
+    }
+    try {
+      const outcome = await runMaintenanceTick({
+        writer,
+        identity: OWN,
+        sessionId: 'mc-maintenance',
+        journal,
+        llm,
+        route: ROUTE,
+        now: () => T0,
+      })
+      expect(outcome).toMatchObject({ verifyRan: true, verified: 1, updated: 0, archived: 0 })
+      expect(rowSnapshot(path, banked).verificationStatus).toBe('verified')
+      // The row whose verdict was cut off stays unverified for a later tick.
+      expect(rowSnapshot(path, cut)).toMatchObject({ status: 'active', verificationStatus: 'unverified' })
+      const last = journal.entries.at(-1)
+      expect(last?.data?.truncated).toBe(true)
+      expect(last?.data?.verdicts).toBe(1)
+    } finally {
+      writer.close()
+    }
+  })
+
+  it('reaches unverified rows even when verified rows fill the render window', async () => {
+    const path = createDb()
+    // 70 verified rows sort BEFORE the candidate in MC's render order
+    // (category ASC). Filtering a fixed 64-row window after the fact stalls
+    // here forever; the SQL-level filter must still find the one candidate.
+    for (let i = 0; i < 70; i += 1) {
+      seedRow(path, { category: 'ARCHITECTURE', content: `done ${String(i)}`, verificationStatus: 'verified' })
+    }
+    const target = seedRow(path, { category: 'WORKFLOW_RULES', content: 'never judged', verificationStatus: 'unverified' })
+    const writer = openMemoryWriter({ dbPath: path, logger: silentLogger, now: () => T0 })
+    try {
+      const outcome = await runMaintenanceTick({
+        writer,
+        identity: OWN,
+        sessionId: 'mc-maintenance',
+        journal: fakeJournal(),
+        llm: fakeLlm(verdictReply([{ id: target, verdict: 'verified' }])),
+        route: ROUTE,
+        now: () => T0,
+      })
+      expect(outcome).toMatchObject({ verifyRan: true, verified: 1 })
+      expect(rowSnapshot(path, target).verificationStatus).toBe('verified')
+    } finally {
+      writer.close()
+    }
+  })
+
   it('an LLM failure is fail-open: nothing mutates, the tick reports llm-failed', async () => {
     const path = createDb()
     const id = seedRow(path, { category: 'ARCHITECTURE', content: 'unsure', verificationStatus: 'unverified' })
