@@ -20,6 +20,7 @@
  */
 import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { errText } from './types.ts'
 
 export type JournalLevel = 'info' | 'warn' | 'error'
 
@@ -259,7 +260,7 @@ export function openJournal(options: JournalOptions): Journal {
     if (pruned > 0) options.logger?.info(`magic-context journal: pruned ${String(pruned)} entries past retention`)
   } catch (error) {
     options.logger?.warn(
-      `magic-context journal: retention prune failed: ${error instanceof Error ? error.message : String(error)}`,
+      `magic-context journal: retention prune failed: ${errText(error)}`,
     )
   }
   if (options.mirrorPath !== undefined) {
@@ -268,7 +269,7 @@ export function openJournal(options: JournalOptions): Journal {
       rotateMirror(options.mirrorPath, mirrorMaxBytes)
     } catch (error) {
       options.logger?.warn(
-        `magic-context journal: mirror unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        `magic-context journal: mirror unavailable: ${errText(error)}`,
       )
     }
   }
@@ -278,7 +279,7 @@ export function openJournal(options: JournalOptions): Journal {
       options.stores.appendJournal(entry)
     } catch (error) {
       options.logger?.warn(
-        `magic-context journal: write failed (${entry.kind}): ${error instanceof Error ? error.message : String(error)}`,
+        `magic-context journal: write failed (${entry.kind}): ${errText(error)}`,
       )
     }
     if (options.mirrorPath !== undefined) {

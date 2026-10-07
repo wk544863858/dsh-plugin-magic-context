@@ -34,6 +34,7 @@ import { homedir } from 'node:os'
 import { join, normalize, resolve } from 'node:path'
 import { estimateTokens, MEMORY_VISIBILITY_SENTINEL, type MemoryMutationType, type MemoryUpdateLine } from './compartments.ts'
 import { memoryCategoryOrder, V2_MEMORY_CATEGORIES } from './memory-categories.ts'
+import { errText } from './types.ts'
 
 const VALID_SHARE_CATEGORIES = new Set<string>(V2_MEMORY_CATEGORIES)
 
@@ -370,7 +371,7 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
   try {
     db = new DatabaseSync(dbPath, { readOnly: true })
   } catch (error) {
-    return unavailable(`cannot open (${error instanceof Error ? error.message : String(error)})`)
+    return unavailable(`cannot open (${errText(error)})`)
   }
 
   try {
@@ -585,7 +586,7 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
       mutationMemoryStatement = undefined
       options.logger.warn(
         'magic-context memory mutation lane disabled: '
-          + `${error instanceof Error ? error.message : String(error)} (${dbPath})`,
+          + `${errText(error)} (${dbPath})`,
       )
     }
     interface MutationMemoryRow {
@@ -784,7 +785,7 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
       } catch (error) {
         options.logger.warn(
           `magic-context memory mutation read failed (continuing without deltas): `
-            + `${error instanceof Error ? error.message : String(error)}`,
+            + `${errText(error)}`,
         )
         return undefined
       }
@@ -950,7 +951,7 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
           }
         } catch (error) {
           options.logger.warn(
-            `magic-context memory recall failed (continuing without memories): ${error instanceof Error ? error.message : String(error)}`,
+            `magic-context memory recall failed (continuing without memories): ${errText(error)}`,
           )
           return undefined
         }
@@ -963,6 +964,6 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
     } catch {
       /* best effort */
     }
-    return unavailable(`probe failed (${error instanceof Error ? error.message : String(error)})`)
+    return unavailable(`probe failed (${errText(error)})`)
   }
 }

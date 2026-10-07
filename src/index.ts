@@ -69,7 +69,7 @@ import { cosineSimilarity, defaultEmbeddingCacheDir, openLocalEmbedder } from '.
 import type { MemoryFact } from './core/memory-categories.ts'
 import { openJournal, recoverOrphanHistorianRuns, type Journal, type JournalLevel } from './core/journal.ts'
 import { defaultDataDir, openStores, SCHEMA_VERSION, type AdapterStores } from './core/stores.ts'
-import type { UsageRecord } from './core/types.ts'
+import { errText, type UsageRecord } from './core/types.ts'
 
 export interface MagicContextDshConfig {
   /** Directory for the adapter's SQLite store. Defaults under ~/.local/share. */
@@ -128,6 +128,13 @@ export interface MagicContextDshConfig {
      * bridge still injects existing memories.
      */
     write?: boolean
+    /**
+     * Backfill stored-query vectors for rows the shared store has none of
+     * (the B4 lane). Default false: the query side embeds on demand anyway,
+     * and the backfill costs a local model load. Intentionally undocumented
+     * in the settings schema — profile-JSON only.
+     */
+    embedBackfill?: boolean
   }
   /**
    * Host-supplied CompactionEngine base class (in-tree glue injects it; when
@@ -449,7 +456,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
         return tagUserMessage(message, tagPrefix, tag)
       } catch (error) {
         ctx.logger.warn(
-          `magic-context: message tagging skipped (${error instanceof Error ? error.message : String(error)})`,
+          `magic-context: message tagging skipped (${errText(error)})`,
         )
         return message
       }
@@ -724,7 +731,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
         }
       }
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
+      const detail = errText(error)
       journal?.error('error', `management pass failed: ${detail}`, { scope: 'pre-step', detail }, sessionId)
       // A failed management pass must never wedge the turn: log and continue
       // with the tagged messages (MC per-turn fail-open). The next pass
@@ -819,7 +826,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     try {
       stores.recordUsage(record)
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
+      const detail = errText(error)
       journal?.warn('error', `usage recording failed: ${detail}`, { scope: 'usage', detail }, session.id)
       // Best effort by design (mirrors MC per-turn fail-open): the next
       // assistant/message anchors a fresh row.
@@ -853,7 +860,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
           + `(${String(reclaim.protectedCount)} protected) after a context-overflow rejection`,
       )
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
+      const detail = errText(error)
       journal?.error('error', `emergency reclaim failed: ${detail}`, { scope: 'request-error', detail }, sessionId)
       ctx.logger.warn(
         `magic-context: emergency reclaim failed: ${detail}`,
@@ -967,7 +974,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
       // silently half-alive. Use registerTools: false to opt out explicitly.
       throw new Error(
         `magic-context dsh adapter: agent tools failed to register `
-          + `(${error instanceof Error ? error.message : String(error)})`,
+          + `(${errText(error)})`,
       )
     }
   }
@@ -1002,7 +1009,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
       stores.setMeta('compaction_engine', 'magic-context-dsh')
       journal?.info('engine', 'CompactionEngine mounted on ctx.compaction', { action: 'mounted' })
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
+      const detail = errText(error)
       stores.setMeta('compaction_engine', `unavailable: ${detail}`)
       journal?.warn('engine', `CompactionEngine not mounted: ${detail}`, { action: 'unavailable', detail })
       ctx.logger.warn(
@@ -1130,7 +1137,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
         }
       }
     } catch (error) {
-      journal.error('maintenance', `maintenance tick failed: ${error instanceof Error ? error.message : String(error)}`)
+      journal.error('maintenance', `maintenance tick failed: ${errText(error)}`)
     } finally {
       maintenanceBusy = false
     }

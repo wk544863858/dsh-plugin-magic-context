@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { cosineSimilarity } from './embedding-local.ts';
+import { errText } from './types.ts';
 
 /**
  * `ctx_search`'s memory lane — a faithful port of Magic Context's hybrid
@@ -217,7 +218,7 @@ export function openMemorySearch(options: {
   try {
     db = new DatabaseSync(options.dbPath, { readOnly: true });
   } catch (error) {
-    const reason = `search store unavailable: ${error instanceof Error ? error.message : String(error)}`;
+    const reason = `search store unavailable: ${errText(error)}`;
     return {
       search: () => Promise.resolve({ ok: false, reason }),
       dominantEmbeddingModel: () => undefined,
@@ -325,7 +326,7 @@ export function openMemorySearch(options: {
         } catch (error) {
           // MC getFtsMatches:793-798 — a failed FTS query is an empty lane.
           logger?.warn?.(
-            `magic-context FTS lane failed: ${error instanceof Error ? error.message : String(error)}`,
+            `magic-context FTS lane failed: ${errText(error)}`,
           );
           ftsRows = [];
         }
@@ -467,7 +468,7 @@ export function openMemorySearch(options: {
     } catch (error) {
       return {
         ok: false,
-        reason: `memory search failed: ${error instanceof Error ? error.message : String(error)}`,
+        reason: `memory search failed: ${errText(error)}`,
       };
     }
   };

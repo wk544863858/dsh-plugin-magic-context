@@ -18,27 +18,6 @@
  * the embedding/verification child tables. The user's real
  * `context.db` is never opened, let alone written.
  */
-import { DatabaseSync } from 'node:sqlite'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import type { MemoryWriteResult } from '<path>'
-import {
-  isWritableMemoryCategory,
-  normalizedMemoryHash,
-  openMemoryWriter,
-} from '<path>'
-import { V2_MEMORY_CATEGORIES } from '<path>'
-
-const OWN = 'git:1111111111111111111111111111111111111111'
-const OTHER = 'git:2222222222222222222222222222222222222222'
-const RACE = 'git:3333333333333333333333333333333333333333'
-
-const T0 = 1_700_000_000_000
-const DAY_MS = 24 * 60 * 60 * 1000
-const AUTHORITY_ABORT = 'context.db memory writes are managed by the Rust module'
-/** MC's storage version, and the version this adapter understands. */
 const SCHEMA_VERSION = 94
 const WRITER_SOURCE = '<path>'
 
@@ -406,14 +385,13 @@ describe('promotion invariants (contract §9)', () => {
       writer.promoteFacts({ identity: OWN, facts: [{ category: 'NAMING', content: 'kebab-case files' }] })
       writer.promoteFacts({ identity: OTHER, facts: [{ category: 'NAMING', content: 'snake_case modules' }] })
 
-      const otherBefore = { ...writer.stats(OTHER), maxMemoryId: writer.maxMemoryId(OTHER) }
-      expect(otherBefore).toEqual({ rows: 1, mutationLog: 0, epoch: 3, maxMemoryId: 2, verified: 0, unverified: 1 })
+      const otherBefore = writer.stats(OTHER)
+      expect(otherBefore).toEqual({ rows: 1, mutationLog: 0, epoch: 3, verified: 0, unverified: 1 })
 
       writer.promoteFacts({ identity: OWN, facts: [{ category: 'NAMING', content: 'one more naming rule' }] })
 
       expect(writer.stats(OWN)).toEqual({ rows: 2, mutationLog: 0, epoch: 3, verified: 0, unverified: 2 })
-      expect({ ...writer.stats(OTHER), maxMemoryId: writer.maxMemoryId(OTHER) }).toEqual(otherBefore)
-      expect(writer.maxMemoryId(OWN)).toBe(3)
+      expect(writer.stats(OTHER)).toEqual(otherBefore)
     } finally {
       writer.close()
     }
@@ -875,7 +853,6 @@ describe('agent write path (contract §11)', () => {
     const writer = openMemoryWriter({ dbPath: path, logger: silentLogger, now: () => T0 })
     try {
       expect(writer.status.ok).toBe(true)
-      expect(writer.isAuthorityManaged(OWN)).toBe(false)
       const id = createdId(writer.writeMemory({ identity: OWN, category: 'NAMING', content: 'trimmed schema row' }))
       expect(writer.updateMemory({ identity: OWN, id, content: 'trimmed schema row, updated' }))
         .toMatchObject({ ok: true, id })
@@ -917,7 +894,6 @@ describe('authority guard (contract §8.4)', () => {
       const id = createdId(writer.writeMemory({ identity: OWN, category: 'ARCHITECTURE', content: 'before management' }))
       run(path, 'INSERT INTO authority_managed(project_path, context_store_uuid, marked_at) VALUES(?, ?, ?)', OWN, 'store-uuid', T0)
 
-      expect(writer.isAuthorityManaged(OWN)).toBe(true)
       const write = writer.writeMemory({ identity: OWN, category: 'ARCHITECTURE', content: 'after management' })
       expect(write).toMatchObject({ ok: false, reason: 'authority-blocked' })
       if (write.ok) throw new Error('expected a refusal')
@@ -952,7 +928,6 @@ describe('authority guard (contract §8.4)', () => {
     const writer = openMemoryWriter({ dbPath: path, logger: silentLogger, now: () => T0 })
     try {
       run(path, 'INSERT INTO authority_repair_pending(project_path, started_at) VALUES(?, ?)', OWN, T0)
-      expect(writer.isAuthorityManaged(OWN)).toBe(true)
       expect(writer.writeMemory({ identity: OWN, category: 'NAMING', content: 'during repair' }))
         .toMatchObject({ ok: false, reason: 'authority-blocked' })
       expect(writer.stats(OWN).rows).toBe(0)
@@ -990,7 +965,6 @@ describe('authority guard (contract §8.4)', () => {
       run(path, `CREATE TRIGGER test_authority_race BEFORE INSERT ON memories
         WHEN NEW.project_path = '${RACE}'
         BEGIN SELECT RAISE(ABORT, '${AUTHORITY_ABORT}'); END`)
-      expect(writer.isAuthorityManaged(RACE)).toBe(false)
 
       const raced = writer.writeMemory({ identity: RACE, category: 'NAMING', content: 'raced write' })
       expect(raced).toMatchObject({ ok: false, reason: 'authority-blocked' })
@@ -1032,3 +1006,4 @@ describe('taxonomy helpers', () => {
     expect(normalizedMemoryHash('  Mixed   CASE  ')).toBe(normalizedMemoryHash('mixed case'))
   })
 })
+

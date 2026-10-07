@@ -29,6 +29,7 @@ import type { MemoryFact } from '../core/memory-categories.ts'
 import { renderMemoryLine, type MemoryRow } from '../core/memory-bridge.ts'
 import type { PassDecision, PressurePolicy } from '../core/policy.ts'
 import type { AdapterStores, BaselineState } from '../core/stores.ts'
+import { errText } from '../core/types.ts'
 import { reclaimForEmergency } from './emergency.ts'
 import { runHistorian, type HistorianDeps, type HistorianLlm } from './historian.ts'
 import {
@@ -249,7 +250,7 @@ function publishCompartments(input: ManagementPassInput, nodes: readonly Surface
           input.sessionId,
         )
       } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error)
+        const detail = errText(error)
         input.journal?.error('error', `memory promotion failed: ${detail}`, {
           scope: 'memory-promote',
           detail,
@@ -516,7 +517,7 @@ export function runManagementPass(input: ManagementPassInput): ManagementPassRes
         ...input.route === undefined ? {} : { route: input.route },
       }).catch((error: unknown) => {
         input.logger.warn(
-          `magic-context historian failed (continuing): ${error instanceof Error ? error.message : String(error)}`,
+          `magic-context historian failed (continuing): ${errText(error)}`,
         )
       })
       historianStarted = true
@@ -543,7 +544,7 @@ export function runManagementPass(input: ManagementPassInput): ManagementPassRes
     // A failed management pass must never wedge the turn: log and continue
     // with the tagged messages (MC per-turn fail-open).
     input.logger.warn(
-      `magic-context: management pass failed (continuing): ${error instanceof Error ? error.message : String(error)}`,
+      `magic-context: management pass failed (continuing): ${errText(error)}`,
     )
     return result
   }

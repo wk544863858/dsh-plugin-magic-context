@@ -495,6 +495,8 @@ window.__ModuleLoader__.load({
       const adapter = summary && typeof summary.adapter === 'object' && summary.adapter !== null ? summary.adapter : {}
       const health = summary && typeof summary.health === 'object' && summary.health !== null ? summary.health : {}
       const project = summary && typeof summary.project === 'object' && summary.project !== null ? summary.project : {}
+      const num = (value) => (typeof value === 'number' ? value : undefined)
+      const obj = (value) => (value !== null && typeof value === 'object' ? value : undefined)
       return {
         scope: summary && summary.scope === 'session' ? 'session' : 'global',
         schemaVersion: adapter.schemaVersion,
@@ -506,7 +508,7 @@ window.__ModuleLoader__.load({
         // `tools`. Read both so neither revision renders an empty row.
         tools: adapter.tools === undefined ? adapter.toolsMode : adapter.tools,
         projectIdentity: shortIdentity(project.identity),
-        projectMemories: typeof project.memories === 'number' ? project.memories : undefined,
+        projectMemories: num(project.memories),
         journalRows: health.journalRows,
         journalRowsAll: health.journalRowsAll,
         lastEventAt: health.lastEventAt,
@@ -516,28 +518,24 @@ window.__ModuleLoader__.load({
         drops24h: health.drops24h,
         compartments24h: health.compartments24h,
         // The density pass: the numbers a user actually acts on.
-        lastPressure: typeof health.lastPressure === 'number' ? health.lastPressure : undefined,
-        emergency24h: typeof health.emergency24h === 'number' ? health.emergency24h : undefined,
-        promote24h: typeof health.promote24h === 'number' ? health.promote24h : undefined,
-        reclaimed24h: typeof health.reclaimed24h === 'number' ? health.reclaimed24h : undefined,
+        lastPressure: num(health.lastPressure),
+        emergency24h: num(health.emergency24h),
+        promote24h: num(health.promote24h),
+        reclaimed24h: num(health.reclaimed24h),
         // Panel v3: absolute context size + the dreamer-slice KPIs.
-        lastTokens: typeof health.lastTokens === 'number' ? health.lastTokens : undefined,
-        lastContextWindow: typeof health.lastContextWindow === 'number' ? health.lastContextWindow : undefined,
-        memoryStats: health.memoryStats !== null && typeof health.memoryStats === 'object'
-          ? {
-            verified: typeof health.memoryStats.verified === 'number' ? health.memoryStats.verified : undefined,
-            unverified: typeof health.memoryStats.unverified === 'number' ? health.memoryStats.unverified : undefined,
-          }
-          : undefined,
-        maintenanceLast: health.maintenanceLast !== null && typeof health.maintenanceLast === 'object'
-          ? {
-            at: typeof health.maintenanceLast.at === 'number' ? health.maintenanceLast.at : undefined,
-            expired: typeof health.maintenanceLast.expired === 'number' ? health.maintenanceLast.expired : undefined,
-            verified: typeof health.maintenanceLast.verified === 'number' ? health.maintenanceLast.verified : undefined,
-            updated: typeof health.maintenanceLast.updated === 'number' ? health.maintenanceLast.updated : undefined,
-            archived: typeof health.maintenanceLast.archived === 'number' ? health.maintenanceLast.archived : undefined,
-          }
-          : undefined,
+        lastTokens: num(health.lastTokens),
+        lastContextWindow: num(health.lastContextWindow),
+        memoryStats: obj(health.memoryStats) === undefined ? undefined : {
+          verified: num(health.memoryStats.verified),
+          unverified: num(health.memoryStats.unverified),
+        },
+        maintenanceLast: obj(health.maintenanceLast) === undefined ? undefined : {
+          at: num(health.maintenanceLast.at),
+          expired: num(health.maintenanceLast.expired),
+          verified: num(health.maintenanceLast.verified),
+          updated: num(health.maintenanceLast.updated),
+          archived: num(health.maintenanceLast.archived),
+        },
       }
     }
 
@@ -913,11 +911,13 @@ window.__ModuleLoader__.load({
             /* a malformed frame must not break the badge */
           }
         }
+        /** The one summary fetch: `ok → json`, anything else rejects. */
+        const fetchSummaryJson = () => Promise.resolve(fetch(summaryUrl, { headers: { accept: 'application/json' } })).then(
+          (response) => (response !== undefined && response.ok ? response.json() : Promise.reject(new Error('unavailable'))),
+        )
         const probe = () => {
           if (disposed || sawSnapshot || typeof fetch !== 'function') return
-          Promise.resolve(fetch(summaryUrl, { headers: { accept: 'application/json' } })).then(
-            (response) => (response !== undefined && response.ok ? response.json() : Promise.reject(new Error('unavailable'))),
-          ).then((payload) => {
+          fetchSummaryJson().then((payload) => {
             if (!disposed) acceptSummary(payload)
           }, () => {
             if (!disposed && !sawSnapshot) setState((previous) => (previous.summary !== null ? previous : { status: 'unavailable', summary: null, recent: [] }))
@@ -963,9 +963,7 @@ window.__ModuleLoader__.load({
         let disposed = false
         const refresh = () => {
           if (typeof fetch !== 'function') return
-          Promise.resolve(fetch(summaryUrl, { headers: { accept: 'application/json' } })).then(
-            (response) => (response !== undefined && response.ok ? response.json() : Promise.reject(new Error('unavailable'))),
-          ).then((payload) => {
+          fetchSummaryJson().then((payload) => {
             if (disposed || payload === null || typeof payload !== 'object') return
             setState((previous) => ({ status: 'ok', summary: payload, recent: previous.recent }))
           }, () => {

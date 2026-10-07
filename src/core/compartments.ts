@@ -11,6 +11,7 @@
  * no DSH and no SQLite dependency, so the whole thing is unit-testable.
  */
 import type { MemoryFact } from './memory-categories.ts'
+import { errText } from './types.ts'
 
 /** One compartment's four detail tiers, most detailed (p1) to most compressed (p4). */
 export interface CompartmentTiers {
@@ -474,7 +475,7 @@ export function parseHistorianOutput(text: string): CompartmentDraft {
   try {
     parsed = JSON.parse(text.slice(open, close + 1))
   } catch (error) {
-    throw new HistorianOutputError(`invalid JSON (${error instanceof Error ? error.message : String(error)})`)
+    throw new HistorianOutputError(`invalid JSON (${errText(error)})`)
   }
   if (parsed === null || typeof parsed !== 'object') {
     throw new HistorianOutputError('response is not a JSON object')

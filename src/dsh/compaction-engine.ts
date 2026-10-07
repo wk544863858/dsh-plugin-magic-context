@@ -26,6 +26,7 @@ import { compactedPlaceholder, estimateTokens, type CompartmentDraft } from '../
 import type { Journal } from '../core/journal.ts'
 import type { PressurePolicy } from '../core/policy.ts'
 import type { AdapterStores } from '../core/stores.ts'
+import { errText } from '../core/types.ts'
 import { callHistorian, type HistorianLlm } from './historian.ts'
 import { runManagementPass } from './management-pass.ts'
 import {
@@ -243,7 +244,7 @@ export async function registerMagicCompactionEngine(
       } catch (error) {
         // A failing pass must never escape into the host's step: warn, record,
         // and let the session continue (the next threshold still retries).
-        const detail = error instanceof Error ? error.message : String(error)
+        const detail = errText(error)
         deps.logger.warn(`magic-context compaction: management pass failed (${detail}); session continues`)
         deps.journal?.warn('engine', `management pass failed: ${detail}`, {
           action: 'pass-failed',

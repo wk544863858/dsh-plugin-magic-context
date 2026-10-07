@@ -42,6 +42,7 @@ import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { MEMORY_SCHEMA_MAX_VERSION, normalizeMemoryContent } from './memory-bridge.ts'
 import { V2_MEMORY_CATEGORIES, isPromotableCategory, resolveExpiresAt } from './memory-categories.ts'
+import { errText } from './types.ts'
 
 /** MC's `normalize-hash.ts`: md5 of the whitespace/case-normalized content. */
 export function normalizedMemoryHash(content: string): string {
@@ -269,10 +270,6 @@ export interface MemoryWriter {
     readonly facts: readonly MemoryFact[]
     readonly sessionId?: string
   }): PromoteOutcome
-  /** Highest memory id visible to a project (0 when it has none). */
-  maxMemoryId(identity: string): number
-  /** True when Magic Context's module authority owns this project's memories. */
-  isAuthorityManaged(identity: string): boolean
   /** Read-only counters used by the observability layer and the tests. */
   stats(identity: string): {
     readonly rows: number
@@ -466,7 +463,7 @@ function authorityYieldDetail(identity: string): string {
 
 /** True when SQLite aborted the statement through the authority guard trigger. */
 function isAuthorityAbort(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error)
+  const message = errText(error)
   return message.includes(AUTHORITY_ABORT_TEXT)
 }
 
@@ -541,8 +538,6 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
         maxMemoryId: 0,
         authorityBlocked: true,
       }),
-      maxMemoryId: () => 0,
-      isAuthorityManaged: () => true,
       stats: () => ({ rows: 0, mutationLog: 0, epoch: 0, verified: 0, unverified: 0 }),
       writeMemory: () => refused,
       updateMemory: () => refused,
@@ -570,7 +565,7 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
     db.exec('PRAGMA foreign_keys = ON')
     db.exec('PRAGMA journal_mode = WAL')
   } catch (error) {
-    return unavailable(`cannot open (${error instanceof Error ? error.message : String(error)})`)
+    return unavailable(`cannot open (${errText(error)})`)
   }
 
   try {
@@ -707,7 +702,7 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
     }
 
     const databaseFailure = (operation: string, error: unknown): MemoryWriteFailure => {
-      const detail = error instanceof Error ? error.message : String(error)
+      const detail = errText(error)
       options.logger.warn(`magic-context memory: ${operation} failed: ${detail}`)
       return { ok: false, reason: 'database-error', detail }
     }
@@ -780,14 +775,6 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
     return {
       dbPath: options.dbPath,
       status: writerStatus,
-      isAuthorityManaged,
-      maxMemoryId: identity => {
-        try {
-          return maxFor(identity)
-        } catch {
-          return 0
-        }
-      },
       stats: identity => {
         try {
           const coverage = statsVerification.get(identity) as { verified: number; unverified: number }
@@ -1258,7 +1245,7 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
           if (!outcome.ok) return { ok: false, recorded, skipped: skipped(), reason: outcome.reason }
           return { ok: true, recorded, skipped: skipped() }
         } catch (error) {
-          const detail = error instanceof Error ? error.message : String(error)
+          const detail = errText(error)
           options.logger.warn(`magic-context memory: retrieval telemetry failed: ${detail}`)
           return { ok: false, recorded, skipped: skipped(), reason: 'database-error' }
         }
@@ -1274,7 +1261,7 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
           ).all(identity, nowAt, Math.max(1, Math.min(500, limit))) as Array<{ id: number }>
           return rows.map(row => row.id)
         } catch (error) {
-          options.logger.warn(`magic-context memory: listExpired failed: ${error instanceof Error ? error.message : String(error)}`)
+          options.logger.warn(`magic-context memory: listExpired failed: ${errText(error)}`)
           return []
         }
       },
@@ -1296,7 +1283,7 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
           })
           return stamp.ok ? stamp.changed : 0
         } catch (error) {
-          options.logger.warn(`magic-context memory: markVerified failed: ${error instanceof Error ? error.message : String(error)}`)
+          options.logger.warn(`magic-context memory: markVerified failed: ${errText(error)}`)
           return 0
         }
       },
@@ -1308,6 +1295,6 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
     } catch {
       /* best effort */
     }
-    return unavailable(`probe failed (${error instanceof Error ? error.message : String(error)})`)
+    return unavailable(`probe failed (${errText(error)})`)
   }
 }

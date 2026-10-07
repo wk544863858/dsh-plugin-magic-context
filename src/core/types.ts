@@ -12,6 +12,12 @@
 /** Stable message identity inside one session (DSH MessageId today). */
 export type NeutralMessageId = string
 
+/** The one error-to-text spelling: every catch that logs or journals a
+ * failure composes its message through this, never by re-testing the shape. */
+export function errText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 /** Stable tool-call identity inside one session (DSH ToolCallId today). */
 export type NeutralCallId = string
 
