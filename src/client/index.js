@@ -1148,17 +1148,19 @@ window.__ModuleLoader__.load({
       }
 
       // The project ledger must read from ONE source: the stats' total row
-      // count. The recall pool is capped at memoryLimit, so 40 条 next to
-      // 待验证 137 read as a contradiction when both were correct.
+      // count. Two occupancy figures are shown and LABELLED because they are
+      // different truths: 占用 = the native meter's own projection (the next
+      // request's answer); 压缩后账面 = the post-compaction surface account,
+      // which only moves when a management pass runs.
       const projectTotal = health.memoryStats !== undefined && health.memoryStats.total !== undefined
         ? health.memoryStats.total
         : health.projectMemories
       const summaryRows = [
         kv([
+          pressureValue !== undefined ? '占用 ' + pressureValue + '%' : '',
           health.lastTokens !== undefined && health.lastContextWindow
-            ? compactTok(health.lastTokens) + ' / ' + compactTok(health.lastContextWindow) + ' tok'
+            ? '压缩后账面 ' + compactTok(health.lastTokens) + ' / ' + compactTok(health.lastContextWindow) + ' tok'
             : '',
-          pressureValue !== undefined ? pressureValue + '%' : '',
           projectTotal !== undefined ? '记忆 ' + projectTotal + ' 条' : '',
           health.promote24h > 0 ? '24h 提升 ' + health.promote24h : '',
           health.memoryStats !== undefined && health.memoryStats.unverified !== undefined

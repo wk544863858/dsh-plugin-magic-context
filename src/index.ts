@@ -1163,6 +1163,48 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     clearTimeout(maintenanceFirst)
   })
 
+  // The occupancy gauge the native meter shows, from the SAME source: the
+  // host's `contextPressure` projection. projectedTokens is the last
+  // request's prompt-side usage plus the surface's signed movement since the
+  // sample — the answer for the NEXT request, not the last-request bill our
+  // pass ledger carries (the two read differently and the user noticed).
+  // Every distinct reading lands once in the journal; telemetry serves the
+  // newest to the panel so both gauges agree.
+  ctx.inject(['sessionProjections'], (scope) => {
+    if (journal === undefined) return
+    const registry = (scope as unknown as {
+      sessionProjections: {
+        onChanged(listener: (session: { id?: string }, key: string, value: unknown) => void): () => void
+      }
+    }).sessionProjections
+    const lastBySession = new Map<string, string>()
+    const disposeListener = registry.onChanged((session, key, value) => {
+      try {
+        if (key !== 'contextPressure') return
+        const reading = value as { projectedTokens?: number; pressureTokens?: number; contextWindow?: number }
+        const signature = JSON.stringify([reading.projectedTokens, reading.pressureTokens, reading.contextWindow])
+        const sid = typeof session?.id === 'string' ? session.id : ''
+        if (lastBySession.get(sid) === signature) return
+        lastBySession.set(sid, signature)
+        if (lastBySession.size > 64) {
+          const oldest = lastBySession.keys().next().value
+          if (oldest !== undefined) lastBySession.delete(oldest)
+        }
+        const used = reading.projectedTokens ?? reading.pressureTokens ?? 0
+        journal.info('context-pressure', `context pressure reading: ${String(used)} / ${String(reading.contextWindow ?? 0)} tok`, {
+          projectedTokens: reading.projectedTokens,
+          pressureTokens: reading.pressureTokens,
+          contextWindow: reading.contextWindow,
+        }, sid === '' ? undefined : sid)
+      } catch {
+        // a failed reading must never break the host's projection drive
+      }
+    })
+    // The listener's disposer rides this inject fiber — a scope reload
+    // re-runs the whole inject and swaps listeners cleanly.
+    void disposeListener
+  })
+
   journal?.info('boot', `adapter booted (tools: ${toolMode}, historian: ${liveBoolean(config.historianEnabled, true) === false ? 'off' : llm === undefined ? 'no-llm' : 'on'})`, {
     version: 'phase2',
     dbPath: stores.dbPath,

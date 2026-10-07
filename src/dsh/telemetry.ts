@@ -167,6 +167,8 @@ export function createTelemetryService(deps: TelemetryDeps): TelemetryService {
     let lastPressure: number | undefined
     let lastTokens: number | undefined
     let lastContextWindow: number | undefined
+    let surfaceTokens: number | undefined
+    let surfaceWindow: number | undefined
     try {
       for (const row of deps.stores.journalByKind(since, sessionId)) {
         if (row.kind === 'pass') passes24h += row.count
@@ -184,11 +186,31 @@ export function createTelemetryService(deps: TelemetryDeps): TelemetryService {
       // The pill's one number: the newest pressure reading, plus the 24h net
       // reclaim the execute band actually produced (sum of negative deltas).
       for (const entry of deps.stores.listJournal({ limit: 300, ...(sessionId === undefined ? {} : { sessionId }) })) {
+        if (entry.kind === 'context-pressure' && entry.data !== undefined) {
+          // The native meter's own numbers (contextPressure projection): the
+          // projected occupancy answers the NEXT request, while the pass
+          // ledger below only moves when a management pass runs. Preferred
+          // whenever a reading exists — newest row wins by iteration order.
+          const projected = entry.data.projectedTokens
+          const window = entry.data.contextWindow
+          if (lastTokens === undefined && typeof projected === 'number') lastTokens = projected
+          if (lastContextWindow === undefined && typeof window === 'number') lastContextWindow = window
+          if (lastPressure === undefined && typeof projected === 'number' && typeof window === 'number' && window > 0) {
+            lastPressure = projected / window * 100
+          }
+          continue
+        }
         if (entry.kind !== 'pass' || entry.data === undefined) continue
         const pressure = entry.data.pressure
         if (lastPressure === undefined && typeof pressure === 'number') lastPressure = pressure
         // Absolute context size for the panel: the newest pass's ledger
-        // (tokensBefore) over the window it was measured against.
+        // (tokensBefore) over the window it was measured against — the
+        // post-compaction SURFACE account, kept separate from the projected
+        // occupancy above because the two are different denominators of truth.
+        if (typeof entry.data.tokensBefore === 'number' && entry.data.decision === 'execute') {
+          if (surfaceTokens === undefined) surfaceTokens = entry.data.tokensBefore
+          if (surfaceWindow === undefined && typeof entry.data.contextWindow === 'number') surfaceWindow = entry.data.contextWindow
+        }
         if (lastTokens === undefined && typeof entry.data.tokensBefore === 'number') lastTokens = entry.data.tokensBefore
         if (lastContextWindow === undefined && typeof entry.data.contextWindow === 'number') lastContextWindow = entry.data.contextWindow
         if (entry.data.decision === 'execute') {
@@ -242,6 +264,9 @@ export function createTelemetryService(deps: TelemetryDeps): TelemetryService {
       lastPressure,
       lastTokens,
       lastContextWindow,
+      // The post-compaction SURFACE account (newest execute pass), separate
+      // from the projected occupancy: the panel labels the two explicitly.
+      ...(surfaceTokens !== undefined ? { surfaceLedger: { tokens: surfaceTokens, ...(surfaceWindow !== undefined ? { window: surfaceWindow } : {}) } } : {}),
       ...(memoryStats !== undefined ? { memoryStats } : {}),
       ...(maintenanceLast !== undefined ? { maintenanceLast } : {}),
     }

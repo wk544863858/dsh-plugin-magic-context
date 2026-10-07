@@ -39,6 +39,7 @@ export type JournalKind =
   | 'maintenance'
   | 'session-notice'
   | 'project-drift'
+  | 'context-pressure'
   | 'tool-call'
   | 'engine'
   | 'error'
