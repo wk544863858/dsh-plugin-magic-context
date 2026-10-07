@@ -28,6 +28,27 @@
  * adapter failure into a terminal `finish` error chunk, `collectText` throws,
  * and the journal must still close the run.
  */
+/**
+ * Historian terminal-event discipline — the regression suite for the
+ * "127 × `phase: 'start'`, 0 × terminal" production failure.
+ *
+ * The defect: `callHistorian` journaled `start` and then took the LLM's
+ * answer with a bare `await`. Any throw from the seam (`llm.stream()`) or from
+ * the chunk walk escaped the function WITHOUT a journal row, the caller
+ * (`management-pass`) swallowed it into a `logger.warn` the Desktop does not
+ * persist, and `finally` released the session's `inFlight` slot — so the next
+ * pass silently started again. The journal could only ever show `start`.
+ *
+ * These tests pin the invariant that replaces it: after a `start`, EXACTLY ONE
+ * terminal event (`done` | `failed`) is written, on every path — success,
+ * timeout (a seam that never settles), provider rejection, and two rejected
+ * digests — and a timed-out run releases `inFlight` for the next pass.
+ *
+ * The last block drives the real agent loop with a provider adapter that
+ * always throws, which is the production shape: the runtime converts an
+ * adapter failure into a terminal `finish` error chunk, `collectText` throws,
+ * and the journal must still close the run.
+ */
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -104,10 +125,15 @@ const NODES = [
   { seq: 2, type: 'assistant/message', role: 'assistant', text: 'working on it', hasText: true, isPlaceholder: false, hasToolCalls: false },
 ] as unknown as SurfaceNode[]
 
-/** A session stub: `spanRequestMessages` only reads `snapshotEvents()`. */
+/** A session stub in the REAL event shapes (`deriveEventMessage`,
+ * packages/core/session/src/surface.ts:132-145): `user/message` carries the
+ * message itself as the event data; assistant/system/developer/tool wrap it in
+ * `data.message`. The earlier stub wrapped the user message too, which is a
+ * shape no live session ever produces — that is exactly how `spanRequestMessages`
+ * kept dropping every user turn unnoticed. */
 const SESSION_STUB = {
   snapshotEvents: () => [
-    { seq: 1, type: 'user/message', data: { message: { role: 'user', content: [{ type: 'text', text: 'hello there' }] } } },
+    { seq: 1, type: 'user/message', data: { id: 'msg-1', role: 'user', content: [{ type: 'text', text: 'hello there' }] } },
     { seq: 2, type: 'assistant/message', data: { message: { role: 'assistant', content: [{ type: 'text', text: 'working on it' }] } } },
   ],
 } as unknown as Parameters<typeof spanRequestMessages>[0]
@@ -215,6 +241,14 @@ function baseDeps(llm: HistorianLlm, journal: Journal, extra: Partial<UnitDeps> 
 }
 
 describe('historian terminal events (unit)', () => {
+  it('replays the span in provider order, user turns included (real event shapes)', () => {
+    // Regression: reading only `data.message` returned nothing for user/message
+    // (its payload IS the message), so the replayed prefix was assistant-only —
+    // no longer a prefix of the routed request, and the digest lost the turns.
+    const replayed = spanRequestMessages(SESSION_STUB, [1, 2]) as Array<{ role?: string }>
+    expect(replayed.map(message => message.role)).toEqual(['user', 'assistant'])
+  })
+
   it('success: writes exactly one start + one done, with the facts contract intact', async () => {
     const calls: Call[] = []
     const { llm, options } = answeringLlm(digest())

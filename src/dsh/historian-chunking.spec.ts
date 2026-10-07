@@ -10,6 +10,14 @@
  * the chunk count. A small span (or no chunk budget) keeps the single-call
  * behavior pinned by historian-terminal.spec.ts.
  */
+/**
+ * D1/D3 — historian chunking: an oversized span digests in contiguous
+ * ~budget-token chunks and a final merge call folds the partial digests into
+ * the one CompartmentDraft; the terminal invariant (start + exactly one
+ * done/failed) holds across the extra calls, and the run budget scales with
+ * the chunk count. A small span (or no chunk budget) keeps the single-call
+ * behavior pinned by historian-terminal.spec.ts.
+ */
 import { describe, expect, it } from 'vitest'
 import {
   callHistorian,
@@ -63,8 +71,19 @@ function node(seq: number, text: string): SurfaceNode {
   } as unknown as SurfaceNode
 }
 
+/** Real event shapes (`deriveEventMessage`, packages/core/session/src/surface.ts):
+ * a `user/message` event carries the message ITSELF as its data. This stub used
+ * to return an empty snapshot, so the replay path was never exercised — and a
+ * bug that dropped every user turn from the replayed prefix stayed invisible. */
 const SESSION_STUB = {
-  snapshotEvents: () => [],
+  snapshotEvents: () => Array.from({ length: 16 }, (_unused, index) => {
+    const seq = index + 1
+    return {
+      seq,
+      type: 'user/message',
+      data: { id: `msg-${String(seq)}`, role: 'user', content: [{ type: 'text', text: `span text ${String(seq)}` }] },
+    }
+  }),
 } as unknown as Parameters<typeof callHistorian>[1]['session']
 
 function digest(marker: string): string {
@@ -85,6 +104,12 @@ function scriptedLlm(entries: Array<() => AsyncIterable<unknown>>): {
   const prompts: string[] = []
   const llm: HistorianLlm = {
     stream: (options) => {
+      // Enforce the host's contract: a string content silently degraded to ''
+      // here, which is how a wrong message shape could pass unnoticed.
+      const content = (options.messages as Array<{ content?: unknown }>).at(-1)?.content
+      if (!Array.isArray(content) || typeof (content as { some?: unknown }).some !== 'function') {
+        throw new TypeError('content.some is not a function')
+      }
       const text = (options.messages as Array<{ content: Array<{ text?: string }> }>)
         .at(-1)?.content?.at(-1)?.text ?? ''
       prompts.push(text.slice(0, 60))

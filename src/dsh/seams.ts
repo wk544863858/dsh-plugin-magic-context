@@ -370,6 +370,19 @@ export function enumerateSurfaceNodes(session: Session): SurfaceNode[] {
  * (packages/llm/llm/src/index.ts:985), and a reduced projection would both
  * break that and lose the cache-relevant bytes.
  */
+/** The provider message of a message-bearing surface event, in the exact shapes
+ * `deriveEventMessage` uses (packages/core/session/src/surface.ts:132-145):
+ * `user/message` carries the message ITSELF as `event.data`, while
+ * system/developer/assistant/tool wrap it in `data.message`. Reading only the
+ * wrapped shape silently dropped every user turn from the historian's replayed
+ * prefix.
+ */
+function messageOf(event: SessionEvent): unknown {
+  const data = (event as unknown as { data?: { message?: unknown } }).data
+  if (data === undefined) return undefined
+  return event.type === 'user/message' ? data : data.message
+}
+
 export function spanRequestMessages(
   session: Session,
   seqs: readonly SessionSeq[],
@@ -381,7 +394,7 @@ export function spanRequestMessages(
     const event = bySeq.get(seq)
     if (event === undefined) continue
     if (ROLE_BY_TYPE[event.type] === undefined) continue
-    const message = (event as unknown as { data?: { message?: unknown } }).data?.message
+    const message = messageOf(event)
     if (message === undefined) continue
     messages.push(message)
   }
