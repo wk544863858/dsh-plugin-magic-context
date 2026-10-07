@@ -1155,11 +1155,43 @@ window.__ModuleLoader__.load({
       const pressureExact = pressure === undefined ? undefined : pressure.toFixed(2)
       const pressureTone = pressureValue === undefined ? 'inherit' : pressureValue >= 85 ? '#e5484d' : pressureValue >= 60 ? '#d08700' : '#22a06b'
 
-      /** One dense self-labeled line: figures only, `·`-joined. */
+      /** Ledger cell → the full name a hover shows (official Tooltip). */
+      const LEDGER_LABELS = {
+        O: '占用（原生投影：下一次请求将看到多少）',
+        L: '压缩后账面（最近一次压缩后的 surface 量）',
+        M: '本项目记忆总数',
+        P: '24h 提升的记忆',
+        U: '待验证记忆',
+        T: '最近维护 tick',
+        K: 'TTL 到期归档',
+        V: '维护验证通过',
+        R: '维护修订',
+        E: '本进程错误',
+      }
+
+      /** One dense single-letter line; every cell is hoverable and shows its
+       * full name through the official Tooltip (when the primitives module
+       * exists). Cells stay on one line, wrapping only as a last resort. */
       const kv = (cells) => {
-        const text = cells.filter((cell) => cell !== '' && cell !== undefined && cell !== null).join(' · ')
-        if (text === '') return null
-        return el('div', { key: 'kv-' + text.slice(0, 8), style: { padding: '2.5px 0', fontVariantNumeric: 'tabular-nums', minWidth: 0 } }, text)
+        const parts = []
+        cells.forEach((cell) => {
+          if (cell === '' || cell === undefined || cell === null) return
+          const label = LEDGER_LABELS[cell.charAt(0)]
+          const span = el('span', { style: { minWidth: 0 } }, cell)
+          parts.push(label !== undefined && Tooltip !== undefined
+            ? el(Tooltip, { key: 't-' + cell, label, side: 'top', delayMs: 200 }, span)
+            : span)
+        })
+        if (parts.length === 0) return null
+        const withSeparators = []
+        parts.forEach((part, index) => {
+          if (index > 0) withSeparators.push(el('span', { key: 'sep-' + index, style: { opacity: 0.45 } }, '·'))
+          withSeparators.push(part)
+        })
+        return el('div', {
+          key: 'kv-' + cells.filter(Boolean).join('').slice(0, 10),
+          style: { display: 'flex', flexWrap: 'wrap', columnGap: 6, rowGap: 2, padding: '2.5px 0', fontVariantNumeric: 'tabular-nums', alignItems: 'baseline', minWidth: 0 },
+        }, withSeparators)
       }
 
       // The single-letter ledger (compact enough to stay on ONE line):
