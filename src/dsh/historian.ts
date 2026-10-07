@@ -464,8 +464,11 @@ export async function callHistorian(
   const merging = chunks.length > 1
   const plannedCalls = chunks.length + (merging ? 1 : 0)
   // D3: the run budget scales with the call count (per-call attempts share
-  // it), capped at MC's 600s historian wall clock.
-  const deadline = startedAt + Math.min(600_000, timeoutMs * plannedCalls)
+  // it), capped at MC's 600s historian wall clock. The extra slot reserves
+  // budget for the merge call — measured live (the 17:50 timeout): four
+  // chunks with retries spent ~5.9min of the 4×180s budget, leaving the
+  // merge 129s, which it overran.
+  const deadline = startedAt + Math.min(600_000, timeoutMs * plannedCalls + (merging ? timeoutMs : 0))
   const spanSeqsOf = (call: number): number[] =>
     (chunks[Math.min(call, chunks.length - 1)] as readonly SurfaceNode[]).map(node => node.seq)
   const replayOf = (call: number): unknown[] => {
@@ -503,12 +506,25 @@ export async function callHistorian(
   let terminal = false
   let attempts = 0
   let failure: Error | undefined
+  // The stage a failure should be attributed to: updated as the run advances
+  // ('start' → 'chunk 2/4' → 'merge'), so the failed row says WHERE it died.
+  let stage = 'start'
   try {
     const partials: CompartmentDraft[] = []
     let finalDraft: CompartmentDraft | undefined
     let lastCap = effectiveMaxTokens
     for (let call = 0; call < plannedCalls; call += 1) {
       const isMerge = merging && call === plannedCalls - 1
+      stage = isMerge ? 'merge' : `chunk ${String(call + 1)}/${String(chunks.length)}`
+      if (isMerge) {
+        // The merge was invisible until it timed out (the 17:50 failure) —
+        // give it the same per-call beat the chunks have.
+        deps.journal?.info('historian', `historian merging ${String(partials.length)} partial digest(s)`, {
+          phase: 'merge',
+          partials: partials.length,
+          ...baseData,
+        }, input.sessionId)
+      }
       const baseMessagesForCall = isMerge
         ? [
           {
@@ -628,6 +644,9 @@ export async function callHistorian(
       deps.journal?.error('historian', `historian run failed (${classifyFailure(error)}): ${reason}`, {
         phase: 'failed',
         ...baseData,
+        // WHERE it died: the merge after a long chunk run is the observed
+        // failure point (the 17:50 timeout), so name the stage explicitly.
+        stage,
         kind: classifyFailure(error),
         reason,
         errorName: error instanceof Error ? error.name : typeof error,

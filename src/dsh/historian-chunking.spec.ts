@@ -1,9 +1,7 @@
 // @ts-nocheck
-/**
- * MIRROR of packages/test-support/mc-dsh-poc/tests/historian-chunking.spec.ts
- * (DSH-checkout harness suite). Keep this file byte-identical to the POC copy
- * below the header — regenerate after editing the POC side.
- */
+// MIRROR of packages/test-support/mc-dsh-poc/tests/historian-chunking.spec.ts (DSH checkout).
+// Keep byte-identical to the POC copy below the header; regenerate after POC edits.
+
 /**
  * D1/D3 — historian chunking: an oversized span digests in contiguous
  * ~budget-token chunks and a final merge call folds the partial digests into
@@ -158,10 +156,13 @@ describe('the chunked run (D1/D3)', () => {
     })
     // The final draft is the MERGE output, not the last chunk's.
     expect(draft.tiers.p1).toBe('P1 merged')
-    // start → chunk → chunk → done; exactly one terminal.
-    expect(phases(calls)).toEqual(['start', 'chunk', 'chunk', 'done'])
+    // start → chunk → chunk → merge → done; exactly one terminal. The merge
+    // has its own beat (it was invisible until it timed out, live 17:50).
+    expect(phases(calls)).toEqual(['start', 'chunk', 'chunk', 'merge', 'done'])
     const start = historianFirst(calls, 'start')
     expect(start?.data?.chunks).toBe(2)
+    const merge = historianFirst(calls, 'merge')
+    expect(merge?.data?.partials).toBe(2)
     const done = historianFirst(calls, 'done')!
     expect(done.data?.attempts).toBe(3)
     // the merge call carried the partial digests as JSON
