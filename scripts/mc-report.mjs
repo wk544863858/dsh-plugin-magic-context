@@ -51,6 +51,7 @@ const MAJOR_KINDS = [
   'memory-recall',
   'memory-write',
   'memory-promote',
+  'project-drift',
   'tool-call',
   'engine',
   'error',
@@ -708,6 +709,7 @@ function computeMetrics(rows) {
       tokensDeltaTotal: 0,
     },
     dropLanded: { events: 0, tags: 0, estTokens: 0 },
+    drift: { events: 0, roots: new Set(), sessionRoots: new Set() },
     compartments: { published: 0, coveredTokens: 0, nodes: 0 },
     baseline: { total: 0, hard: 0, soft: 0, unchanged: 0, other: 0, deltaSum: 0, bytesSum: 0 },
     historian: {
@@ -799,6 +801,13 @@ function computeMetrics(rows) {
         if (Array.isArray(d.tags)) m.dropLanded.tags += d.tags.length
         else m.dropLanded.tags += toNum(d.count) ?? 0
         m.dropLanded.estTokens += toNum(d.estTokens) ?? toNum(d.estTokensReclaimed) ?? 0
+        break
+      }
+      case 'project-drift': {
+        m.drift.events += 1
+        const roots = Array.isArray(d.foreignRoots) ? d.foreignRoots : []
+        for (const root of roots) if (typeof root === 'string') m.drift.roots.add(root)
+        if (typeof d.sessionRoot === 'string') m.drift.sessionRoots.add(d.sessionRoot)
         break
       }
       case 'compartment-published': {
@@ -1184,6 +1193,14 @@ function renderText(payload) {
       `  drop-landed   : ${fmtInt(metrics.dropLanded.events)} 次，累计标签 ${fmtInt(metrics.dropLanded.tags)} 个，`
       + `估算 token ${fmtInt(metrics.dropLanded.estTokens)}`,
     )
+    if (metrics.drift.events > 0) {
+      const roots = [...metrics.drift.roots]
+      lines.push(
+        `  project-drift : ${fmtInt(metrics.drift.events)} 次，外来根 ${fmtInt(roots.length)} 个`
+        + `（会话根 ${fmtInt(metrics.drift.sessionRoots.size)} 个）`
+        + `；样本 ${roots.slice(0, 3).join('、')}${roots.length > 3 ? ' …' : ''}`,
+      )
+    }
     lines.push(
       `  compartment   : 发布 ${fmtInt(metrics.compartments.published)} 个，消化 tokens ${fmtInt(metrics.compartments.coveredTokens)}，`
       + `覆盖节点 ${fmtInt(metrics.compartments.nodes)}`,

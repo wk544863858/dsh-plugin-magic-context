@@ -57,6 +57,7 @@ import { registerCtxStatusCommand } from './dsh/status-command.ts'
 import { registerMagicCompactionEngine } from './dsh/compaction-engine.ts'
 import { createTelemetryService } from './dsh/telemetry.ts'
 import { appendSessionNotice } from './dsh/session-notice.ts'
+import { detectProjectDrift } from './dsh/project-drift.ts'
 import { DEFAULT_POLICY, decidePass, pressurePercent, type PressurePolicy } from './core/policy.ts'
 import z from '@deepseek-ai/schemastery'
 import { ensureTag, tagPrefix } from './core/tagger.ts'
@@ -470,6 +471,31 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
       } catch {
         // counting is advisory; never fail the turn for it
       }
+    }
+
+    // Cross-project drift observation: the turn's own text is the only signal
+    // DSH gives about WHERE work is happening (there is no per-turn working
+    // directory). Foreign git roots in the newest message get one warn-level
+    // journal row per turn — the data that quantifies how often cross-project
+    // sessions actually happen (and whether facts land in the wrong project).
+    try {
+      const newestMessage = messages.at(-1)
+      const driftText = newestMessage === undefined
+        ? ''
+        : newestMessage.content
+          .map(block => (block.type === 'text' && typeof block.text === 'string' ? block.text : ''))
+          .join('\n')
+      if (driftText.length >= 8) {
+        const drift = detectProjectDrift(driftText, payload.agent.session.header.cwd)
+        if (drift !== undefined) {
+          journal?.warn('project-drift', `cross-project work observed (${String(drift.foreignRoots.length)} foreign root(s))`, {
+            sessionRoot: drift.sessionRoot,
+            foreignRoots: drift.foreignRoots,
+          }, sessionId)
+        }
+      }
+    } catch {
+      // observation only; never fail the turn for it
     }
 
     // ── Pressure decision + the execute-band management pass (Phase 1 + 2) ──
@@ -887,6 +913,18 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
             const spec = config.memory?.project ?? exec?.agent?.session.header.cwd
             if (spec === undefined) return undefined
             return spec.startsWith('git:') || spec.startsWith('dir:') ? spec : resolveProjectIdentity(spec)
+          },
+          // The `project` argument's resolver: an explicit absolute path (another
+          // project the model is working on) through the same normalizer. DSH has
+          // no per-turn working directory, so the model naming the project is the
+          // only cross-project scoping signal we have.
+          resolveIdentityOf: spec => {
+            if (spec.startsWith('git:') || spec.startsWith('dir:')) return spec
+            try {
+              return resolveProjectIdentity(spec)
+            } catch {
+              return undefined
+            }
           },
           recall: (request, exec) => {
             // The read path must resolve the SAME identity the writes use. The

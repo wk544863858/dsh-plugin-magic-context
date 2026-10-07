@@ -365,6 +365,13 @@ export interface MemoryToolDeps {
   readonly resolveIdentity?: (
     exec: { agent?: { session: { header: { cwd?: string } } } } | undefined,
   ) => string | undefined
+  /**
+   * Resolves an EXPLICIT project spec (absolute path or `git:`/`dir:` identity)
+   * to an identity — the `project` argument's resolver. DSH has no OpenCode-style
+   * per-turn working directory, so cross-project facts can only be scoped by the
+   * model naming the project; the same normalizer keeps every writer agreeing.
+   */
+  readonly resolveIdentityOf?: (spec: string) => string | undefined
 }
 
 /** What `ctx_memory` asks the host to recall (contract §11.6). */
@@ -412,7 +419,10 @@ export function defineCtxMemoryTool(deps: MemoryToolDeps): unknown {
         + 'optionally bounded by from/to dates), '
         + 'get (by id), write (new memory), update (rewrite one), '
         + 'archive (retire one, optionally superseded by another), merge (fold duplicates into one). '
-        + 'Writes are scoped to this project and deduplicated by normalized content.',
+        + 'Writes are scoped to this project and deduplicated by normalized content. '
+        + 'Every action accepts an optional project (an absolute path or git root): use it when the '
+        + 'memory belongs to ANOTHER project than the one this session was opened in — reading a '
+        + "project's memories or writing facts about it while you work on it from a different session.",
     parameters: {
       action: { type: 'string', enum: ['list', 'search', 'get', 'write', 'update', 'archive', 'merge'] },
       query: { type: 'string' },
@@ -427,6 +437,7 @@ export function defineCtxMemoryTool(deps: MemoryToolDeps): unknown {
       reason: { type: 'string' },
       superseded_by: { type: 'integer' },
       target_id: { type: 'integer' },
+      project: { type: 'string' },
     },
     output: {
       schema: { type: 'json' },
@@ -465,7 +476,13 @@ export function defineCtxMemoryTool(deps: MemoryToolDeps): unknown {
       const startedAt = Date.now()
       const sessionId = sessionIdOf(exec)
       const action = typeof args.action === 'string' ? args.action : 'list'
-      const identity = identityFor(exec)
+      // Effective scope: the session's project unless the model names another
+      // one via `project`. An unresolvable spec is a structured refusal — the
+      // model then knows the write/read did NOT happen under some guessed scope.
+      const explicitProject = typeof args.project === 'string' && args.project.trim() !== ''
+        ? args.project.trim()
+        : undefined
+      let identity = identityFor(exec)
       const finish = (payload: Record<string, unknown>): Record<string, unknown> => {
         const summary = payload.outcome
           ?? (payload.memory !== undefined
@@ -477,12 +494,34 @@ export function defineCtxMemoryTool(deps: MemoryToolDeps): unknown {
           tool: 'ctx_memory',
           action,
           identity,
+          ...explicitProject === undefined ? {} : { explicitProject },
           query: args.query,
           id: args.id,
           ms: Date.now() - startedAt,
-          ok: payload.reason === undefined,
+          ok: typeof payload.ok === 'boolean' ? payload.ok : payload.reason === undefined,
         }, sessionId)
         return payload
+      }
+      if (explicitProject !== undefined) {
+        let resolved: string | undefined
+        if (explicitProject.startsWith('git:') || explicitProject.startsWith('dir:')) {
+          resolved = explicitProject
+        } else {
+          try {
+            resolved = deps.resolveIdentityOf?.(explicitProject)
+          } catch {
+            resolved = undefined
+          }
+        }
+        if (resolved === undefined || resolved === '') {
+          return finish({
+            outcome: `project "${explicitProject}" could not be resolved to a project identity `
+              + '(directory missing, or not inside a git repository and not an identity string). '
+              + 'Nothing was read or written.',
+            ok: false,
+          })
+        }
+        identity = resolved
       }
 
       if (action === 'list' || (action === 'get' && args.id === undefined)) {

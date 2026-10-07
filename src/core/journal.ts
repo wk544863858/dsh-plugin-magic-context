@@ -38,6 +38,7 @@ export type JournalKind =
   | 'memory-promote'
   | 'maintenance'
   | 'session-notice'
+  | 'project-drift'
   | 'tool-call'
   | 'engine'
   | 'error'
