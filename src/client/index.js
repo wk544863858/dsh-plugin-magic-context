@@ -1147,13 +1147,19 @@ window.__ModuleLoader__.load({
         return el('div', { key: 'kv-' + text.slice(0, 8), style: { padding: '2.5px 0', fontVariantNumeric: 'tabular-nums', minWidth: 0 } }, text)
       }
 
+      // The project ledger must read from ONE source: the stats' total row
+      // count. The recall pool is capped at memoryLimit, so 40 条 next to
+      // 待验证 137 read as a contradiction when both were correct.
+      const projectTotal = health.memoryStats !== undefined && health.memoryStats.total !== undefined
+        ? health.memoryStats.total
+        : health.projectMemories
       const summaryRows = [
         kv([
           health.lastTokens !== undefined && health.lastContextWindow
             ? compactTok(health.lastTokens) + ' / ' + compactTok(health.lastContextWindow) + ' tok'
             : '',
           pressureValue !== undefined ? pressureValue + '%' : '',
-          health.projectMemories !== undefined ? '记忆 ' + health.projectMemories + ' 条' : '',
+          projectTotal !== undefined ? '记忆 ' + projectTotal + ' 条' : '',
           health.promote24h > 0 ? '24h 提升 ' + health.promote24h : '',
           health.memoryStats !== undefined && health.memoryStats.unverified !== undefined
             ? '待验证 ' + health.memoryStats.unverified
