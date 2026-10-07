@@ -850,6 +850,7 @@ window.__ModuleLoader__.load({
       const [state, setState] = useState({ status: 'connecting', summary: null, recent: [] })
       const [open, setOpen] = useState(false)
       const [anchor, setAnchor] = useState(null)
+      const [hovered, setHovered] = useState(false)
       const pillRef = useRef(null)
 
       useEffect(() => {
@@ -969,17 +970,6 @@ window.__ModuleLoader__.load({
         document.addEventListener('pointerdown', onPointerDown, true)
         document.addEventListener('keydown', onKeyDown, true)
         window.addEventListener('blur', onWindowBlur)
-        // The pill's hover skin is the official pill's own token pair
-        // (ContextMeter.module.css .trigger:hover); inline styles cannot
-        // express :hover, so one shared stylesheet does it once.
-        if (document.getElementById('mc-pill-skin') === null) {
-          const skin = document.createElement('style')
-          skin.id = 'mc-pill-skin'
-          skin.textContent = 'button[data-mc-surface="1"]{transition:background-color .12s ease}'
-            + 'button[data-mc-surface="1"]:hover,button[data-mc-surface="1"][aria-expanded="true"]'
-            + '{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.16));color:var(--dsw-alias-label-secondary,inherit)}'
-          document.head.appendChild(skin)
-        }
         return () => {
           document.removeEventListener('pointerdown', onPointerDown, true)
           document.removeEventListener('keydown', onKeyDown, true)
@@ -1048,6 +1038,11 @@ window.__ModuleLoader__.load({
           if (!open) setAnchor(anchorAbove(pillRef === null || pillRef === undefined ? null : pillRef.current))
           setOpen((value) => !value)
         },
+        // The official pill's hover/open skin, driven by state: an injected
+        // :hover rule kept losing to (or sticking past) the inline styles, so
+        // the background is computed here instead — same token, no specificity.
+        onMouseEnter: () => setHovered(true),
+        onMouseLeave: () => setHovered(false),
         style: {
           pointerEvents: 'auto',
           display: 'inline-flex',
@@ -1061,7 +1056,14 @@ window.__ModuleLoader__.load({
           padding: inDock ? '1px 8px' : '4px 9px',
           borderRadius: inDock ? 'var(--dsw-radius-sm, 6px)' : 999,
           border: inDock ? 'none' : '1px solid var(--dsw-alias-border-secondary, rgba(127,127,127,.35))',
-          background: 'transparent',
+          // Hover/open skin (the official pill's token), computed from state.
+          // The dock's own stylesheet paints buttons a static grey, so the
+          // resting state must be an EXPLICIT transparent — leaving it unset
+          // lets that grey through, and a :hover rule cannot win against the
+          // inline style anyway.
+          background: inDock
+            ? (hovered || open ? 'var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.16))' : 'transparent')
+            : 'transparent',
           color: errors > 0 && state.status === 'ok'
             ? 'var(--dsw-alias-label-error, #e5484d)'
             : inDock
@@ -1069,6 +1071,7 @@ window.__ModuleLoader__.load({
               : 'var(--dsw-alias-label-secondary, currentColor)',
           cursor: 'pointer',
           whiteSpace: 'nowrap',
+          transition: 'background-color .12s ease',
         },
       }, [
         el('span', {
