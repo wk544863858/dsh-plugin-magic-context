@@ -36,6 +36,7 @@ export type JournalKind =
   | 'memory-recall'
   | 'memory-write'
   | 'memory-promote'
+  | 'maintenance'
   | 'session-notice'
   | 'tool-call'
   | 'engine'
@@ -84,6 +85,84 @@ export interface JournalOptions {
   readonly mirrorMaxBytes?: number
   readonly logger?: JournalLogger
   readonly now?: () => number
+}
+
+/**
+ * Close the historian runs a previous mount left open. An hmr remount (or an
+ * app restart) disposes the stores while a run is in flight, so its `start`
+ * row never gets a terminal sibling — indistinguishable from a wedged run and
+ * a standing acceptance failure. At mount time no run of the NEW composition
+ * can be in flight yet, so every still-open start predates this process and
+ * gets exactly one synthetic terminal (`kind: 'adapter-remount'`). The audit
+ * invariant — start + exactly one terminal — is restored, not rewritten:
+ * the original start row stays untouched.
+ *
+ * @returns the number of recovered runs.
+ */
+export function recoverOrphanHistorianRuns(stores: JournalStore, journal: Journal): number {
+  const recovered: Array<{ entry: JournalEntry; sessionId?: string }> = []
+  try {
+    const rows = stores.listJournal({ kinds: ['historian'], limit: 10_000 })
+    // Pass 1: starts already banked by a previous mount carry
+    // `recoveredStartAt` on their synthetic terminal. The markers sit at the
+    // journal tail — after the historic rows they repair — so they must be
+    // collected BEFORE pairing, or the supersede branch would re-report the
+    // same historic double-start on every remount.
+    const alreadyRecovered = new Set<string>()
+    for (const row of rows) {
+      const data = row.data as { phase?: unknown; recoveredStartAt?: unknown } | undefined
+      if (data?.phase === 'failed' && typeof data.recoveredStartAt === 'number') {
+        alreadyRecovered.add(`${row.sessionId ?? '-'}:${String(data.recoveredStartAt)}`)
+      }
+    }
+    // Pass 2: the pairing scan (chronological).
+    const open = new Map<string, JournalEntry>()
+    for (const row of [...rows].reverse()) {
+      const phase = (row.data as { phase?: unknown } | undefined)?.phase
+      const key = row.sessionId ?? '-'
+      if (phase === 'start') {
+        // A second start in one session means the first was superseded while
+        // still open — the pairing maps would silently overwrite it (the same
+        // shape the acceptance audit counts as a silent evaporate), so the
+        // superseded start is recovered right here.
+        const previous = open.get(key)
+        if (previous !== undefined && !alreadyRecovered.has(`${key}:${String(previous.at)}`)) {
+          recovered.push({ entry: previous, sessionId: row.sessionId })
+        }
+        open.set(key, row)
+      } else if (phase === 'done' || phase === 'failed') {
+        open.delete(key)
+      }
+    }
+    for (const [key, start] of open) {
+      if (!alreadyRecovered.has(`${key}:${String(start.at)}`)) {
+        recovered.push({ entry: start, sessionId: key === '-' ? undefined : key })
+      }
+    }
+  } catch {
+    return 0
+  }
+  let count = 0
+  for (const { entry: start, sessionId } of recovered) {
+    try {
+      journal.error(
+        'historian',
+        'historian run failed (adapter-remount): a previous mount was disposed before this run finished',
+        {
+          phase: 'failed',
+          kind: 'adapter-remount',
+          reason: 'the adapter remounted (hmr or restart) while the run was in flight',
+          recovered: true,
+          recoveredStartAt: start.at,
+        },
+        sessionId,
+      )
+      count += 1
+    } catch {
+      /* a failing recovery must never block the mount */
+    }
+  }
+  return count
 }
 
 export interface Journal {

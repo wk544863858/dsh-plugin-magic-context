@@ -975,7 +975,7 @@ window.__ModuleLoader__.load({
         : state.status !== 'ok'
           ? 'Magic Context · connecting to ' + eventsUrl
           : 'Magic Context · ' + scopeLabel
-            + (pressureText === '' ? '' : ' · pressure ' + pressureText)
+            + (pressureText === '' ? '' : ' · 压力 ' + pressureText + '（上次请求账面，阈值判定用它；原生状态条为即时估算）')
             + (health.projectIdentity === undefined ? '' : ' · ' + health.projectIdentity)
             + ' · pass ' + passes + ' · err ' + errors + ' (24h ' + (health.errors24h ?? '?') + ')'
             + (health.journalRows === undefined ? '' : ' · journal ' + health.journalRows)
@@ -1072,7 +1072,7 @@ window.__ModuleLoader__.load({
       // else (process identity, internal versions, row counts) lives in the
       // pill's hover title only.
       line([
-        ['压力', health.lastPressure === undefined ? undefined : Math.round(health.lastPressure) + '%（上次请求账面；阈值判定用它）'],
+        ['压力', health.lastPressure === undefined ? undefined : Math.round(health.lastPressure) + '%'],
         ['记忆', health.projectMemories],
         ['24h 提升', health.promote24h],
       ])

@@ -160,7 +160,15 @@ if (dsh) {
   const histBoots = dsh.prepare(`SELECT id, at FROM journal WHERE kind='boot' AND at > ? ORDER BY id ASC`).all(SINCE).map((r) => ({ id: r.id, at: r.at }));
   for (const h of hist) {
     const key = h.sid ?? '-';
-    if (h.phase === 'start') { if (openStarts.has(key)) orphans.push(openStarts.get(key)); openStarts.set(key, h); }
+    if (h.phase === 'start') {
+      // 被同会话的新 start 挤掉 = 关闭（supersede-close）。适配器用 inFlight
+      // 集合保证同一会话不会有并发第二个 run，因此"无终局就被新 start 挤掉"
+      // 只能是进程边界（hmr 重挂/重启）产物；挂载时的 journal 恢复
+      // （recoverOrphanHistorianRuns）也会为这类行补 adapter-remount 终局，
+      // 但 terminal 追加在日志尾部、无法改变扫描序中的挤掉事件本身。
+      openStarts.delete(key);
+      openStarts.set(key, h);
+    }
     else if (h.phase === 'done' || h.phase === 'failed') openStarts.delete(key);
   }
   const nowOpen = [...openStarts.values()].filter((h) => Date.now() - Number(h.at) > 180_000);

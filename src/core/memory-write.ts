@@ -302,6 +302,19 @@ export interface MemoryWriter {
    * never throws: a fenced, module-managed or failing database is reported.
    */
   recordRetrieval(input: MemoryRetrievalInput): MemoryRetrievalOutcome
+  /**
+   * Maintenance: ids of this project's active rows whose TTL has lapsed
+   * (`expires_at <= now`). The caller archives them through `archiveMemory`
+   * (the contract action — expiry is a plain archive with a reason), which
+   * keeps the mutation log and authority guard in the loop.
+   */
+  listExpired(identity: string, now: number, limit?: number): readonly number[]
+  /**
+   * Maintenance: bank per-memory `verified_at` for rows the verifier judged
+   * still-true (MC dreamer verify: per-memory verified_at, no global
+   * watermark; metadata only — no mutation log, no content change).
+   */
+  markVerified(identity: string, ids: readonly number[], verifiedAt: number): number
   close(): void
 }
 
@@ -534,6 +547,8 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
       mergeMemory: () => refused,
       getMemory: () => undefined,
       listMemories: () => [],
+      listExpired: () => [],
+      markVerified: () => 0,
       recordRetrieval: () => noTelemetry,
       close: () => undefined,
     }
@@ -1233,6 +1248,43 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
           const detail = error instanceof Error ? error.message : String(error)
           options.logger.warn(`magic-context memory: retrieval telemetry failed: ${detail}`)
           return { ok: false, recorded, skipped: skipped(), reason: 'database-error' }
+        }
+      },
+      listExpired: (identity, nowAt, limit = 200) => {
+        try {
+          if (contractFenced) return []
+          const rows = db.prepare(
+            `SELECT id FROM memories`
+            + ` WHERE project_path = ? AND status IN ('active','permanent')`
+            + ` AND expires_at IS NOT NULL AND expires_at <= ?`
+            + ` ORDER BY id ASC LIMIT ?`,
+          ).all(identity, nowAt, Math.max(1, Math.min(500, limit))) as Array<{ id: number }>
+          return rows.map(row => row.id)
+        } catch (error) {
+          options.logger.warn(`magic-context memory: listExpired failed: ${error instanceof Error ? error.message : String(error)}`)
+          return []
+        }
+      },
+      markVerified: (identity, ids, verifiedAt) => {
+        if (ids.length === 0) return 0
+        try {
+          if (contractFenced) return 0
+          if (isAuthorityManaged(identity)) return 0
+          const stamp = runImmediate<{ ok: true; changed: number }>(() => {
+            const statement = db.prepare(
+              `UPDATE memories SET verified_at = ? WHERE project_path = ? AND id = ?`
+                + ` AND status IN ('active','permanent')`,
+            )
+            let changed = 0
+            for (const id of ids) {
+              changed += statement.run(verifiedAt, identity, id).changes
+            }
+            return { ok: true, changed }
+          })
+          return stamp.ok ? stamp.changed : 0
+        } catch (error) {
+          options.logger.warn(`magic-context memory: markVerified failed: ${error instanceof Error ? error.message : String(error)}`)
+          return 0
         }
       },
       close: () => db.close(),

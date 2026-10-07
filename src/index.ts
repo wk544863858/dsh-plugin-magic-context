@@ -62,10 +62,11 @@ import z from '@deepseek-ai/schemastery'
 import { ensureTag, tagPrefix } from './core/tagger.ts'
 import { DEFAULT_SHARE_CATEGORIES, defaultMemoryDbPath, MEMORY_SCHEMA_MAX_VERSION, openMemoryBridge, resolveProjectIdentity } from './core/memory-bridge.ts'
 import { openMemoryWriter, type MemoryWriter } from './core/memory-write.ts'
+import { runMaintenanceTick, type MaintenanceLlm } from './core/maintenance.ts'
 import { openMemorySearch, type MemorySearch } from './core/memory-search.ts'
 import { cosineSimilarity, defaultEmbeddingCacheDir, openLocalEmbedder } from './core/embedding-local.ts'
 import type { MemoryFact } from './core/memory-categories.ts'
-import { openJournal, type Journal, type JournalLevel } from './core/journal.ts'
+import { openJournal, recoverOrphanHistorianRuns, type Journal, type JournalLevel } from './core/journal.ts'
 import { defaultDataDir, openStores, SCHEMA_VERSION, type AdapterStores } from './core/stores.ts'
 import type { UsageRecord } from './core/types.ts'
 
@@ -247,6 +248,11 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     : undefined
   /** Sessions already announced, so the journal gets exactly one first-seen row. */
   const seenSessions = new Set<string>()
+  // Journal repair: an hmr remount disposes stores mid-run and leaves a
+  // historian `start` without a terminal sibling. At mount time no run of the
+  // new composition is in flight yet, so every still-open start predates this
+  // process and gets one synthetic `adapter-remount` terminal (journal.ts).
+  const recoveredHistorianRuns = journal === undefined ? 0 : recoverOrphanHistorianRuns(stores, journal)
   /** Consecutive defers per session, keyed by reason, to log transitions only. */
   const deferStreak = new Map<string, { reason: string; count: number }>()
   /** Resolved tool-constructor path, recorded at boot for the review. */
@@ -508,6 +514,9 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
           : projectSpec.startsWith('git:') || projectSpec.startsWith('dir:')
             ? projectSpec
             : resolveProjectIdentity(projectSpec)
+        // The maintenance sweep maintains every identity this process has
+        // actually served (the configured project is added unconditionally).
+        if (memoryIdentity !== undefined) seenIdentities.add(memoryIdentity)
         const memories = memoryRecall?.recall({
           ...projectSpec === undefined ? {} : { project: projectSpec },
           workspaceProjects: config.memory?.workspaceProjects,
@@ -1032,15 +1041,67 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     })
   })
 
+  // ---- Maintenance tick (the adapter's slice of MC's dreamer) ----------------
+  // TTL expiry always runs when the writer is writable; LLM verification needs
+  // an explicit `maintenance.verifyRoute` because a tick has no session to
+  // inherit a route from. The sweep covers the configured project plus every
+  // identity this process resolved for a session. Fail-open end to end: a
+  // broken tick journals and waits for the next one.
+  const seenIdentities = new Set<string>()
+  let maintenanceBusy = false
+  const runMaintenance = async (): Promise<void> => {
+    if (maintenanceBusy || adapterDisposed || stores.closed || journal === undefined) return
+    if (liveBoolean(config.maintenance?.enabled, true) === false) return
+    maintenanceBusy = true
+    try {
+      const identities = new Set<string>()
+      if (config.memory?.project !== undefined) identities.add(config.memory.project)
+      for (const identity of seenIdentities) identities.add(identity)
+      for (const identity of identities) {
+        const verifyProvider = liveString(config.maintenance?.verifyProvider, '')
+        const verifyModel = liveString(config.maintenance?.verifyModel, '')
+        const routeReady = verifyProvider.length > 0 && verifyModel.length > 0
+        const outcome = await runMaintenanceTick({
+          writer: memoryWriter,
+          identity,
+          sessionId: 'mc-maintenance',
+          journal,
+          ...(llm === undefined || !routeReady ? {} : { llm: llm as unknown as MaintenanceLlm, route: { provider: verifyProvider, model: verifyModel } }),
+        })
+        // A writer-level problem applies to every identity — stop the sweep.
+        if (outcome.reason === 'writer-unavailable' || outcome.reason === 'read-only') break
+      }
+    } catch (error) {
+      journal.error('maintenance', `maintenance tick failed: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      maintenanceBusy = false
+    }
+  }
+  const maintenanceTimer = setInterval(() => { void runMaintenance() }, Math.max(60_000, liveNumber(config.maintenance?.intervalMs, 1_800_000)))
+  const maintenanceFirst = setTimeout(() => { void runMaintenance() }, 60_000)
+  ;(maintenanceTimer as unknown as { unref?: () => void }).unref?.()
+  ;(maintenanceFirst as unknown as { unref?: () => void }).unref?.()
+  disposers.push(() => {
+    clearInterval(maintenanceTimer)
+    clearTimeout(maintenanceFirst)
+  })
+
   journal?.info('boot', `adapter booted (tools: ${toolMode}, historian: ${liveBoolean(config.historianEnabled, true) === false ? 'off' : llm === undefined ? 'no-llm' : 'on'})`, {
     version: 'phase2',
     dbPath: stores.dbPath,
     schemaVersion: SCHEMA_VERSION,
+    recoveredHistorianRuns,
     tools: { mode: toolMode, registered: config.registerTools !== false },
     engine: stores.getMeta('compaction_engine'),
     memory: stores.getMeta('memory_bridge'),
     memoryWrite: stores.getMeta('memory_write'),
     telemetry: telemetry === undefined ? 'pending (registers with webServer)' : '/mc-telemetry',
+    // Resolved once for display; the tick itself resolves at decision time.
+    maintenance: {
+      enabled: liveBoolean(config.maintenance?.enabled, true) !== false,
+      intervalMs: Math.max(60_000, liveNumber(config.maintenance?.intervalMs, 1_800_000)),
+      verify: llm === undefined ? 'off (no llm)' : `${liveString(config.maintenance?.verifyProvider, '') || '∅'}/${liveString(config.maintenance?.verifyModel, '') || '∅'}`,
+    },
     historian: {
       enabled: liveBoolean(config.historianEnabled, true) !== false && llm !== undefined,
       route: config.historian === undefined ? 'session-route' : `${config.historian.provider}/${config.historian.model}`,
@@ -1083,7 +1144,7 @@ export { openStores, defaultDataDir, SCHEMA_VERSION, StoreAheadOfAdapterError } 
 export type { AdapterStores } from './core/stores.ts'
 export { DEFAULT_POLICY } from './core/policy.ts'
 export { openMemoryBridge, defaultMemoryDbPath, MEMORY_SCHEMA_MAX_VERSION } from './core/memory-bridge.ts'
-export { openJournal, redactData, formatJournalLine } from './core/journal.ts'
+export { openJournal, redactData, formatJournalLine, recoverOrphanHistorianRuns } from './core/journal.ts'
 export type { Journal, JournalEntry, JournalKind, JournalLevel } from './core/journal.ts'
 export { runManagementPass } from './dsh/management-pass.ts'
 export { runHistorian, selectHistorianRange, historianTriggerBudget } from './dsh/historian.ts'
@@ -1114,6 +1175,19 @@ export const Config = z.object({
   registerCompactionEngine: z.boolean().default(false).volatile(),
   /** One notice entry in the session stream per action-bearing pass (see session-notice.ts). */
   sessionNotices: z.boolean().default(true).volatile(),
+
+  /**
+   * Maintenance tick (the adapter's slice of MC's dreamer): TTL expiry always
+   * runs when the memory writer is writable; LLM verification additionally
+   * needs an explicit route because a tick has no session to inherit one from.
+   */
+  maintenance: z.object({
+    enabled: z.boolean().default(true).volatile(),
+    intervalMs: z.number().min(60_000).default(1_800_000).volatile(),
+    /** Empty provider/model = verify off (schemastery objects cannot be optional). */
+    verifyProvider: z.string().default('').volatile(),
+    verifyModel: z.string().default('').volatile(),
+  }),
 
   journal: z.object({
     enabled: z.boolean().default(true).volatile(),
@@ -1147,22 +1221,27 @@ export const Config = z.object({
 
 /** Same as {@link liveNumber} for strings (volatile enums such as log level). */
 function liveString(value: unknown, fallback: string): string {
-  if (typeof value === 'string' && value.length > 0) return value
+  const resolved = liveValue(value)
+  return typeof resolved === 'string' && resolved.length > 0 ? resolved : fallback
+}
+
+/**
+ * Unwrap a schemastery volatile reference chain. Nested config objects wrap
+ * each level, so `config.a?.b?.c` can hand back a reference whose `.get()`
+ * is itself a reference — one dereference is not always enough (measured:
+ * `maintenance.verifyProvider` printed `[object Object]` with single unwrap).
+ */
+function liveValue(value: unknown): unknown {
   if (value !== null && typeof value === 'object' && typeof (value as { get?: unknown }).get === 'function') {
-    const current = (value as { get(): unknown }).get()
-    if (typeof current === 'string' && current.length > 0) return current
+    return liveValue((value as { get(): unknown }).get())
   }
-  return fallback
+  return value
 }
 
 /** Read a value that may be a plain number or a volatile reference. */
 function liveNumber(value: unknown, fallback: number): number {
-  if (typeof value === 'number' && Number.isFinite(value)) return value
-  if (value !== null && typeof value === 'object' && typeof (value as { get?: unknown }).get === 'function') {
-    const current = (value as { get(): unknown }).get()
-    if (typeof current === 'number' && Number.isFinite(current)) return current
-  }
-  return fallback
+  const resolved = liveValue(value)
+  return typeof resolved === 'number' && Number.isFinite(resolved) ? resolved : fallback
 }
 
 /** Same as {@link liveNumber} for booleans (volatile toggles). */

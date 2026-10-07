@@ -81,7 +81,7 @@ dsh plugin --profile desktop add <path>
 
 | kind | 内容 |
 |---|---|
-| `boot` | 版本、工具构造器路径、引擎/记忆桥状态、策略快照、日志配置 |
+| `boot` | 版本、工具构造器路径、引擎/记忆桥状态、策略快照、日志配置、**recoveredHistorianRuns**（挂载时补终局的孤儿 run 数）与 maintenance 概要（interval/verify 路由） |
 | `session-first-seen` | 会话首次被管理（含 turn/step） |
 | `pass` | execute 全量记录（原因/压力/用量/落地标签/发布/强制丢弃/基线是否刷新/historian 是否触发/**tokensBefore→tokensAfter→tokensDelta**，即净回收证明）；defer **只记原因变化**并带 `consecutive` 次数（防止刷屏） |
 | `drop-landed` / `compartment-published` | 落地了哪些标签、替换了多少节点、估算回收 token |
@@ -90,6 +90,7 @@ dsh plugin --profile desktop add <path>
 | `memory-recall` | 注入 m[0] 的行数/身份/工作区/成员/预算与 token，m[1] 新增行数、当前 `maxMemoryId` |
 | `memory-promote` | 提升了几条 fact（含 id/类别）、多少条已存在（seen++）、被丢弃的 fact 及原因、是否因 module 托管让路 |
 | `memory-write` | agent 写入路径（write/update/archive/merge）的结果与 mutation 类型 |
+| `maintenance` | 维护 tick：TTL 到期归档数、verify 候选/判定数（verified/updated/archived）、无 LLM 路由时说明 verify 关闭 |
 | `emergency-reclaim` | 溢出回收：丢弃数、保护数、generation 前后（是否 retry） |
 | `tool-call` | `ctx_reduce`/`ctx_expand`/`ctx_memory` 的排队/恢复/拒绝与耗时 |
 | `engine` | 压缩接缝：挂载/被配置关闭/不可用/手动 checkpoint |
@@ -202,6 +203,8 @@ epoch 指纹稳定、权威守卫（authority 表空 + privilege 未启用）、
 | **项目记忆接入** | 只读打开 MC 共享 `context.db`：版本 fence（≤94）、身份匹配、可注入过滤、工作区共享白名单、预算裁剪；注入 m[0] + `ctx_memory` 只读检索工具。**身份自动推导**：`git:<root-commit-sha>`（git 仓库）→ `dir:<md5(path.resolve)>`（对齐 MC，含 Windows 反斜杠语义）；**未配置时用会话 cwd**；工作区成员与共享类别**从库里的 `workspaces`/`workspace_members` 自动解析** | ✅ 单元 10 + 集成 + **真实库只读端到端**（对 `<path>` 解析出 `git:dfbf85f5…`，与库中身份逐字节一致，注入 40 行） |
 | **CompactionEngine 替换** | 注入/动态解析基类；`compactIfNeeded`=管理通道（永不写 checkpoint）、`compactNow/compactRegion`=真实 `compaction/start\|summary\|replace\|end` 协议；占用 `ctx.compaction` | ✅ 集成测试 + 冒烟 + 真实进程 meta |
 | /ctx-status | 压力/决策/回收台账/compartments/基线/策略 | ✅ 挂载验证 |
+| **维护 tick（MC dreamer 切片）** | 每 30min（`maintenance.intervalMs`）：① TTL 到期行经 `archiveMemory` 契约动作归档（mutation log/authority 守卫全程在环）；② LLM verify——未验证行批量判定，keep→`markVerified`（per-memory `verified_at`，纯元数据）、stale→`updateMemory`、wrong→`archiveMemory`（对齐 MC `dreamer/verify.ts` 的 host-side manifest 语义）；tick 无会话，verify 需显式 `maintenance.verifyProvider/verifyModel` | ✅ 单元 7 + live boot 概要 |
+| **journal 自愈** | 挂载时 `recoverOrphanHistorianRuns`：为被 remount 杀死的 historian start 补 `adapter-remount` 合成终局（含 supersede 双 start 场景，`recoveredStartAt` 标记幂等） | ✅ 单元 + live（修复后 180 start/180 terminal） |
 | 存储迁移链 | v1（tags/usage）→ v2（pending_drops）→ v3（compartments/baseline_state），版本 fence fail-closed | ✅ 真实进程 v2→v3 |
 
 **同时在线证据**（真实 `dsh --profile mcpoc` 进程写下的 meta）：
