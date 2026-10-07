@@ -207,11 +207,6 @@ interface Registrar {
   register(definition: unknown): unknown
 }
 
-export interface MagicContextDshHandle {
-  readonly stores: AdapterStores
-  dispose(): void
-}
-
 export async function apply(ctx: Context, config: MagicContextDshConfig = {}): Promise<void> {
   if (config.enabled === false) {
     ctx.logger.info('magic-context dsh adapter: disabled by config')
@@ -1034,14 +1029,6 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
       ? `ok schema v${String(memoryRecall.status.schemaVersion)}`
       : `unavailable: ${String(memoryRecall.status.detail)}`)
   stores.setMeta('memory_write', describeMemoryWrite())
-  // Machine-readable companions to the prose above: the acceptance script and
-  // the telemetry route assert on these instead of parsing display strings.
-  stores.setMeta('memory_write_read_only', String(memoryWriter?.status.readOnly === true))
-  stores.setMeta('memory_contract', memoryRecall === undefined
-    ? 'off'
-    : memoryRecall.status.ok
-      ? `v${String(memoryRecall.status.schemaVersion)} (adapter v${String(MEMORY_SCHEMA_MAX_VERSION)})`
-      : `refused: ${String(memoryRecall.status.detail)}`)
   // ── Telemetry for the browser half (validation-period observability) ──────
   // The Remote event whitelist is a compile-time constant, so a third-party
   // bundle cannot subscribe to plugin events; a web route we own is the
@@ -1257,17 +1244,15 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
   ctx.logger.info('magic-context dsh adapter: phase-2 management loop wired')
 }
 
+// Public entry surface: only what external consumers (the POC suite and the
+// loader's default export) actually import. Everything else is imported
+// in-package from its owning module.
 export { replaceToolResultWithPlaceholder } from './dsh/seams.ts'
 export { reclaimForEmergency } from './dsh/emergency.ts'
-export { openStores, defaultDataDir, SCHEMA_VERSION, StoreAheadOfAdapterError } from './core/stores.ts'
-export type { AdapterStores } from './core/stores.ts'
+export { openStores } from './core/stores.ts'
 export { DEFAULT_POLICY } from './core/policy.ts'
-export { openMemoryBridge, defaultMemoryDbPath, MEMORY_SCHEMA_MAX_VERSION } from './core/memory-bridge.ts'
 export { openJournal, redactData, formatJournalLine, recoverOrphanHistorianRuns } from './core/journal.ts'
-export type { Journal, JournalEntry, JournalKind, JournalLevel } from './core/journal.ts'
 export { runManagementPass } from './dsh/management-pass.ts'
-export { runHistorian, selectHistorianRange, historianTriggerBudget } from './dsh/historian.ts'
-export { parseHistorianOutput, renderBaseline, selectTier } from './core/compartments.ts'
 
 /**
  * The runtime schema the loader (and the plugin page's settings form) reads.

@@ -17,8 +17,8 @@ import { dirname, join } from 'node:path';
  * MC's identity input exactly (`provider/model/endpoint/apiKeyPresent/
  * runtimeFingerprint`, fp32 omitted as the default) so `embeddingIdentityHash()`
  * names the adapter's own vectors honestly; shared-space parity against a store
- * is checked at runtime by `verifyEmbeddingParity` (cosine against a stored
- * vector), never assumed.
+ * is checked at runtime by the composition root's `resolveSharedSpace` closure
+ * (cosine against a stored vector), never assumed.
  *
  * Everything here is lazy and fail-open: the heavy modules load on the first
  * `embed()` call, and any failure resolves to `null` telemetry-shaped results —

@@ -15,8 +15,6 @@
  * bust permission, and every step above is a durable mutation that spends it.
  */
 import {
-  BASELINE_CLOSE,
-  BASELINE_OPEN,
   compactedPlaceholder,
   estimateTokens,
   findBaselineRange,
@@ -418,7 +416,6 @@ function refreshBaseline(
  * re-decides from durable state.
  */
 export function runManagementPass(input: ManagementPassInput): ManagementPassResult {
-  const now = input.now ?? Date.now
   const landedDrops: number[] = []
   const tokensBefore = surfaceTokens(input.session)
   const result: ManagementPassResult = {
@@ -549,9 +546,5 @@ export function runManagementPass(input: ManagementPassInput): ManagementPassRes
       `magic-context: management pass failed (continuing): ${error instanceof Error ? error.message : String(error)}`,
     )
     return result
-  } finally {
-    void now
   }
 }
-
-export { BASELINE_OPEN, BASELINE_CLOSE }

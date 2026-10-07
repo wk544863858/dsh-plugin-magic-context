@@ -543,7 +543,7 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
       }),
       maxMemoryId: () => 0,
       isAuthorityManaged: () => true,
-      stats: () => ({ rows: 0, mutationLog: 0, epoch: 0 }),
+      stats: () => ({ rows: 0, mutationLog: 0, epoch: 0, verified: 0, unverified: 0 }),
       writeMemory: () => refused,
       updateMemory: () => refused,
       archiveMemory: () => refused,

@@ -42,16 +42,3 @@ export interface UsageRecord {
   readonly cacheWriteTokens?: number
   readonly recordedAt: number
 }
-
-/**
- * A planned durable surface mutation, in neutral terms. Phase 0 implements
- * the drop placeholder; Phase 1 maps Magic Context's transform decisions
- * onto this shape before the DSH seam executes them.
- */
-export type SurfaceOp =
-  | {
-    readonly op: 'drop-placeholder'
-    readonly tagNumber: number
-    /** Durable seq of the surface node being replaced. */
-    readonly targetSeq: number
-  }

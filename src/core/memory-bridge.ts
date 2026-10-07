@@ -51,15 +51,6 @@ export const MAX_MEMORY_REPLACEMENT_DEPTH = 8
 /** Default page size for one cursor read (the real log holds hundreds of rows). */
 export const DEFAULT_MUTATION_PAGE_LIMIT = 1_000
 
-/** Magic Context's category vocabulary, in render order. */
-export const MEMORY_CATEGORY_ORDER = [
-  'PROJECT_RULES',
-  'ARCHITECTURE',
-  'CONSTRAINTS',
-  'CONFIG_VALUES',
-  'NAMING',
-] as const
-
 /** The default workspace sharing whitelist when `share_categories` is absent. */
 export const DEFAULT_SHARE_CATEGORIES = ['CONSTRAINTS'] as const
 
@@ -927,9 +918,8 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
           const digest = createHash('sha1')
             .update(orderedPool.map(row => `${String(row.id)}:${String(row.updatedAt)}`).join('|'))
             .digest('hex')
-          let currentMaxMemoryId = 0
           // B1: visibility-qualified max (own eligible + peers eligible AND shared).
-          currentMaxMemoryId = maxVisibleId(identities, peerIdentities, [...shared], request.now)
+          const currentMaxMemoryId = maxVisibleId(identities, peerIdentities, [...shared], request.now)
           return {
             rows: orderedPool,
             lines: orderedPool.map(renderMemoryLine),

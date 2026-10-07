@@ -103,11 +103,6 @@ export function replaceToolResultWithPlaceholder(
   return replaceToolResultContent(session, targetSeq, [{ type: 'text', text: placeholderText }])
 }
 
-/** The `toolCallId` of a tool/result surface event, if it is one. */
-export function toolResultCallId(event: SessionEvent): string | undefined {
-  return event.type === 'tool/result' ? event.data.message.toolCallId : undefined
-}
-
 /** One current tool-result surface node, seen through the adapter's lens. */
 export interface SurfaceToolNode {
   readonly seq: SessionSeq

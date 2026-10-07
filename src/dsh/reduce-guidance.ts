@@ -20,7 +20,6 @@
 /** ── Thresholds (exact MC constants, ctx-reduce-nudge.ts) ───────────────── */
 export const CHANNEL1_MIN_TOKENS = 60_000
 export const CHANNEL1_FLOOR_TOKENS = 25_000
-export const CHANNEL1_REFIRE_FLOOR_TOKENS = 25_000
 const S_GENTLE = 0.2
 const S_FIRM = 0.4
 const S_URGENT = 0.6
