@@ -598,7 +598,10 @@ window.__ModuleLoader__.load({
       error: { icon: '⚠️', label: '失败', tone: '#e5484d' },
     }
     /** Kinds that are process noise unless they carry a real operation. */
-    const NOISE_KINDS = { pass: true, boot: true, 'session-first-seen': true, engine: true }
+    // Telemetry-only kinds: real signals, but never operation rows — they
+    // would flood the feed (context-pressure fires per distinct reading) or
+    // read as raw English summaries under the archive fallback.
+    const NOISE_KINDS = { pass: true, boot: true, 'session-first-seen': true, engine: true, 'context-pressure': true, 'memory-recall': true }
     /** How many records the panel lists (the stream keeps `MAX_RECENT`). */
     const MAX_RECORDS = 12
 
