@@ -907,12 +907,15 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
               return { ok: true, id: existing.id, created: false, seenCount: after?.seenCount ?? 1 }
             }
             const expiresAt = input.expiresAt ?? resolveExpiresAt(category, timestamp) ?? null
+            // Clamp to MC's 1..100 band (storage-memory.ts:1132-1135) so an
+            // out-of-range tool argument can't skew ranking on either side.
+            const importance = Math.min(100, Math.max(1, input.importance ?? 50))
             const result = insertAgentMemory.run(
               input.identity,
               category,
               input.content,
               hash,
-              input.importance ?? 50,
+              importance,
               input.sessionId ?? null,
               sourceType,
               timestamp,
@@ -1271,9 +1274,12 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
           if (contractFenced) return 0
           if (isAuthorityManaged(identity)) return 0
           const stamp = runImmediate<{ ok: true; changed: number }>(() => {
+            // MC writes verification_status and verified_at as a pair
+            // (storage-memory.ts:464) — writing only verified_at left rows
+            // that MC still read as unverified (audit R1).
             const statement = db.prepare(
-              `UPDATE memories SET verified_at = ? WHERE project_path = ? AND id = ?`
-                + ` AND status IN ('active','permanent')`,
+              `UPDATE memories SET verification_status = 'verified', verified_at = ?`
+                + ` WHERE project_path = ? AND id = ? AND status IN ('active','permanent')`,
             )
             let changed = 0
             for (const id of ids) {
