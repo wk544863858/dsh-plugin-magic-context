@@ -46,6 +46,13 @@ import { reclaimForEmergency } from './dsh/emergency.ts'
 import { runManagementPass } from './dsh/management-pass.ts'
 import type { HistorianLlm } from './dsh/historian.ts'
 import { defineCtxExpandTool, defineCtxReduceTool, defineCtxMemoryTool } from './dsh/tool-bridge.ts'
+import {
+  buildChannel1Reminder,
+  buildChannel2Reminder,
+  buildDeskSection,
+  decideReduceNudge,
+  ReduceNudgeTracker,
+} from './dsh/reduce-guidance.ts'
 import { registerCtxStatusCommand } from './dsh/status-command.ts'
 import { registerMagicCompactionEngine } from './dsh/compaction-engine.ts'
 import { createTelemetryService } from './dsh/telemetry.ts'
@@ -246,6 +253,8 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
   let toolMode = 'skipped'
   /** The LLM seam (declared inject); the historian's auxiliary call uses it. */
   const llm = (ctx as unknown as { llm?: HistorianLlm }).llm
+  /** Reduce-guidance state per session (Channel 1/2 sticky bands, turn counts). */
+  const reduceTracker = new ReduceNudgeTracker()
   // ── The memory.enabled gate (objective: gated memory) ─────────────────────
   // `memory` is deliberately NOT declared in the exported Config: a schemastery
   // key would be materialized for every profile and would open the bridge
@@ -443,6 +452,19 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
         return message
       }
     })
+    // Reduce guidance (desk section + Channel 1/2) is wired through the
+    // SystemPrompt service below — a static section and a dynamic context —
+    // not by rewriting messages here. The only preStep duty is the REAL USER
+    // TURN counter the sticky refire gap needs: observing the newest message
+    // id is idempotent per step, so repeated preSteps on one turn count once.
+    if (liveBoolean(config.reduceGuidance, true)) {
+      try {
+        const newest = messages.at(-1)
+        if (newest !== undefined) reduceTracker.observeUserMessage(sessionId, newest.id)
+      } catch {
+        // counting is advisory; never fail the turn for it
+      }
+    }
 
     // ── Pressure decision + the execute-band management pass (Phase 1 + 2) ──
     // The session surface is only mutated inside the execute band: that is
@@ -684,6 +706,71 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     const base = decision.content ?? result.content
     return { kind: 'accept', content: tagToolResultContent(base, tagPrefix, tag) }
   })
+
+  // ── Reduce guidance through the SystemPrompt service (MC parity) ──────────
+  // Desk section: a STATIC prompt section (identical bytes every assembly, so
+  // the system prompt stays prefix-cache stable). Channel 1/2: a DYNAMIC
+  // context whose provider re-measures the unstamped tail at every assembly
+  // and renders the MC reminder copy only when a band fires — an empty text
+  // contributes nothing. Both live in the calling scope; dispose on teardown.
+  if (liveBoolean(config.reduceGuidance, true)) {
+    ctx.inject(['systemPrompt'], (scope) => {
+      const systemPrompt = (scope as unknown as {
+        systemPrompt: {
+          section(section: { name: string; text: string; order?: number }): () => void
+          context(context: { name: string; order: number; text: (assembly: unknown) => string }): () => void
+        }
+      }).systemPrompt
+      scope.effect(() => systemPrompt.section({
+        name: 'magic-context-desk',
+        text: buildDeskSection(memoryEnabled),
+        order: 900,
+      }))
+      scope.effect(() => systemPrompt.context({
+        name: 'magic-context-reduce',
+        order: 910,
+        text: (assembly: unknown) => {
+          try {
+            const agent = (assembly as { agent?: { session?: { id: string } } }).agent
+            const sessionId = agent?.session?.id
+            if (sessionId === undefined) return ''
+            const tagged = enumerateSurfaceToolResults(agent!.session, callId =>
+              stores.getTag(sessionId, { kind: 'tool-result', callId }))
+              .filter(node => node.tagNumber !== undefined)
+            if (tagged.length === 0) return ''
+            const tailToolTokens = tagged.reduce((total, node) => total + Math.ceil(node.textLength / 4), 0)
+            const undropped = tagged.filter(node => !node.isPlaceholder)
+            const undroppedTokens = undropped.reduce((total, node) => total + Math.ceil(node.textLength / 4), 0)
+            const state = reduceTracker.state(sessionId)
+            const nudge = decideReduceNudge({
+              tailToolTokens,
+              undroppedTokens,
+              realUserTurnCount: state.realUserTurnCount,
+              ...state.lastBand === undefined ? {} : { lastBand: state.lastBand },
+              lastOrdinal: state.lastOrdinal,
+              ...state.lastOrdinalTurn === undefined ? {} : { lastOrdinalTurn: state.lastOrdinalTurn },
+            })
+            reduceTracker.record(sessionId, nudge, 0)
+            if (!nudge.fire || nudge.level === undefined) return ''
+            const hints = undropped.slice(0, 4).map(node => ({ tagNumber: node.tagNumber as number }))
+            const reminder = nudge.level === 'channel2'
+              ? buildChannel2Reminder(undroppedTokens, undropped.length, hints)
+              : buildChannel1Reminder(nudge.level, undroppedTokens, undropped.length, hints, nudge.sticky)
+            journal?.info('pass', `reduce nudge (${nudge.level})`, {
+              decision: 'reduce-nudge',
+              band: nudge.band,
+              tailToolTokens,
+              undroppedTokens,
+            }, sessionId)
+            return reminder
+          } catch {
+            // A closed store mid-remount must degrade to no reminder.
+            return ''
+          }
+        },
+      }))
+    })
+  }
 
   // ── Usage recording from durable assistant/message events (Phase 0) ───────
   on(DSH_EVENTS.sessionEvent, (session, event) => {

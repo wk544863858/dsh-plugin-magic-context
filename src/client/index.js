@@ -1072,7 +1072,7 @@ window.__ModuleLoader__.load({
       // else (process identity, internal versions, row counts) lives in the
       // pill's hover title only.
       line([
-        ['压力', health.lastPressure === undefined ? undefined : Math.round(health.lastPressure) + '%'],
+        ['压力', health.lastPressure === undefined ? undefined : Math.round(health.lastPressure) + '%（上次请求账面；阈值判定用它）'],
         ['记忆', health.projectMemories],
         ['24h 提升', health.promote24h],
       ])
