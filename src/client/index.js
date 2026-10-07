@@ -1170,6 +1170,7 @@ window.__ModuleLoader__.load({
       const projectTotal = health.memoryStats !== undefined && health.memoryStats.total !== undefined
         ? health.memoryStats.total
         : health.projectMemories
+      const mt = health.maintenanceLast
       const summaryRows = [
         kv([
           pressureExact !== undefined ? 'O ' + pressureExact + '%' : '',
@@ -1181,17 +1182,13 @@ window.__ModuleLoader__.load({
           health.memoryStats !== undefined && health.memoryStats.unverified !== undefined
             ? 'U ' + fmtInt(health.memoryStats.unverified)
             : '',
+          mt === undefined ? '' : typeof mt.at === 'number' ? 'T ' + timeShort(mt.at) : 'T',
+          mt !== undefined && mt.expired ? 'K ' + fmtInt(mt.expired) : '',
+          mt !== undefined && mt.verified ? 'V ' + fmtInt(mt.verified) : '',
+          mt !== undefined && mt.updated ? 'R ' + fmtInt(mt.updated) : '',
+          errors > 0 ? 'E ' + fmtInt(errors) : '',
         ]),
-        health.maintenanceLast !== undefined
-          ? kv([
-            typeof health.maintenanceLast.at === 'number' ? 'T ' + timeShort(health.maintenanceLast.at) : 'T',
-            health.maintenanceLast.expired ? 'K ' + fmtInt(health.maintenanceLast.expired) : '',
-            health.maintenanceLast.verified ? 'V ' + fmtInt(health.maintenanceLast.verified) : '',
-            health.maintenanceLast.updated ? 'R ' + fmtInt(health.maintenanceLast.updated) : '',
-          ])
-          : null,
-        errors > 0 ? kv(['E ' + fmtInt(errors) + ' · 24h ' + (health.errors24h !== undefined ? fmtInt(health.errors24h) : '?')]) : null,
-      ].filter(Boolean)
+      ]
 
       const records = recordsOf(state.recent)
       const noise = noiseLine(state.recent)
