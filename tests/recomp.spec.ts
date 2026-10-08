@@ -3,6 +3,9 @@
  * are pinned directly; the store round trip is pinned through the real adapter
  * database, because "the row is the thing the model reads" is the whole claim.
  */
+import { Context } from '@deepseek-ai/cordis'
+import CommandRuntime from '@deepseek-ai/dsh-commands'
+import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -14,6 +17,7 @@ import { openStores } from '<path>'
 import {
   parseRecompSelection,
   recompactCompartments,
+  registerCtxRecompCommand,
   selectRecompTargets,
   snapRangeToCompartments,
 } from '<path>'
@@ -249,6 +253,34 @@ describe('recompactCompartments', () => {
       expect(selectRecompTargets(stores, sessionId, { kind: 'last', count: 1 }).map(item => item.compartmentId)).toEqual([2])
       expect(selectRecompTargets(stores, sessionId, { kind: 'all' }).map(item => item.compartmentId)).toEqual([1, 2])
       expect(selectRecompTargets(stores, sessionId, { kind: 'range', start: 6, end: 6 }).map(item => item.compartmentId)).toEqual([2])
+    } finally {
+      stores.close()
+    }
+  })
+})
+
+describe('registerCtxRecompCommand', () => {
+  it('is accepted by the real command service and visible to an agent', async () => {
+    // The host validates every definition (name pattern, non-empty description,
+    // function handler, string input hint) and drops a rejected one silently behind
+    // a log line — so the only proof that the command exists is the real service.
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(CommandRuntime)
+    const dataDir = tempDir('mc-recomp-mount-')
+    const stores = openStores(dataDir)
+    try {
+      registerCtxRecompCommand(ctx as never, {
+        stores,
+        policy: DEFAULT_POLICY,
+        logger: noopLogger,
+        llm: {} as never,
+        route: { provider: 'test', model: 'test' },
+      })
+      const session = ctx.sessions.create(SessionId('recomp-mount'))
+      const agent = { id: session.id, session }
+      expect(ctx.commands.find(agent, 'ctx-recomp')?.description).toContain('re-digest')
+      expect(ctx.commands.list(agent).map(entry => entry.name)).toContain('ctx-recomp')
     } finally {
       stores.close()
     }
