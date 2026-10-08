@@ -167,6 +167,7 @@ arithmetic.
 | `reply_pages` | absent | host-specific pagination UX |
 | `historian_chunk` (MC side) | replaced | adapter implements chunk planning directly (`src/dsh/historian.ts:380`) |
 | per-request projection seam | absent | it would violate the host's reconstructability rule (`host: packages/core/session/src/surface.ts:85`), which is why §B2 stays host-imposed |
+| `protected_tools` holds (per-tool kept results) | absent | not ported: the lane reached v0.46.0 through introduce → revert → restore → restrict, so it is not yet a stable target. This adapter's emergency model keeps the protection *window* (`clamp(contextWindow × 5%, 8k, 64k)`) plus a count floor (`src/dsh/emergency.ts`), which is what §B's reclaim lane needs |
 
 Adding any of these is a product decision, not an upgrade task: record the
 decision here before writing code. The current ruling — MC classifies its twelve
