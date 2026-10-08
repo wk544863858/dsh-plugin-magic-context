@@ -497,6 +497,9 @@ export function defineCtxMemoryTool(deps: MemoryToolDeps): unknown {
           ...explicitProject === undefined ? {} : { explicitProject },
           query: args.query,
           id: args.id,
+          // The panel's read row shows the hit count (`detail.hits`); without it
+          // a search record could only say "search".
+          ...typeof payload.hits === 'number' ? { hits: payload.hits } : {},
           ms: Date.now() - startedAt,
           ok: typeof payload.ok === 'boolean' ? payload.ok : payload.reason === undefined,
         }, sessionId)

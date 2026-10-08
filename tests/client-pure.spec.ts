@@ -37,8 +37,8 @@ const api = factory((name) => {
     spanOf: (value: unknown) => string
     timeShort: (value: unknown) => string
     trimSummary: (summary: unknown) => Record<string, unknown>
-    recordOf: (event: unknown) => { category: string; text: string } | null
-    recordsOf: (rows: readonly unknown[]) => Array<{ category: string; text: string }>
+    recordOf: (event: unknown) => { category: string; text: string; detail: string; summary?: string } | null
+    recordsOf: (rows: readonly unknown[]) => Array<{ category: string; text: string; detail: string; count: number }>
     recordCategories: Record<string, { icon: string; labelKey: string; tone: string }>
     dictionaryKeys: () => { zh: string[]; en: string[] }
   }
@@ -120,6 +120,62 @@ describe('recordCategories — the panel table is the single source', () => {
       expect(typeof entry.icon).toBe('string')
       expect(zhKeys).toContain(entry.labelKey)
     }
+  })
+})
+
+describe('tool-call records — the reclamation lane the panel used to drop', () => {
+  const { recordOf } = api.__diagnostics
+
+  it('ctx_reduce becomes a drop row carrying both counts', () => {
+    const row = recordOf({
+      at: 1,
+      level: 'info',
+      kind: 'tool-call',
+      summary: 'ctx_reduce: queued 2, refused 1',
+      data: { tool: 'ctx_reduce', requested: [1, 2, 3], queued: [1, 2], refused: [{ tag: 3, reason: 'already dropped' }], ms: 12 },
+    })
+    expect(row).not.toBeNull()
+    expect(row!.category).toBe('drop')
+    expect(row!.text).toBe('回收入队')
+    expect(row!.detail).toContain('入队 2')
+    expect(row!.detail).toContain('被拒 1')
+    expect(row!.detail).toContain('12ms')
+  })
+
+  it('ctx_expand becomes an archive row and stays quiet when nothing was refused', () => {
+    const row = recordOf({
+      at: 2,
+      level: 'info',
+      kind: 'tool-call',
+      summary: 'ctx_expand: restored 1, refused 0',
+      data: { tool: 'ctx_expand', requested: [7], restored: [7], refused: [], ms: 4 },
+    })
+    expect(row).not.toBeNull()
+    expect(row!.category).toBe('archive')
+    expect(row!.text).toBe('恢复原文')
+    expect(row!.detail).toContain('恢复 1')
+    expect(row!.detail).not.toContain('被拒')
+  })
+
+  it('ctx_memory search reads as a read row with its hit count', () => {
+    const row = recordOf({
+      at: 3,
+      level: 'info',
+      kind: 'tool-call',
+      summary: 'ctx_memory search: 3 result(s)',
+      data: { tool: 'ctx_memory', action: 'search', hits: 3, ms: 8, ok: true },
+    })
+    expect(row).not.toBeNull()
+    expect(row!.category).toBe('read')
+    expect(row!.text).toBe('检索记忆')
+    expect(row!.detail).toContain('检索')
+    expect(row!.detail).toContain('命中 3')
+  })
+
+  it('keeps the write/read branches and still ignores an unmodelled action', () => {
+    expect(recordOf({ kind: 'tool-call', data: { tool: 'ctx_memory', action: 'write' } })!.category).toBe('write')
+    expect(recordOf({ kind: 'tool-call', data: { tool: 'ctx_memory', action: 'list' } })!.category).toBe('read')
+    expect(recordOf({ kind: 'tool-call', data: { tool: 'ctx_memory', action: 'not-an-action' } })).toBeNull()
   })
 })
 

@@ -166,13 +166,16 @@ epoch 指纹稳定、权威守卫（authority 表空 + privilege 未启用）、
   "compartments24h":6,"memoriesRecalled":40},"recent":[…"recalled 40 project memories into m[0],
   26 new in m[1]"…]}`。
 
-- **对话流内联操作记录**：注册进 `conversation.chat.turnTail`（每个已完成 Turn 的 action row
-  之前、与工具调用同一层），因此不需要点开任何徽标就能看到适配器**刚刚做了什么**：
-  🧠 写入记忆（提升 N 条 / 去重命中）· 🔎 加载记忆（m[0] N 条 · m[1] +M 条）·
-  ✂️ 压缩上下文（替换 N 节点 · 回收 T tok）· 🗑️ 丢弃上下文 · 🧭 历史归档 ·
-  ⚠️ 失败。相邻同一操作折叠成 `×N`，`pass defer`/`boot`/`engine` 这类噪声不进入列表
-  （只在徽标面板里以一行计数出现）。每条 Turn 的区块在首次渲染时**冻结**、只有最新 Turn
-  继续追加，因此往回滚动不会改写历史；没有内容时该条目返回 `null`，官方 UI 保持不变。
+- **胶囊展开面板 = 实时操作记录**：点击 composer 下方的胶囊（收起态显示占用百分比），面板里
+  除了两行指标与节拍，就是**操作记录**（最多 12 条，相邻同操作折叠 `×N`）：🧠 写入记忆（提升 N 条 /
+  去重命中）· 🔎 加载记忆（list/get/search，search 带命中数）· 🗑️ 回收入队（`ctx_reduce`：入队 N ·
+  被拒 M）· 🧭 恢复原文（`ctx_expand`：恢复 N · 被拒 M）· ✂️ 压缩上下文（执行回收 / 压缩上下文 /
+  HARD 基线重建）· 🗑️ 丢弃上下文（应急丢弃 / 丢弃落地）· 🧭 归档已存 · 🧰 维护巡检 · ⚠️ 失败。
+  噪声不进列表：`pass defer`、`boot`、`engine`、`context-pressure`、`memory-recall`，
+  以及 **SOFT** 基线刷新（只数进节拍行；HARD 重建是 priced cache bust，算记录）。
+  逐条映射规则与两个 node 侧校验脚本见 [主界面遥测契约](../../docs/dsh-plugin-ui-telemetry-contract.md) 勘误第 8 条。
+  （2026-10-07 起对话流内的 turnTail 区块已移除：动作可查性由 `session-notice.ts` 的会话流 notice 承担，
+  胶囊面板是实时/遥测面。）
 - **徽标面板自动关闭**：点击面板/徽标之外的任意位置、按 Esc、或窗口失焦即关闭
   （两个面都带 `data-mc-surface`，因为面板是 `position: fixed`，不宜做矩形命中测试）。
 

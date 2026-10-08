@@ -37,8 +37,15 @@ const zh = dictionaryTranslator('zh');
 const db = new DatabaseSync(DB, { readOnly: true });
 const newest = db.prepare('SELECT at, level, kind, summary, data FROM journal ORDER BY id DESC LIMIT 80').all();
 const perKind = db.prepare('SELECT at, level, kind, summary, data FROM journal WHERE id IN (SELECT MAX(id) FROM journal GROUP BY kind, level)').all();
+// `tool-call` is one kind with many flavours, and the newest row of that kind is
+// almost always a ctx_memory call — so sampling per kind left the reclamation
+// lane (ctx_reduce/ctx_expand) out entirely and its assertions were vacuous.
+// One newest row per flavour keeps the check honest.
+const perFlavour = db.prepare(`SELECT at, level, kind, summary, data FROM journal
+  WHERE id IN (SELECT MAX(id) FROM journal WHERE kind = 'tool-call'
+    GROUP BY json_extract(data, '$.tool'), json_extract(data, '$.action'))`).all();
 db.close();
-const rows = [...newest, ...perKind].map((r) => ({
+const rows = [...newest, ...perKind, ...perFlavour].map((r) => ({
   at: r.at, level: r.level, kind: r.kind, summary: r.summary,
   ...(r.data === null || r.data === undefined ? {} : { data: JSON.parse(r.data) }),
 }));
@@ -56,19 +63,27 @@ console.log(`\n=== 折叠的噪声 ===\n  ${noiseLine(rows)}`);
 
 // ── 断言
 const byKind = (kind, predicate) => rows.filter((r) => r.kind === kind && (predicate === undefined || predicate(r)));
-// Kinds the panel shows as records. `memory-recall` and `baseline` are NOT here
-// on purpose: they are folded into the noise line (NOISE_KINDS in the client),
-// which is what keeps the panel readable on a busy session. The script used to
-// demand records for them — a stale expectation, not a client bug.
+// Kinds the panel shows as records. `memory-recall` and a SOFT `baseline` are
+// NOT here on purpose: they are folded into the noise line (NOISE_KINDS in the
+// client), which is what keeps the panel readable on a busy session. A HARD
+// rebuild IS a record — the client maps it to a priced cache bust
+// (`case 'baseline'`) and `noiseLine` counts only soft ones — so the split has
+// to follow `data.mode`, not the kind alone. Demanding it by kind alone passed
+// only while no hard row happened to sit in the newest-80 sample window.
+const hardBaseline = byKind('baseline', (r) => r.data?.mode === 'hard');
+const softBaseline = byKind('baseline', (r) => r.data?.mode !== 'hard');
 const mustMap = [
   ...byKind('memory-promote'),
   ...byKind('compartment-published'),
   ...byKind('emergency-reclaim'),
   ...byKind('historian', (r) => r.level === 'error'),
   ...byKind('maintenance'),
-  ...byKind('tool-call', (r) => ['write', 'update', 'archive', 'merge', 'list', 'get'].includes(r.data?.action)),
+  ...byKind('tool-call', (r) => ['write', 'update', 'archive', 'merge', 'list', 'get', 'search'].includes(r.data?.action)),
+  // The reclamation lane: rows carry `tool` and tag arrays, no `action` — the
+  // client dropped these until the panel learned to render them.
+  ...byKind('tool-call', (r) => ['ctx_reduce', 'ctx_expand'].includes(r.data?.tool)),
 ];
-const foldedKinds = [...byKind('memory-recall'), ...byKind('baseline')];
+const foldedKinds = [...byKind('memory-recall'), ...softBaseline];
 const unmapped = mustMap.filter((r) => recordOf(r) === null);
 const notFolded = foldedKinds.filter((r) => recordOf(r) !== null);
 const deferPasses = byKind('pass', (r) => r.data?.decision !== 'execute').filter((r) => recordOf(r) !== null);
@@ -87,13 +102,16 @@ check('每个分类都在面板的分类表里（防镜像漂移）', unknownCat
   unknownCategories.length ? unknownCategories.join(', ') : `${new Set(records.map((r) => r.category)).size} 类`);
 const promote = records.find((r) => r.text === '记忆提升');
 check('promotion 记录带真实条数', promote !== undefined && /新增 \d+/.test(promote.detail), promote?.detail ?? '(无样本)');
-// The folded half of the design: recall/baseline are noise, and the noise line
-// names them with their counts instead of vanishing silently.
-check('recall/baseline 折叠为噪声而不是记录', notFolded.length === 0, `${notFolded.length} 行泄漏`);
+// The folded half of the design: recall and SOFT baseline are noise, and the
+// noise line names them with their counts instead of vanishing silently.
+check('recall/soft baseline 折叠为噪声而不是记录', notFolded.length === 0, `${notFolded.length} 行泄漏`);
+check('HARD 基线重建仍是记录（priced cache bust）',
+  hardBaseline.every((r) => recordOf(r)?.category === 'reclaim'),
+  `${hardBaseline.length} 行`);
 const noise = noiseLine(rows);
 const recallRows = byKind('memory-recall').length;
-const baselineRows = byKind('baseline').length;
-check('噪声行点名加载记忆与基线刷新', (recallRows === 0 || noise.includes('加载记忆')) && (baselineRows === 0 || noise.includes('基线刷新')),
+const softBaselineRows = softBaseline.length;
+check('噪声行点名加载记忆与基线刷新', (recallRows === 0 || noise.includes('加载记忆')) && (softBaselineRows === 0 || noise.includes('基线刷新')),
   noise);
 
 // ── i18n：字典键集合必须对齐，英文渲染不得回退到中文

@@ -101,7 +101,7 @@ for (const match of CLIENT_SOURCE.matchAll(/\bt\(\s*'([^']+)'(\s*\+)?/g)) {
 }
 const missing = [...asked].filter((key) => !keys.zh.includes(key) || !keys.en.includes(key))
 check('源码引用的键全部已定义', missing.length === 0, missing.length ? missing.join(', ') : `${asked.size} keys`)
-const verbMissing = ['write', 'update', 'archive', 'merge', 'list', 'get']
+const verbMissing = ['write', 'update', 'archive', 'merge', 'list', 'get', 'search']
   .map((action) => 'detail.verb.' + action)
   .filter((key) => !keys.zh.includes(key) || !keys.en.includes(key))
 check('动态键族 detail.verb.* 全部已定义', dynamic.has('detail.verb.') && verbMissing.length === 0,

@@ -623,6 +623,8 @@ window.__ModuleLoader__.load({
         'record.baselineHard': '基线重建 (HARD)',
         'record.emergencyDrop': '丢弃上下文',
         'record.dropLanded': '丢弃落地',
+        'record.reduceQueued': '回收入队',
+        'record.expandRestored': '恢复原文',
         'record.remountRecovery': '重挂载恢复',
         'record.historianFailed': '历史归档失败',
         'record.archived': '归档已存',
@@ -638,6 +640,11 @@ window.__ModuleLoader__.load({
         'detail.verb.merge': '合并',
         'detail.verb.list': '检索',
         'detail.verb.get': '读取',
+        'detail.verb.search': '检索',
+        'detail.queued': '入队 {n}',
+        'detail.refused': '被拒 {n}',
+        'detail.restored': '恢复 {n}',
+        'detail.hits': '命中 {n}',
         'detail.rejected': '被拒',
         'detail.replacedNodes': '替换 {n} 节点',
         'detail.nodes': '{n} 节点',
@@ -701,6 +708,8 @@ window.__ModuleLoader__.load({
         'record.baselineHard': 'Baseline rebuild (HARD)',
         'record.emergencyDrop': 'Emergency drop',
         'record.dropLanded': 'Drop landed',
+        'record.reduceQueued': 'Reclaim queued',
+        'record.expandRestored': 'Content restored',
         'record.remountRecovery': 'Remount recovery',
         'record.historianFailed': 'Historian failed',
         'record.archived': 'Compartment stored',
@@ -715,6 +724,11 @@ window.__ModuleLoader__.load({
         'detail.verb.merge': 'merge',
         'detail.verb.list': 'list',
         'detail.verb.get': 'read',
+        'detail.verb.search': 'search',
+        'detail.queued': 'queued {n}',
+        'detail.refused': 'refused {n}',
+        'detail.restored': 'restored {n}',
+        'detail.hits': '{n} hits',
         'detail.rejected': 'rejected',
         'detail.replacedNodes': 'replaced {n} nodes',
         'detail.nodes': '{n} nodes',
@@ -896,11 +910,38 @@ window.__ModuleLoader__.load({
           ])
         }
         case 'tool-call': {
+          // The reclamation lane first: ctx_reduce/ctx_expand rows carry `tool`
+          // plus tag arrays and NO `action` (tool-bridge.ts:217,277), so the
+          // action branches below dropped them entirely — the panel never showed
+          // the agent's own drops or restores, the two operations it exists for.
+          const tool = data !== undefined && typeof data.tool === 'string' ? data.tool : undefined
+          if (tool === 'ctx_reduce') {
+            const queued = arrayLength(data, 'queued')
+            const refused = arrayLength(data, 'refused')
+            return record('drop', 'record.reduceQueued', undefined, [
+              queued === undefined ? '' : t('detail.queued', { n: fmtInt(queued) }),
+              refused ? t('detail.refused', { n: fmtInt(refused) }) : '',
+              spanOf(numberField(data, 'ms')),
+            ])
+          }
+          if (tool === 'ctx_expand') {
+            const restored = arrayLength(data, 'restored')
+            const refused = arrayLength(data, 'refused')
+            return record('archive', 'record.expandRestored', undefined, [
+              restored === undefined ? '' : t('detail.restored', { n: fmtInt(restored) }),
+              refused ? t('detail.refused', { n: fmtInt(refused) }) : '',
+              spanOf(numberField(data, 'ms')),
+            ])
+          }
           const writeish = action === 'write' || action === 'update' || action === 'archive' || action === 'merge'
-          const readish = action === 'list' || action === 'get'
+          // `search` is the agent's read lane (MC ctx_search's memory half) and
+          // used to be dropped for not being list/get.
+          const readish = action === 'list' || action === 'get' || action === 'search'
           if (!writeish && !readish) return null
+          const hits = numberField(data, 'hits')
           return record(writeish ? 'write' : 'read', writeish ? 'record.memoryWritten' : 'record.memorySearch', undefined, [
             t('detail.verb.' + String(action)),
+            readish && hits !== undefined ? t('detail.hits', { n: fmtInt(hits) }) : '',
             data !== undefined && data.ok === false ? t('detail.rejected') : '',
             spanOf(numberField(data, 'ms')),
           ])
