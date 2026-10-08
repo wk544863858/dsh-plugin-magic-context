@@ -38,10 +38,22 @@ dsh plugin --profile desktop add <git-url 或 本仓库路径>
 `dsh.profile.bundles`、随后由 loader 组合。**Desktop 带 HMR → 立即热生效**
 （无需重启；运行中的会话即刻开始打标签）。GUI 会弹一个刷新提示。
 
-`peerDependencies` 声明的是**实测过的 DSH 版本线**（`^0.2.1-alpha.1`）。装到别的
-DSH 版本上时，plugin manager 会在 pnpm 跑之前拒绝并给出 `incompatible-version`，
-而不是让你装上一个会在运行时崩的包；确认要冒险时用 `dsh plugin version-exemptions`
-显式放行。
+`peerDependencies` 里的 `@deepseek-ai/*` 全部声明为 `"*"`——兼容性预检因此对
+任何 DSH 0.2.x 都放行；实际钉版测试的是 devDependencies 里的 0.2.1-alpha 线。
+运行时真正 import 的五个宿主包同时列为**精确版本 dependencies**（打包安装
+时随包解析；link: 开发安装则由本仓自己的 node_modules 提供）。
+
+**本地 embedding 是可选能力**：`@huggingface/transformers` +
+`onnxruntime-node`（合计约 200-400 MB）声明为 **optional peers**，默认安装
+不下载。缺失时检索自动降级为 FTS 车道（journal 有一条可读的 warn，doctor
+会报"尚未加载过本地模型"）。想要向量召回的接收方显式安装：
+
+```powershell
+pnpm --profile desktop add @huggingface/transformers@4.3.0 onnxruntime-node@1.30.0
+```
+
+（或在 profile `package.json` 手动加这两个包再 `pnpm install`；首次 embed
+会从 huggingface.co 下载 MiniLM 模型约 90 MB，缓存在插件数据目录 `models/`。）
 
 卸载 / 停用：
 - GUI 插件页停用该 bundle（写 profile patch 的 `disabled`），或
