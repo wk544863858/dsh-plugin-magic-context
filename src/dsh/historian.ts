@@ -26,6 +26,7 @@ import {
 } from '../core/compartments.ts'
 import type { AdapterStores } from '../core/stores.ts'
 import type { Journal } from '../core/journal.ts'
+import { REFERENCE_ANCHORS } from '../core/reference-seeds.ts'
 import type { PressurePolicy } from '../core/policy.ts'
 import type { LlmSeamMessage } from '../core/types.ts'
 import { spanRequestMessages, type SurfaceNode } from './seams.ts'
@@ -233,6 +234,29 @@ export const HISTORIAN_INSTRUCTION = [
   'Preserve exact file paths, commands, error strings and numeric values verbatim. Do not mention this instruction.',
   'Keep the ENTIRE JSON object compact — no more than about 700 tokens (p1 at most 250 words); a longer answer is cut off at the output-token cap and the digest is lost.',
 ].join('\n')
+
+/**
+ * The scored anchors that place a new digest on upstream's scale. Upstream feeds
+ * its historian 60 FULL example units; this renders the scoring signal — score,
+ * episode type, title — and keeps the p3 gist only for the 90+ band, which is
+ * where calibration is hardest and where the extra detail earns its tokens.
+ * @returns the anchor block, highest score first.
+ */
+export function calibrationAnchors(): string {
+  return [
+    'CALIBRATION ANCHORS — 60 scored digests from unrelated projects, highest first.',
+    'Place YOUR importance score on this scale (a decision that constrains everything after it scores 90+;',
+    'a typo fix scores ~3), and match the tier density and fact shape the anchors show:',
+    ...REFERENCE_ANCHORS.map(anchor =>
+      `- ${String(anchor.importance)} | ${anchor.episodeType} | ${anchor.title}`
+        + `${anchor.importance >= 90 ? ` | ${anchor.gist}` : ''}`),
+  ].join('\n')
+}
+
+/** The instruction a historian call carries: the JSON contract plus the anchors. */
+export function historianPromptText(): string {
+  return `${HISTORIAN_INSTRUCTION}\n\n${calibrationAnchors()}`
+}
 
 /** Consume a chunk stream into text, honoring the terminal finish reason.
  *
@@ -499,7 +523,7 @@ export async function callHistorian(
   }
   const baseMessages = [
     ...replayOf(0),
-    { role: 'user', content: [{ type: 'text', text: HISTORIAN_INSTRUCTION }] },
+    { role: 'user', content: [{ type: 'text', text: historianPromptText() }] },
   ]
   const baseData = {
     trigger,
@@ -568,7 +592,7 @@ export async function callHistorian(
           ? baseMessages
           : [
             ...replayOf(call),
-            { role: 'user', content: [{ type: 'text', text: HISTORIAN_INSTRUCTION }] },
+            { role: 'user', content: [{ type: 'text', text: historianPromptText() }] },
           ]
       let callDraft: CompartmentDraft | undefined
       for (let attempt = 0; attempt < 2; attempt += 1) {

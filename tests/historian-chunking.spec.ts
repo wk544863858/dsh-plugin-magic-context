@@ -8,12 +8,15 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
+  calibrationAnchors,
   callHistorian,
   DEFAULT_HISTORIAN_TIMEOUT_MS,
+  historianPromptText,
   planChunkSpans,
   type HistorianLlm,
   type SurfaceNode,
 } from '<path>'
+import { REFERENCE_ANCHORS } from '<path>'
 import type { Journal, JournalKind, JournalLevel } from '<path>'
 import { spanRequestMessages } from '<path>'
 import { DEFAULT_POLICY } from '<path>'
@@ -153,6 +156,22 @@ describe('planChunkSpans', () => {
       expect(group[0]?.role).not.toBe('tool')
       expect(group[group.length - 1]?.hasToolCalls).toBe(false)
     }
+  })
+})
+
+describe('calibration anchors', () => {
+  it('renders every seed compactly and highest first', () => {
+    const text = historianPromptText()
+    expect(text).toContain('CALIBRATION ANCHORS')
+    expect(text).toContain('typo fix scores ~3')
+    const rows = calibrationAnchors().split('\n').filter(line => line.startsWith('- '))
+    expect(rows).toHaveLength(REFERENCE_ANCHORS.length)
+    const head = Number((rows[0] ?? '').slice(2).split(' | ')[0])
+    const tail = Number((rows.at(-1) ?? '').slice(2).split(' | ')[0])
+    expect(head).toBeGreaterThanOrEqual(90)
+    expect(tail).toBeLessThanOrEqual(5)
+    // These anchors ride on EVERY historian call, so their cost is pinned here.
+    expect(text.length).toBeLessThan(10_000)
   })
 })
 

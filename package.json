@@ -37,7 +37,8 @@
     "test:full": "node scripts/mc-test.mjs --full",
     "track": "node scripts/dsh-track.mjs --check",
     "bootstrap:testhost": "node scripts/bootstrap-testhost.mjs",
-    "doctor": "node scripts/dsh-doctor.mjs"
+    "doctor": "node scripts/dsh-doctor.mjs",
+    "build:seeds": "node scripts/build-reference-seeds.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",

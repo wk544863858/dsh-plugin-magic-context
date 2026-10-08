@@ -149,6 +149,9 @@ describe('recompactCompartments', () => {
       expect(after?.landedEventSeq).toBe(99)
       expect(after?.coveredSeqs).toEqual([1, 2, 3])
       expect(kinds).toContain('compartment-recomp')
+      // The historian call carries the scored calibration anchors: this is the one
+      // place where a recomp request's prompt content is observable end to end.
+      expect(JSON.stringify(fake.calls)).toContain('CALIBRATION ANCHORS')
     } finally {
       stores.close()
     }
