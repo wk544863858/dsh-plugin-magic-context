@@ -30,6 +30,7 @@ import { errText } from '../core/types.ts'
 import { callHistorian, type HistorianLlm } from './historian.ts'
 import { runManagementPass } from './management-pass.ts'
 import {
+  compactCheckpointSource,
   enumerateSurfaceNodes,
   replaceSurfaceRange,
   syntheticNodeId,
@@ -175,6 +176,7 @@ export async function registerMagicCompactionEngine(
       summary,
       shadowedSeqs,
       syntheticNodeId('mc-checkpoint'),
+      compactCheckpointSource(compactionId, input.sourceCommandId),
     )
     const endEvent = input.session.append('compaction/end', {
       compactionId,

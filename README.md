@@ -199,7 +199,7 @@ epoch 指纹稳定、权威守卫（authority 表空 + privilege 未启用）、
 | 强制回收 + 紧急回收 retry | force band（85%）自动丢弃；`CONTEXT_WINDOW_EXCEEDED` → 丢弃 + `replaceGeneration` 前进即 retry | ✅ 集成测试 |
 | **historian** | 一次性 LLM 调用（重放真前缀保 KV cache）→ 四层摘要 p1–p4 + importance + facts/events；**带外运行**，只写 store，不动线缆 | ✅ 集成测试 + 冒烟 |
 | **compartments 发布** | execute 带内把被消化区间替换为 `[compacted §C<n>§]`（引用全部原事件，可恢复） | ✅ 集成测试 + 冒烟 |
-| **m[0]/m[1] 基线** | 合成节点（`<magic-context>` 标记）承载冻结基线 + 增量；HARD 重建（路由/记忆变化）与 SOFT 增量；**内容未变则零变更** | ✅ 集成测试 + 冒烟 |
+| **m[0]/m[1] 基线** | 合成 `user/message` 节点（插件 source `magic-context`+`notice`，内容带 `<magic-context>` 标记）承载冻结基线 + 增量；HARD 重建（路由/记忆变化）与 SOFT 增量；**内容未变则零变更** | ✅ 集成测试 + 冒烟 |
 | **项目记忆接入** | 只读打开 MC 共享 `context.db`：版本 fence（≤94）、身份匹配、可注入过滤、工作区共享白名单、预算裁剪；注入 m[0] + `ctx_memory` 只读检索工具。**身份自动推导**：`git:<root-commit-sha>`（git 仓库）→ `dir:<md5(path.resolve)>`（对齐 MC，含 Windows 反斜杠语义）；**未配置时用会话 cwd**；工作区成员与共享类别**从库里的 `workspaces`/`workspace_members` 自动解析** | ✅ 单元 10 + 集成 + **真实库只读端到端**（对 `<path>` 解析出 `git:dfbf85f5…`，与库中身份逐字节一致，注入 40 行） |
 | **CompactionEngine 替换** | 注入/动态解析基类；`compactIfNeeded`=管理通道（永不写 checkpoint）、`compactNow/compactRegion`=真实 `compaction/start\|summary\|replace\|end` 协议；占用 `ctx.compaction` | ✅ 集成测试 + 冒烟 + 真实进程 meta |
 | /ctx-status | 压力/决策/回收台账/compartments/基线/策略 | ✅ 挂载验证 |

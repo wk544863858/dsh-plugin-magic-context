@@ -36,6 +36,7 @@ import {
   dropPlaceholderContent,
   enumerateSurfaceNodes,
   enumerateSurfaceToolResults,
+  magicContextSource,
   replaceSurfaceRange,
   replaceToolResultContent,
   syntheticNodeId,
@@ -203,6 +204,9 @@ function publishCompartments(input: ManagementPassInput, nodes: readonly Surface
       [{ type: 'text', text: compactedPlaceholder(compartment.compartmentId) }],
       current.map(node => node.seq),
       syntheticNodeId(`mc-compacted-${String(compartment.compartmentId)}`),
+      magicContextSource(
+        `Magic Context · compartment §C${String(compartment.compartmentId)}§ replaced ${String(current.length)} node(s) on the wire`,
+      ),
     )
     input.stores.markCompartmentLanded(input.sessionId, compartment.compartmentId, landedSeq)
     published.push(compartment.compartmentId)
@@ -376,6 +380,10 @@ function refreshBaseline(
     composeBaselineContent(target, block),
     [target.seq],
     syntheticNodeId('mc-baseline'),
+    magicContextSource(
+      `Magic Context · baseline ${hard ? 'HARD rebuild' : 'soft refresh'} `
+        + `(m[0] ${String(sets.baseline.length)} · m[1] ${String(sets.delta.length)} · ${String(memories?.lines.length ?? 0)} memories)`,
+    ),
   )
   input.stores.saveBaselineState({
     ...state,

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { magicContextSource } from './seams.ts'
 
 /**
  * Channel A of "write into the live session stream": a one-off notice entry.
@@ -109,7 +110,7 @@ export function appendSessionNotice(input: SessionNoticeInput): SessionNoticeOut
     id: randomUUID(),
     role: 'user',
     content: [{ type: 'text', text: lines.join('\n') }],
-    source: { kind: 'magic-context', form: 'notice', summary },
+    source: magicContextSource(summary),
   }
   try {
     const seq = input.session.append('user/message', message, { surfaceOp: 'append' })

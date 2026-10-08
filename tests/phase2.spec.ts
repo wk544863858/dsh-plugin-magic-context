@@ -213,15 +213,26 @@ describe('magic-context dsh adapter (phase 2: historian, baseline, memories, eng
       // `magic-context`, form `notice`, whose one-line summary the transcript
       // shows collapsed. The real session admitted the plugin source, and the
       // notice is model-visible (it rides in the request text below).
-      const notice = agent.session.snapshotEvents().find(event =>
+      // Every synthetic node this adapter authors shares that shape, and none
+      // claims `{ kind: 'user' }`: a plugin node must not read as authored
+      // material to `session-title`'s first-message fold.
+      const authored = agent.session.snapshotEvents().filter(event =>
         event.type === 'user/message'
         && (event.data as { source?: { kind?: string } }).source?.kind === 'magic-context')
+      const sourceOf = (event: typeof authored[number]): Record<string, unknown> =>
+        (event.data as { source?: Record<string, unknown> }).source ?? {}
+      const notice = authored.find(event => String(sourceOf(event).summary).includes('compacted'))
       expect(notice).toBeDefined()
-      const noticeSource = (notice!.data as { source?: Record<string, unknown> }).source ?? {}
-      expect(noticeSource.form).toBe('notice')
-      expect(String(noticeSource.summary)).toContain('compacted 1 compartment')
-      expect(String(noticeSource.summary)).toContain('§C1§')
+      expect(sourceOf(notice!).form).toBe('notice')
+      expect(String(sourceOf(notice!).summary)).toContain('compacted 1 compartment')
+      expect(String(sourceOf(notice!).summary)).toContain('§C1§')
       expect(text).toContain('Magic Context · compacted 1 compartment')
+      // The baseline node is plugin-authored too — it replaces the first user
+      // node on the surface and stays model-only, exactly like the host's own
+      // replacement copies.
+      const baselineNode = authored.find(event => String(sourceOf(event).summary).includes('baseline'))
+      expect(baselineNode).toBeDefined()
+      expect(String(sourceOf(baselineNode!).summary)).toContain('m[0]')
 
       const afterPublish = openStores(dataDir)
       try {
@@ -274,6 +285,19 @@ describe('magic-context dsh adapter (phase 2: historian, baseline, memories, eng
           block.type === 'text' && (block.text ?? '').includes('§checkpoint§')))
       expect(checkpoint).toBeDefined()
       expect(JSON.stringify(checkpoint)).toMatch(/HISTORIAN-[ABC]-P1/)
+      // The checkpoint node carries the host's checkpoint source so the Chat
+      // client can correlate the compaction card to this transaction
+      // (conversation-nodes/command.ts:82-92). A node claiming
+      // `{ kind: 'user' }` — what this adapter wrote before — correlates with
+      // nothing.
+      const startEvent = events.find(event => event.type === 'compaction/start')
+      const checkpointEvent = events.find(event =>
+        event.type === 'user/message'
+        && (event.data as { source?: { kind?: string } }).source?.kind === 'compact-checkpoint')
+      expect(checkpointEvent).toBeDefined()
+      const checkpointSource = (checkpointEvent!.data as { source?: Record<string, unknown> }).source ?? {}
+      expect(checkpointSource.compactionId).toBe((startEvent!.data as { compactionId?: unknown }).compactionId)
+      expect((checkpointEvent!.surfaceOp as { op?: string }).op).toBe('replace')
 
       // compactIfNeeded is the pressure path: it reclaims and returns null.
       expect(await ctx.compaction!.compactIfNeeded(agent, 'pressure', new AbortController().signal)).toBeNull()

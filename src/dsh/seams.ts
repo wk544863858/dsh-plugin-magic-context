@@ -400,10 +400,54 @@ export function spanRequestMessages(
 }
 
 /**
+ * A plugin-injected context source — the ONE shape this adapter uses for every
+ * synthetic node it authors (baseline refresh, compartment publication, pass
+ * notices). `form`/`summary` are the host's display vocabulary
+ * (ui-chat ContextBody.tsx:551-591; `notice` is the only form that renders its
+ * summary on a collapsed row), and the producer label comes from `kind`
+ * (ui-chat conversation-nodes/event-projection.ts:60-76). The model keeps
+ * reading the full content either way: only the presentation changes.
+ *
+ * Synthetic nodes must NOT claim `{ kind: 'user' }`. They are model-only by
+ * contract (`session/src/surface.ts:80-85`: "replacement copies stay
+ * model-only"), but `session-title` folds the log for the first
+ * `source.kind === 'user'` message and would count a plugin-authored node as
+ * authored material.
+ * @param summary - the collapsed row's one-line account.
+ * @returns the durable source object.
+ */
+export function magicContextSource(summary: string): unknown {
+  return { kind: 'magic-context', form: 'notice', summary }
+}
+
+/**
+ * The host's compaction-checkpoint source (`@deepseek-ai/dsh-compaction`
+ * checkpoint.ts:33 `compactCheckpointSource`). Defined locally like every other
+ * seam constant: this adapter's runtime has zero `@deepseek-ai/*` imports (the
+ * patch-overlay loading mode). The marker is load-bearing — the Chat client
+ * correlates a compaction card to its checkpoint by exactly this kind
+ * (ui-chat conversation-nodes/command.ts:82-92) — so a checkpoint written with
+ * any other source is invisible to that correlation.
+ * @param compactionId - the owning `compaction/start … compaction/end` identity.
+ * @param sourceCommandId - the initiating manual command, when present.
+ * @returns the durable source object.
+ */
+export function compactCheckpointSource(compactionId: string, sourceCommandId?: string): unknown {
+  return {
+    kind: 'compact-checkpoint',
+    compactionId,
+    ...sourceCommandId === undefined ? {} : { sourceCommandId },
+  }
+}
+
+/**
  * Replace a surface RANGE with one fresh `user/message` node, citing every
  * shadowed event. The range is expressed as the seqs of its first and last
  * current node (surface positions — the validator accepts either numeric
  * order). Returns the replacement event's seq.
+ * @param source - the synthetic node's durable source: `magicContextSource`
+ * for this adapter's own nodes, `compactCheckpointSource` for a real
+ * compaction checkpoint. Never `{ kind: 'user' }` (see `magicContextSource`).
  */
 export function replaceSurfaceRange(
   session: Session,
@@ -412,12 +456,13 @@ export function replaceSurfaceRange(
   content: readonly ContentBlock[],
   shadowed: readonly SessionSeq[],
   id: string,
+  source: unknown,
 ): SessionSeq {
   const replacement = session.append('user/message', {
     id,
     role: 'user',
     content: [...content],
-    source: { kind: 'user' },
+    source,
   } as never, {
     surfaceOp: { op: 'replace', startSeq: firstSeq, endSeq: lastSeq },
     sourceEventSeqs: [...shadowed],

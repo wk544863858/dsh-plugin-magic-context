@@ -184,7 +184,7 @@ describe('journal integration (real agent loop)', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'mc-journal-int-'))
     const adapter = new WindowedAdapter([
       toolCallResponse('call-1', 'echo', { text: 'tool one' }),
-      toolCallResponse('call-2', 'ctx_reduce', { drop: '2' }),
+      toolCallResponse('call-2', 'ctx_reduce', { drop: '1' }),
       textResponse('queued'),
       textResponse('done'),
     ], 12)
@@ -235,13 +235,13 @@ describe('journal integration (real agent loop)', () => {
         expect(boot.data?.policy).toBeDefined()
         const reduceCall = reader.listJournal({ kinds: ['tool-call'] })
           .find(entry => entry.data?.tool === 'ctx_reduce')
-        expect(reduceCall?.data?.queued).toEqual([2])
+        expect(reduceCall?.data?.queued).toEqual([1])
         const landed = reader.listJournal({ kinds: ['drop-landed'] })[0]!
-        expect(landed.data?.tags).toEqual([2])
+        expect(landed.data?.tags).toEqual([1])
         const executePass = reader.listJournal({ kinds: ['pass'] })
           .find(entry => entry.data?.decision === 'execute')
         expect(executePass).toBeDefined()
-        expect(executePass?.data?.landed).toEqual([2])
+        expect(executePass?.data?.landed).toEqual([1])
         // Net-reclaim proof: the pass carries the surface estimate before/after.
         expect(typeof executePass?.data?.tokensBefore).toBe('number')
         expect(typeof executePass?.data?.tokensAfter).toBe('number')
