@@ -64,9 +64,11 @@ const EXPIRE_BATCH = 200
 const VERIFY_BATCH = 3
 /** Per-row content budget in the verification prompt. */
 const CONTENT_PREVIEW = 400
-/** Output cap. Reasoning models spend most of it before the JSON (the same
- * lesson as the historian's 8192 floor): 2048 truncated every live call. */
-const VERIFY_MAX_TOKENS = 8192
+/** Output cap. Reasoning is billed against it and a heavy thinking pass can
+ * consume the whole budget before emitting any text (measured: 8192 produced
+ * zero deltas on one tick and three verdicts on another). 32768 is the
+ * historian's ceiling — the same floor/ceiling reasoning applies here. */
+const VERIFY_MAX_TOKENS = 32768
 
 const VERIFY_INSTRUCTION = [
   'You are auditing project memories for a coding agent. For each memory, judge whether it is still true and useful for this project:',
