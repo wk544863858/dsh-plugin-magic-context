@@ -32,7 +32,10 @@
     "typecheck": "tsc --noEmit",
     "check:i18n": "node scripts/mc-i18n-check.mjs",
     "check:specs": "node scripts/sync-specs.mjs --check",
-    "sync:specs": "node scripts/sync-specs.mjs"
+    "sync:specs": "node scripts/sync-specs.mjs",
+    "test": "node scripts/mc-test.mjs --quick",
+    "test:full": "node scripts/mc-test.mjs --full",
+    "bootstrap:testhost": "node scripts/bootstrap-testhost.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",

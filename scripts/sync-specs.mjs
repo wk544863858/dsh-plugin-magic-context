@@ -15,18 +15,26 @@
  * checkout's mock adapter relatively — a path that only resolves where vitest
  * runs. Copying verbatim keeps the check trivially exact.
  *
- * Checkout location: MC_DSH_CHECKOUT (default: the documented temp checkout).
+ * Checkout location: `MC_DSH_CHECKOUT` (or `DSH_TESTHOST`), else the project-local
+ * snapshot at `<repo>/<tmp>/deepseek-harness-master`, else the legacy
+ * temp checkout. See `test-host.mjs`.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
-import { fileURLToPath } from 'node:url'
 
-const HERE = dirname(fileURLToPath(import.meta.url))
-const PKG = dirname(HERE)
+import { PKG, SUITE_TESTS, resolveTestHost } from './test-host.mjs'
+
 const REPO_TESTS = join(PKG, 'tests')
-const DEFAULT_CHECKOUT = '<path>'
-const CHECKOUT = process.env.MC_DSH_CHECKOUT ?? DEFAULT_CHECKOUT
-const CHECKOUT_TESTS = join(CHECKOUT, 'packages', 'test-support', 'mc-dsh-poc', 'tests')
+
+let HOST
+try {
+  HOST = resolveTestHost()
+} catch (error) {
+  console.error(`sync-specs: ${error.message}`)
+  process.exit(2)
+}
+const CHECKOUT = HOST.root
+const CHECKOUT_TESTS = join(CHECKOUT, SUITE_TESTS)
 
 const check = process.argv.includes('--check')
 const normalize = (text) => text.replace(/\r\n/g, '\n')
