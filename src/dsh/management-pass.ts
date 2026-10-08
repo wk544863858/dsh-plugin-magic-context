@@ -37,6 +37,7 @@ import {
   enumerateSurfaceNodes,
   enumerateSurfaceToolResults,
   magicContextSource,
+  pairingClosedWindow,
   replaceSurfaceRange,
   replaceToolResultContent,
   syntheticNodeId,
@@ -207,7 +208,14 @@ function publishCompartments(input: ManagementPassInput): {
       input.stores.markCompartmentLanded(input.sessionId, compartment.compartmentId, 0)
       continue
     }
-    const range = live.slice(positions[0] as number, (positions[positions.length - 1] as number) + 1)
+    const rawFirst = positions[0] as number
+    const rawLast = positions[positions.length - 1] as number
+    // Drop placeholders re-sequence a result to the surface tail while its
+    // tool_use stays inside the covered span; a range that cuts between them
+    // strands the result and the next provider request fails validation
+    // (live 2026-10-09). Widen to tool-pairing closure before cutting.
+    const span = pairingClosedWindow(live, rawFirst, rawLast)
+    const range = live.slice(span.first, span.last + 1)
     // m[0] is frozen at the head of the surface: folding it into a compartment
     // would leave the next refresh rewriting an unrelated `user` node as the
     // baseline. Defer instead; the guard clears once the surface moves on.
@@ -249,6 +257,9 @@ function publishCompartments(input: ManagementPassInput): {
         estTokensReclaimed: range.reduce((total, node) => total + estimateTokens(node.text), 0),
         nodeSeq: landedSeq,
         importance: compartment.importance,
+        ...((span.first !== rawFirst || span.last !== rawLast)
+          ? { pairingClosure: { rawFirst, rawLast, first: span.first, last: span.last } }
+          : {}),
       },
       input.sessionId,
     )

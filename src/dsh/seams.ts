@@ -285,6 +285,10 @@ export interface SurfaceNode {
   readonly isPlaceholder: boolean
   /** Whether an assistant node carries tool calls (tool-pairing boundary logic). */
   readonly hasToolCalls: boolean
+  /** The provider call ids an assistant node requests (publish pairing closure). */
+  readonly toolCallIds?: readonly string[]
+  /** The `toolCallId` of a `tool/result` node — the other half of the pairing closure. */
+  readonly toolCallId?: string
   /**
    * `data.source.kind` of the event, when it carries one. The baseline must
    * never attach to a `compact-checkpoint` node: a checkpoint is the host's (or
@@ -351,12 +355,20 @@ function sourceKindOf(event: SessionEvent): string | undefined {
   return typeof kind === 'string' ? kind : undefined
 }
 
+/** The provider call ids requested by a node's `tool-call` blocks. */
+function toolCallIdsOf(blocks: readonly ContentBlock[]): readonly string[] {
+  return blocks
+    .filter((block): block is Extract<ContentBlock, { type: 'tool-call' }> => block.type === 'tool-call')
+    .map(block => block.id)
+}
+
 /** One node view, or undefined when the event carries no surface message. */
 function surfaceNodeOf(seq: SessionSeq, event: SessionEvent): SurfaceNode | undefined {
   const role = ROLE_BY_TYPE[event.type]
   if (role === undefined) return undefined
   const text = textOfSurfaceEvent(event)
   const sourceKind = sourceKindOf(event)
+  const blocks = contentOf(event)
   return {
     seq,
     type: event.type,
@@ -364,7 +376,9 @@ function surfaceNodeOf(seq: SessionSeq, event: SessionEvent): SurfaceNode | unde
     text,
     hasText: text.trim().length > 0,
     isPlaceholder: PLACEHOLDER_PATTERN.test(text.trim()),
-    hasToolCalls: contentOf(event).some(block => block.type === 'tool-call'),
+    hasToolCalls: blocks.some(block => block.type === 'tool-call'),
+    ...(role === 'assistant' ? { toolCallIds: toolCallIdsOf(blocks) } : {}),
+    ...(event.type === 'tool/result' ? { toolCallId: event.data.message.toolCallId } : {}),
     ...sourceKind === undefined ? {} : { sourceKind },
   }
 }
@@ -385,6 +399,62 @@ export function enumerateSurfaceNodes(session: Session): SurfaceNode[] {
     if (node !== undefined) nodes.push(node)
   }
   return nodes
+}
+
+/**
+ * Widen the window `nodes[first..last]` until no live node pairs across the
+ * window boundary, and pull in stranded results — a `tool/result` whose
+ * `toolCallId` no live assistant requests can never pair again, so folding it
+ * into the same replacement is the only way to get it off the wire.
+ *
+ * Why this exists: the provider rejects a request whose `tool_result` blocks
+ * lack the matching `tool_use` in the preceding assistant message. Publishing
+ * a range that cuts a pair strands one side and the whole next turn fails with
+ * `invalid_request_error` — observed live 2026-10-09, when drop placeholders
+ * (`[dropped §N§]`) re-sequenced results to the surface tail moments before
+ * the publish computed its positional range.
+ *
+ * Widening is a positional range operation — everything between the old window
+ * and a pulled-in node is shadowed by the same replacement — so the window only
+ * ever grows and never splits. Orphans are pulled forward-only so the window
+ * cannot drift backward onto the frozen m[0] baseline at the surface head.
+ * @returns the closed window; callers must slice `nodes` with it.
+ */
+export function pairingClosedWindow(
+  nodes: readonly SurfaceNode[],
+  first: number,
+  last: number,
+): { first: number; last: number } {
+  const liveCallIds = new Set<string>()
+  for (const node of nodes) {
+    for (const id of node.toolCallIds ?? []) liveCallIds.add(id)
+  }
+  let lo = first
+  let hi = last
+  let changed = true
+  while (changed) {
+    changed = false
+    const windowCallIds = new Set<string>()
+    const windowResultIds = new Set<string>()
+    for (let i = lo; i <= hi; i += 1) {
+      const node = nodes[i]
+      if (node === undefined) continue
+      for (const id of node.toolCallIds ?? []) windowCallIds.add(id)
+      if (node.toolCallId !== undefined) windowResultIds.add(node.toolCallId)
+    }
+    for (let i = 0; i < nodes.length; i += 1) {
+      if (i >= lo && i <= hi) continue
+      const node = nodes[i]
+      if (node === undefined) continue
+      const pairsWithWindow = (node.toolCallId !== undefined && windowCallIds.has(node.toolCallId))
+        || (node.toolCallIds ?? []).some(id => windowResultIds.has(id))
+      const stranded = node.toolCallId !== undefined && !liveCallIds.has(node.toolCallId) && i > hi
+      if (!pairsWithWindow && !stranded) continue
+      if (i < lo) { lo = i; changed = true }
+      if (i > hi) { hi = i; changed = true }
+    }
+  }
+  return { first: lo, last: hi }
 }
 
 /**
