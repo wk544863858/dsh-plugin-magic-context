@@ -168,6 +168,12 @@ arithmetic.
 | `historian_chunk` (MC side) | replaced | adapter implements chunk planning directly (`src/dsh/historian.ts:380`) |
 | per-request projection seam | absent | it would violate the host's reconstructability rule (`host: packages/core/session/src/surface.ts:85`), which is why §B2 stays host-imposed |
 | `protected_tools` holds (per-tool kept results) | absent | not ported: the lane reached v0.46.0 through introduce → revert → restore → restrict, so it is not yet a stable target. This adapter's emergency model keeps the protection *window* (`clamp(contextWindow × 5%, 8k, 64k)`) plus a count floor (`src/dsh/emergency.ts`), which is what §B's reclaim lane needs |
+| `/ctx-recomp` recompaction | absent | the remedy for a bad compaction: our manual range lists `covered.has(node.seq)` as skippable (`src/dsh/compaction-engine.ts:299`), so already-digested history can never be redone. Highest-value gap — see `docs/dsh-plugin-hooks-coverage-2026-10-08.md` §4 |
+| watermark age reclaim (`tool-reclaim`) | absent | upstream auto-drops active tool tags at or below a watermark once they are worth `AGE_RECLAIM_MIN_TOKENS`; this adapter reclaims only on model stamps and in the force band |
+| historian calibration anchors (`reference-retrieval` + 60 seeds) | absent | our historian prompt carries instructions but no scored anchors, so importance calibration is guesswork here (and importance drives tier, decay and promotion) |
+| tokenizer calibration, image token estimate, decision calibration | absent | accounting is `chars/4` (`src/core/compartments.ts:59`); image-heavy sessions are underestimated |
+| `edit-marker` (trim old edit/write inputs) | absent | only tool-result content is rewritten (§B4), so giant `edit` diffs stay resident |
+| LKG replay + degraded-pass refusal | absent (structurally unnecessary) | the wire is derived from the append-only log: a failed pass appends nothing, so there is no degraded wire to replace. The premise would return with any in-place rewrite of landed messages — see the survey §3.4 |
 
 Adding any of these is a product decision, not an upgrade task: record the
 decision here before writing code. The current ruling — MC classifies its twelve
