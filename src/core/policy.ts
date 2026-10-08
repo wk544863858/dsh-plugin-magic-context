@@ -113,20 +113,27 @@ export function pressureWindowTokens(
 }
 
 export type PassDecision =
-  | { readonly kind: 'execute'; readonly reason: 'execute-threshold' | 'cache-ttl-expired' }
+  | { readonly kind: 'execute'; readonly reason: 'execute-threshold' | 'cache-ttl-expired' | 'wire-repair' }
   | { readonly kind: 'defer'; readonly reason: 'no-usage' | 'no-window' | 'below-threshold' }
 
 /**
  * One pass decision. Mirrors MC's scheduler: execute at the threshold, or
  * when the idle clock (last served response, not last prepared request)
  * passes the cache TTL; otherwise defer.
+ *
+ * Iron rule: the adapter must never leave the main wire unpairable. A
+ * stranded `tool_result` 400s every strict-provider request, so any live
+ * wire defect forces the execute band before pressure is even considered.
  */
 export function decidePass(args: {
   latest: UsageRecord | undefined
   pressure: number | undefined
   now: number
   policy: PressurePolicy
+  /** Live tool/results whose tool_use left the wire (see `wireStrandedResults`). */
+  wireDefects?: number
 }): PassDecision {
+  if ((args.wireDefects ?? 0) > 0) return { kind: 'execute', reason: 'wire-repair' }
   if (args.latest === undefined) return { kind: 'defer', reason: 'no-usage' }
   if (args.pressure === undefined) return { kind: 'defer', reason: 'no-window' }
   if (args.pressure >= args.policy.executeThreshold) return { kind: 'execute', reason: 'execute-threshold' }

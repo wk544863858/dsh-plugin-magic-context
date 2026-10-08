@@ -27,6 +27,7 @@ import {
   type Session,
   enumerateSurfaceToolResults,
   requestContextOf,
+  wireStrandedResults,
 } from './seams.ts'
 import { runManagementPass } from './management-pass.ts'
 import type { HistorianLlm } from './historian.ts'
@@ -225,7 +226,15 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
       // execute band — and every drop waiting behind it — would never open.
       const pressureWindow = pressureWindowTokens(context.contextWindow, policy)
       const pressure = pressurePercent(latest, pressureWindow)
-      const pass = decidePass({ latest, pressure, now: Date.now(), policy })
+      const pass = decidePass({
+        latest,
+        pressure,
+        now: Date.now(),
+        policy,
+        // Iron rule: a stranded tool_result 400s every strict-provider request,
+        // so it forces the execute band regardless of pressure.
+        wireDefects: wireStrandedResults(payload.agent.session).length,
+      })
       const usage = latest === undefined ? undefined : {
         input: latest.inputTokens ?? 0,
         cacheRead: latest.cacheReadTokens ?? 0,

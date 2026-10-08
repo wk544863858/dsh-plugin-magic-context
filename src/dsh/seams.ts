@@ -458,6 +458,37 @@ export function pairingClosedWindow(
 }
 
 /**
+ * Live `tool/result` nodes whose tool-call id no live assistant requests.
+ *
+ * One of these on the wire fails every strict-provider request
+ * (`invalid_request_error: unexpected tool_use_id ... found in tool_result
+ * blocks`) — the one adapter failure mode that can take the main conversation
+ * down. The decision layer forces the execute band when this is non-empty and
+ * the pass's repair lane sweeps it. Light on purpose: no text extraction, so
+ * the pre-step can afford it every model step.
+ */
+export function wireStrandedResults(session: Session): ReadonlyArray<{ seq: SessionSeq; callId: string }> {
+  const events = session.snapshotEvents()
+  const bySeq = new Map(events.map(event => [event.seq, event]))
+  const liveCallIds = new Set<string>()
+  for (const seq of session.surface.nodes) {
+    const event = bySeq.get(seq)
+    if (event?.type !== 'assistant/message') continue
+    for (const block of contentOf(event)) {
+      if (block.type === 'tool-call') liveCallIds.add(block.id)
+    }
+  }
+  const stranded: Array<{ seq: SessionSeq; callId: string }> = []
+  for (const seq of session.surface.nodes) {
+    const event = bySeq.get(seq)
+    if (event?.type !== 'tool/result') continue
+    const callId = event.data.message.toolCallId
+    if (!liveCallIds.has(callId)) stranded.push({ seq, callId })
+  }
+  return stranded
+}
+
+/**
  * Node views for EXPLICIT seqs, shadowed events included. The recomp lane
  * re-digests history that already left the surface (a replacement cites the
  * events it shadowed, and they stay in the log forever), so

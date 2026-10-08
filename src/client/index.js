@@ -626,6 +626,7 @@ window.__ModuleLoader__.load({
         'record.compacted': '压缩上下文',
         'record.baselineHard': '基线重建 (HARD)',
         'record.emergencyDrop': '丢弃上下文',
+        'record.wireRepaired': '线材修复',
         'record.dropLanded': '丢弃落地',
         'record.reduceQueued': '回收入队',
         'record.expandRestored': '恢复原文',
@@ -654,6 +655,7 @@ window.__ModuleLoader__.load({
         'detail.nodes': '{n} 节点',
         'detail.reclaimed': '回收 {n} tok',
         'detail.droppedToolOutputs': '丢弃 {n} 条工具输出',
+        'detail.wireSwept': '清除 {n} 条失配结果',
         'detail.toolOutputs': '{n} 条工具输出',
         'detail.backfilled': '补记中断的历史归档',
         'detail.ttlExpired': 'TTL 归档 {n}',
@@ -711,6 +713,7 @@ window.__ModuleLoader__.load({
         'record.compacted': 'Context compacted',
         'record.baselineHard': 'Baseline rebuild (HARD)',
         'record.emergencyDrop': 'Emergency drop',
+        'record.wireRepaired': 'Wire repair',
         'record.dropLanded': 'Drop landed',
         'record.reduceQueued': 'Reclaim queued',
         'record.expandRestored': 'Content restored',
@@ -738,6 +741,7 @@ window.__ModuleLoader__.load({
         'detail.nodes': '{n} nodes',
         'detail.reclaimed': 'reclaimed {n} tok',
         'detail.droppedToolOutputs': 'dropped {n} tool outputs',
+        'detail.wireSwept': 'swept {n} stranded results',
         'detail.toolOutputs': '{n} tool outputs',
         'detail.backfilled': 'backfilled the interrupted archive',
         'detail.ttlExpired': 'TTL expired {n}',
@@ -979,6 +983,14 @@ window.__ModuleLoader__.load({
           return record('drop', 'record.emergencyDrop', undefined, [
             dropped === undefined ? '' : t('detail.droppedToolOutputs', { n: fmtInt(dropped) }),
             data !== undefined && typeof data.reason === 'string' ? data.reason : '',
+          ])
+        }
+        case 'wire-repair': {
+          // A wire defect means the adapter once broke pairing on the live
+          // surface; the sweep is the fix, and the row is the receipt.
+          const swept = numberField(data, 'swept')
+          return record('maintain', 'record.wireRepaired', undefined, [
+            swept === undefined ? '' : t('detail.wireSwept', { n: fmtInt(swept) }),
           ])
         }
         case 'drop-landed': {

@@ -45,6 +45,7 @@ const MAJOR_KINDS = [
   'pass',
   'drop-landed',
   'compartment-published',
+  'wire-repair',
   'historian',
   'baseline',
   'emergency-reclaim',
@@ -761,6 +762,7 @@ function computeMetrics(rows) {
 const SUMMED_KINDS = {
   'compartment-published': { group: 'compartments', counter: 'published', sums: ['coveredTokens', 'nodes'] },
   'emergency-reclaim': { group: 'emergency', counter: 'events', sums: ['dropped', 'protected', 'retried'] },
+  'wire-repair': { group: 'wire', counter: 'events', sums: ['swept', 'remaining'] },
   'memory-recall': { group: 'memoryRecall', counter: 'total', sums: ['rows', 'budgetTokens', 'usedTokens'] },
 }
 switch (row.kind) {

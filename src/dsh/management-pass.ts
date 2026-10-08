@@ -41,6 +41,7 @@ import {
   replaceSurfaceRange,
   replaceToolResultContent,
   syntheticNodeId,
+  wireStrandedResults,
   type ContentBlock,
   type Session,
   type SessionSeq,
@@ -128,6 +129,8 @@ export interface ManagementPassResult {
   readonly landedDrops: readonly number[]
   readonly published: readonly number[]
   readonly forceDropped: number
+  /** Stranded tool/results swept off the wire this pass (the iron-rule repair). */
+  readonly wireRepaired: number
   readonly baselineUpdated: boolean
   readonly historianStarted: boolean
   /**
@@ -464,6 +467,47 @@ function refreshBaseline(
   return true
 }
 
+/** Upper bound of wire repairs per pass, so a pathological surface cannot monopolize the bust. */
+const WIRE_REPAIR_CAP = 16
+
+/**
+ * The iron-rule repair: sweep live `tool/result` nodes whose tool_use left
+ * the wire. One of them 400s every strict-provider request — the only adapter
+ * failure mode that can take the whole conversation down — so they are
+ * replaced with a tiny user note no matter what else this pass does. The
+ * original content stays recoverable in the event log (the replacement cites
+ * it); only the wire copy goes.
+ * @returns the number of results swept this pass.
+ */
+function repairWirePairing(input: ManagementPassInput): number {
+  const stranded = wireStrandedResults(input.session)
+  if (stranded.length === 0) return 0
+  const sweep = stranded.slice(0, WIRE_REPAIR_CAP)
+  for (const defect of sweep) {
+    replaceSurfaceRange(
+      input.session,
+      defect.seq,
+      defect.seq,
+      [{ type: 'text', text: '[magic-context] removed a tool result whose call left the wire' }],
+      [defect.seq],
+      syntheticNodeId(`mc-wire-repair-${String(defect.seq)}`),
+      magicContextSource(`Magic Context · wire repair · removed stranded tool result ${String(defect.seq)}`),
+    )
+  }
+  input.journal?.warn(
+    'wire-repair',
+    `swept ${String(sweep.length)} stranded tool result(s) off the wire`,
+    {
+      swept: sweep.length,
+      seqs: sweep.map(defect => defect.seq),
+      callIds: sweep.map(defect => defect.callId),
+      remaining: stranded.length - sweep.length,
+    },
+    input.sessionId,
+  )
+  return sweep.length
+}
+
 /**
  * Run the management pass. Every step is independently guarded: a failure in
  * one must not wedge the turn (MC per-turn fail-open), and the next pass
@@ -471,11 +515,13 @@ function refreshBaseline(
  */
 export function runManagementPass(input: ManagementPassInput): ManagementPassResult {
   const landedDrops: number[] = []
+  let wireRepaired = 0
   const tokensBefore = surfaceTokens(input.session)
   const result: ManagementPassResult = {
     landedDrops,
     published: [],
     forceDropped: 0,
+    wireRepaired: 0,
     baselineUpdated: false,
     historianStarted: false,
     tokensBefore,
@@ -516,6 +562,10 @@ export function runManagementPass(input: ManagementPassInput): ManagementPassRes
         input.sessionId,
       )
     }
+
+    // 1.5 Wire-pairing repair (the iron rule): sweep stranded results off the
+    // wire before anything else reads the surface.
+    wireRepaired = repairWirePairing(input)
 
     // 3. Force-band reclaim (before publishing, so a compartment range that
     //    lost its content to a drop still replaces the same nodes).
@@ -596,6 +646,7 @@ export function runManagementPass(input: ManagementPassInput): ManagementPassRes
       ...result,
       published,
       forceDropped,
+      wireRepaired,
       baselineUpdated,
       historianStarted,
       tokensAfter: surfaceTokens(input.session),

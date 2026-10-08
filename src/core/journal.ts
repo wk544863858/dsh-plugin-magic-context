@@ -35,6 +35,7 @@ export type JournalKind =
   | 'historian'
   | 'baseline'
   | 'emergency-reclaim'
+  | 'wire-repair'
   | 'memory-recall'
   | 'search-hint'
   | 'memory-promote'

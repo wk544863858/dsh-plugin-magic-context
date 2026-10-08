@@ -128,6 +128,7 @@ const events = [
   { kind: 'compartment-published', at: 4, summary: '', data: { nodes: 12, estTokensReclaimed: 9000 } },
   { kind: 'baseline', at: 5, summary: '', data: { mode: 'hard', bytes: 2048, estTokens: 512 } },
   { kind: 'emergency-reclaim', at: 6, summary: '', data: { dropped: 3, reason: 'pressure' } },
+  { kind: 'wire-repair', at: 6.5, summary: '', data: { swept: 2, seqs: [12, 13], remaining: 0 } },
   { kind: 'drop-landed', at: 7, summary: '', data: { count: 4, estTokens: 1200 } },
   { kind: 'historian', at: 8, summary: '', data: { phase: 'stored', compartmentId: 3, facts: 9, nodes: 2, durationMs: 9700 } },
   { kind: 'historian', at: 9, summary: '', data: { phase: 'failed', reason: 'timeout' } },
@@ -140,9 +141,10 @@ check('每个分支都有记录（boot 为噪声）', zhRecords.length === event
 check('英文渲染无中文残留', enRecords.every((r) => !CJK.test(r.text + r.detail)),
   enRecords.filter((r) => CJK.test(r.text + r.detail)).map((r) => r.text).join(', ') || `${enRecords.length} 行`)
 check('中文渲染与旧文案一致', zhRecords[0].text === '执行回收' && zhRecords[0].detail.includes('−70.7k tok')
-  && zhRecords[8].text === '历史归档失败')
+  && zhRecords[6].text === '线材修复' && zhRecords[9].text === '历史归档失败')
 check('英文标题正确', enRecords[0].text === 'Reclaim pass' && enRecords[3].text === 'Context compacted'
-  && enRecords[7].text === 'Compartment stored' && enRecords[9].text === 'Maintenance sweep',
+  && enRecords[6].text === 'Wire repair' && enRecords[8].text === 'Compartment stored'
+  && enRecords[10].text === 'Maintenance sweep',
   enRecords.map((r) => r.text).join(' | '))
 
 const noise = noiseLine([
