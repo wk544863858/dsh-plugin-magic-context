@@ -167,7 +167,10 @@ arithmetic.
 | per-request projection seam | absent | it would violate the host's reconstructability rule (`host: packages/core/session/src/surface.ts:85`), which is why §B2 stays host-imposed |
 
 Adding any of these is a product decision, not an upgrade task: record the
-decision here before writing code.
+decision here before writing code. The current ruling — MC classifies its twelve
+dreamer tasks by transport (seven need an agent tool loop, four are one-shot, one
+is host-only), only `promote-primers` is queued, and vector backfill stays off —
+is `docs/dsh-plugin-dreamer-vector-decision-2026-10-08.md`.
 
 ## D. Intentional deviations — do not "fix" on upgrade
 
