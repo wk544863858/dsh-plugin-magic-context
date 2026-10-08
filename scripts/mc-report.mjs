@@ -752,7 +752,13 @@ function computeMetrics(rows) {
       m.errors.push({ at: row.at, kind: row.kind, summary: row.summary, level: row.level })
     }
 
-    switch (row.kind) {
+    /** Kinds whose metrics are plain numeric sums (see the switch's default arm). */
+const SUMMED_KINDS = {
+  'compartment-published': { group: 'compartments', counter: 'published', sums: ['coveredTokens', 'nodes'] },
+  'emergency-reclaim': { group: 'emergency', counter: 'events', sums: ['dropped', 'protected', 'retried'] },
+  'memory-recall': { group: 'memoryRecall', counter: 'total', sums: ['rows', 'budgetTokens', 'usedTokens'] },
+}
+switch (row.kind) {
       case 'pass': {
         m.pass.total += 1
         const decision = toText(d.decision)
@@ -810,12 +816,6 @@ function computeMetrics(rows) {
         if (typeof d.sessionRoot === 'string') m.drift.sessionRoots.add(d.sessionRoot)
         break
       }
-      case 'compartment-published': {
-        m.compartments.published += 1
-        m.compartments.coveredTokens += toNum(d.coveredTokens) ?? 0
-        m.compartments.nodes += toNum(d.nodes) ?? 0
-        break
-      }
       case 'baseline': {
         m.baseline.total += 1
         const mode = toText(d.mode)
@@ -852,13 +852,7 @@ function computeMetrics(rows) {
         }
         break
       }
-      case 'emergency-reclaim': {
-        m.emergency.events += 1
-        m.emergency.dropped += toNum(d.dropped) ?? 0
-        m.emergency.protected += toNum(d.protected) ?? 0
-        m.emergency.retried += toNum(d.retried) ?? 0
-        break
-      }
+
       case 'tool-call': {
         m.toolCall.total += 1
         bump(m.toolCall.byTool, toText(d.tool))
@@ -879,20 +873,22 @@ function computeMetrics(rows) {
         if (ms !== null) m.toolCall.durations.push(ms)
         break
       }
-      case 'memory-recall': {
-        m.memoryRecall.total += 1
-        m.memoryRecall.rows += toNum(d.rows) ?? 0
-        m.memoryRecall.budgetTokens += toNum(d.budgetTokens) ?? 0
-        m.memoryRecall.usedTokens += toNum(d.usedTokens) ?? 0
-        break
-      }
+
       case 'engine': {
         m.engine.total += 1
         bump(m.engine.byAction, toText(d.action))
         break
       }
       default: {
-        bump(m.otherKinds, row.kind)
+        // Kinds whose metrics are plain numeric sums are table-driven.
+        const summed = SUMMED_KINDS[row.kind]
+        if (summed === undefined) {
+          bump(m.otherKinds, row.kind)
+          break
+        }
+        const bucket = m[summed.group]
+        bucket[summed.counter] += 1
+        for (const field of summed.sums) bucket[field] += toNum(d[field]) ?? 0
         break
       }
     }
