@@ -172,8 +172,11 @@ arithmetic.
 Adding any of these is a product decision, not an upgrade task: record the
 decision here before writing code. The current ruling — MC classifies its twelve
 dreamer tasks by transport (seven need an agent tool loop, four are one-shot, one
-is host-only), only `promote-primers` is queued, and vector backfill stays off —
-is `docs/dsh-plugin-dreamer-vector-decision-2026-10-08.md`.
+is host-only), and that host-only task, `promote-primers`, turns out to need the
+whole primer pipeline (producer prompt, tables, clustering, consumer), so **no
+task is queued**; vector backfill stays off — is
+`docs/dsh-plugin-dreamer-vector-decision-2026-10-08.md` (its §6 corrects the
+earlier "add promote-primers next" reading).
 
 ## D. Intentional deviations — do not "fix" on upgrade
 
