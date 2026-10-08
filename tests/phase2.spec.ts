@@ -261,6 +261,82 @@ describe('magic-context dsh adapter (phase 2: historian, baseline, memories, eng
     }
   })
 
+  it('cites every node in the replaced range, not only the covered subset', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'mc-p2-range-'))
+    const { ctx, agent } = await boot({ dataDir })
+    const sessionId = agent.session.id
+    try {
+      send(agent, 'range one')
+      await idle(ctx, agent)
+
+      const reader = openStores(dataDir)
+      let compartmentId = 0
+      let first = 0
+      let skipped = 0
+      let last = 0
+      let rangeLength = 0
+      try {
+        await until(() => reader.listCompartments(sessionId).length >= 1)
+        // The historian's own compartment covers these very nodes; retire it so
+        // this case exercises only the planted range.
+        for (const compartment of reader.listUnlandedCompartments(sessionId)) {
+          reader.markCompartmentLanded(sessionId, compartment.compartmentId, 0)
+        }
+        const surface = [...agent.session.surface.nodes]
+        expect(surface.length).toBeGreaterThanOrEqual(4)
+        // Index 2 is NOT covered: the host shadows the whole positional range,
+        // so citing only the endpoints used to make the append throw and fail the
+        // entire pass (observed live at 68 consecutive passes).
+        first = surface[1] as number
+        skipped = surface[2] as number
+        last = surface[surface.length - 1] as number
+        rangeLength = surface.length - 1
+        const created = reader.allocateCompartment(sessionId, {
+          tiers: { p1: 'RANGE-P1', p2: 'RANGE-P2', p3: 'RANGE-P3', p4: 'RANGE-P4' },
+          importance: 70,
+          facts: [],
+          events: ['RANGE-event'],
+        }, { startSeq: first, endSeq: last, seqs: [first, last], tokens: 12 }, 1, Date.now())
+        compartmentId = created.compartmentId
+      } finally {
+        reader.close()
+      }
+
+      send(agent, 'range two')
+      await idle(ctx, agent)
+
+      const placeholder = agent.session.snapshotEvents().findLast(event =>
+        event.type === 'user/message'
+        && (event.data as { content?: Array<{ text?: string }> }).content?.[0]?.text
+          === compactedPlaceholder(compartmentId))
+      expect(placeholder).toBeDefined()
+      const cited = [...(placeholder?.sourceEventSeqs ?? [])]
+      expect(cited).toContain(first)
+      expect(cited).toContain(skipped)
+      expect(cited).toContain(last)
+      expect(cited.length).toBe(rangeLength)
+
+      const after = openStores(dataDir)
+      try {
+        expect(after.listUnlandedCompartments(sessionId)).toEqual([])
+        const published = after.listJournal({ kinds: ['compartment-published'], limit: 50 })
+          .find(entry => entry.data?.compartmentId === compartmentId)
+        expect(published?.data?.nodes).toBe(rangeLength)
+        const failures = after.listJournal({ kinds: ['error'], limit: 50 })
+          .filter(entry => String(entry.summary).includes('surface replace'))
+        expect(failures).toEqual([])
+      } finally {
+        after.close()
+      }
+    } finally {
+      try {
+        rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 40 })
+      } catch {
+        /* OS temp sweep covers residue */
+      }
+    }
+  })
+
   it('writes a real checkpoint protocol on manual compaction and nothing on pressure', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'mc-p2-b-'))
     const { ctx, agent } = await boot({ dataDir })
