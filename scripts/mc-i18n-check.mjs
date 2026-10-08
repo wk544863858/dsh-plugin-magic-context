@@ -12,7 +12,7 @@
  *     zh dictionary, and `apply` wires the locale namespace into every slot it
  *     registers.
  *
- * Usage: node packages/dsh-plugin/scripts/mc-i18n-check.mjs
+ * Usage: node scripts/mc-i18n-check.mjs
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'

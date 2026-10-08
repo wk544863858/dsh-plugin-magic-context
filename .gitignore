@@ -1,2 +1,15 @@
-# Build output (tsc -p tsconfig.build.json + copy-client). Rebuild with `pnpm build`.
+# Dependencies (npm; the lockfile is committed)
+node_modules/
+
+# Build output (tsc -p tsconfig.build.json + copy-client). Rebuild with `npm run build`.
 lib/
+
+# Test/coverage residue
+coverage/
+
+# Local scratch: extracted snapshots, keep-out areas, throwaway databases
+.tmp-*/
+
+# Logs
+*.log
+npm-debug.log*

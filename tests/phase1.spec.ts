@@ -23,14 +23,14 @@ import ToolRuntime, { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import { MockAdapter, textResponse, toolCallResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
+import { MockAdapter, textResponse, toolCallResponse } from './helpers/mock-adapter.ts'
 import mcDshPlugin, {
   DEFAULT_POLICY,
   openStores,
   reclaimForEmergency,
-} from '<path>'
-import { parseTagRanges, pressureWindowTokens } from '<path>'
-import { enumerateSurfaceToolResults } from '<path>'
+} from '../src/index.ts'
+import { parseTagRanges, pressureWindowTokens } from '../src/core/policy.ts'
+import { enumerateSurfaceToolResults } from '../src/dsh/seams.ts'
 
 type AnyMessage = { role: string; content: Array<{ type: string; text?: string }> }
 

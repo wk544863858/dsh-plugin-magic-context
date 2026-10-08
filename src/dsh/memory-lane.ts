@@ -14,7 +14,7 @@ import { openMemoryBridge, DEFAULT_SHARE_CATEGORIES, defaultMemoryDbPath, resolv
 import { openMemoryWriter, type MemoryWriter } from '../core/memory-write.ts'
 import { openMemorySearch, type MemorySearch, type MemorySearchHit } from '../core/memory-search.ts'
 import { cosineSimilarity, defaultEmbeddingCacheDir, openLocalEmbedder } from '../core/embedding-local.ts'
-import { defineCtxMemoryTool } from './tool-bridge.ts'
+import { defineCtxMemoryTool, type LocalDefineTool } from './tool-bridge.ts'
 import type { MagicContextDshConfig, MagicContextDshConfigDefineTool } from './config.ts'
 import { liveBoolean } from './volatile.ts'
 
@@ -264,54 +264,62 @@ export function openMemoryLane(
     memorySearchForTool,
     searchForSession,
     describeMemoryWrite,
-    ctxMemoryRegistration: ({ activePolicy, defineTool, journal }) => ({
-      ...defineTool === undefined ? {} : { defineTool },
-      ...journal === undefined ? {} : { journal },
-      ...memoryWriter === undefined || config.memory?.write === false ? {} : { writer: memoryWriter },
-      ...memorySearchForTool === undefined ? {} : { search: memorySearchForTool },
-      // A2: ctx_memory search suppresses rows this session's injected
-      // block already renders (MC getVisibleMemoryIds).
-      visibleMemoryIdsOf: exec => {
-        const sessionId = exec?.agent?.session?.id
-        return sessionId === undefined ? undefined : visibleMemoryIdsBySession.get(sessionId)
-      },
-      resolveIdentity: exec => {
-        const spec = config.memory?.project ?? exec?.agent?.session.header.cwd
-        return spec === undefined ? undefined : resolveIdentitySpec(spec)
-      },
-      // The `project` argument's resolver: an explicit absolute path (another
-      // project the model is working on) through the same normalizer. DSH has
-      // no per-turn working directory, so the model naming the project is the
-      // only cross-project scoping signal we have.
-      resolveIdentityOf: spec => {
-        try {
-          return resolveIdentitySpec(spec)
-        } catch {
-          return undefined
-        }
-      },
-      recall: (request, exec) => {
-        // The read path must resolve the SAME identity the writes use. The
-        // tool hands us the identity it already resolved (`request.identity`,
-        // set by tool-bridge); otherwise fall back to the configured project
-        // or this run's cwd, resolved through the same normalizer.
-        //
-        // This closure used to reference a free `exec` — and because `&&`
-        // binds tighter than `?:`, `config.memory?.project === undefined &&
-        // exec.agent...` evaluated the right-hand side in the DEFAULT
-        // configuration, throwing `ReferenceError: exec is not defined` on
-        // every ctx_memory call (measured live). Configuring memory.project
-        // short-circuited it, which is why the tests never saw it.
-        const spec = (request as { identity?: string }).identity
-          ?? config.memory?.project
-          ?? (exec === undefined ? undefined : exec.agent?.session.header.cwd)
-        const project = spec === undefined ? undefined : resolveIdentitySpec(spec)
-        // A fenced/unreadable store must say so: `{ empty: true }` would read
-        // as "this project has no memories", which is a different fact.
-        if (!memoryRecall.status.ok) {
-          return { lines: [], digest: 'unavailable', reason: String(memoryRecall.status.detail) }
-        }
-        const recalled = memoryRecall.recall({
+    ctxMemoryRegistration: ({ activePolicy, defineTool, journal }) => {
+      // The registration is only reached when the bridge opened (index.ts wires
+      // it behind the same condition); narrowing here keeps the closures below
+      // reading a defined bridge instead of re-testing it three times.
+      if (memoryRecall === undefined) {
+        throw new Error('ctx_memory registration without a memory bridge')
+      }
+      const bridge = memoryRecall
+      return {
+        ...defineTool === undefined ? {} : { defineTool: defineTool as LocalDefineTool },
+        ...journal === undefined ? {} : { journal },
+        ...memoryWriter === undefined || config.memory?.write === false ? {} : { writer: memoryWriter },
+        ...memorySearchForTool === undefined ? {} : { search: memorySearchForTool },
+        // A2: ctx_memory search suppresses rows this session's injected
+        // block already renders (MC getVisibleMemoryIds).
+        visibleMemoryIdsOf: exec => {
+          const sessionId = exec?.agent?.session?.id
+          return sessionId === undefined ? undefined : visibleMemoryIdsBySession.get(sessionId)
+        },
+        resolveIdentity: exec => {
+          const spec = config.memory?.project ?? exec?.agent?.session.header?.cwd
+          return spec === undefined ? undefined : resolveIdentitySpec(spec)
+        },
+        // The `project` argument's resolver: an explicit absolute path (another
+        // project the model is working on) through the same normalizer. DSH has
+        // no per-turn working directory, so the model naming the project is the
+        // only cross-project scoping signal we have.
+        resolveIdentityOf: spec => {
+          try {
+            return resolveIdentitySpec(spec)
+          } catch {
+            return undefined
+          }
+        },
+        recall: (request, exec) => {
+          // The read path must resolve the SAME identity the writes use. The
+          // tool hands us the identity it already resolved (`request.identity`,
+          // set by tool-bridge); otherwise fall back to the configured project
+          // or this run's cwd, resolved through the same normalizer.
+          //
+          // This closure used to reference a free `exec` — and because `&&`
+          // binds tighter than `?:`, `config.memory?.project === undefined &&
+          // exec.agent...` evaluated the right-hand side in the DEFAULT
+          // configuration, throwing `ReferenceError: exec is not defined` on
+          // every ctx_memory call (measured live). Configuring memory.project
+          // short-circuited it, which is why the tests never saw it.
+          const spec = (request as { identity?: string }).identity
+            ?? config.memory?.project
+            ?? (exec === undefined ? undefined : exec.agent?.session.header?.cwd)
+          const project = spec === undefined ? undefined : resolveIdentitySpec(spec)
+          // A fenced/unreadable store must say so: `{ empty: true }` would read
+          // as "this project has no memories", which is a different fact.
+          if (!bridge.status.ok) {
+            return { lines: [], digest: 'unavailable', reason: String(bridge.status.detail) }
+          }
+          const recalled = bridge.recall({
           ...project === undefined ? {} : { project },
           workspaceProjects: config.memory?.workspaceProjects,
           shareCategories: config.memory?.shareCategories,
@@ -331,6 +339,7 @@ export function openMemoryLane(
           ids: [...recalled.rows, ...recalled.newRows].map(row => row.id),
         }
       },
-    }),
+      }
+    },
   }
 }

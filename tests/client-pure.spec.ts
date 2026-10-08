@@ -10,9 +10,10 @@
  * React) and pins the formatting rules.
  */
 import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
-const CLIENT = '<path>'
+const CLIENT = fileURLToPath(new URL('../src/client/index.js', import.meta.url))
 
 let definition: { factory?: (require: (name: string) => unknown) => Record<string, unknown> } | null = null
 const window = { __ModuleLoader__: { load: (def: unknown) => { definition = def as typeof definition } } }

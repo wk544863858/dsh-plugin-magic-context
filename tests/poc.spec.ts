@@ -26,11 +26,11 @@ import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { fallbackSessionTitle } from '@deepseek-ai/dsh-session-title'
-import { MockAdapter, textResponse, toolCallResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
+import { MockAdapter, textResponse, toolCallResponse } from './helpers/mock-adapter.ts'
 import mcDshPlugin, {
   openStores,
   replaceToolResultWithPlaceholder,
-} from '<path>'
+} from '../src/index.ts'
 
 type AnyMessage = { role: string; content: Array<{ type: string; text?: string }> }
 

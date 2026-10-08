@@ -13,7 +13,7 @@ import {
   decideReduceNudge,
   messageHasDeskSection,
   ReduceNudgeTracker,
-} from '<path>'
+} from '../src/dsh/reduce-guidance.ts'
 
 describe('nudgeBand — exact MC thresholds', () => {
   it('stays quiet below the 60k tail / 25k undropped floors', () => {

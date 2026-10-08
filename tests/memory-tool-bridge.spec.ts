@@ -47,14 +47,14 @@ import ToolRuntime, { defineTool } from '@deepseek-ai/dsh-tools'
 import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import { MockAdapter, textResponse, toolCallResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
-import mcDshPlugin from '<path>'
-import { openMemoryBridge } from '<path>'
-import { openMemoryWriter } from '<path>'
+import { MockAdapter, textResponse, toolCallResponse } from './helpers/mock-adapter.ts'
+import mcDshPlugin from '../src/index.ts'
+import { openMemoryBridge } from '../src/core/memory-bridge.ts'
+import { openMemoryWriter } from '../src/core/memory-write.ts'
 import {
   defineCtxMemoryTool,
   type MemoryToolRunContext,
-} from '<path>'
+} from '../src/dsh/tool-bridge.ts'
 import { makeMemoryDb as makeBareMemoryDb } from './helpers/memory-db'
 
 const IDENTITY = 'git:1111111111111111111111111111111111111111'

@@ -26,9 +26,9 @@ import ToolRuntime from '@deepseek-ai/dsh-tools'
 import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import { MockAdapter, textResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
-import mcDshPlugin from '<path>'
-import { resolveIdentitySpec } from '<path>'
+import { MockAdapter, textResponse } from './helpers/mock-adapter.ts'
+import mcDshPlugin from '../src/index.ts'
+import { resolveIdentitySpec } from '../src/core/memory-bridge.ts'
 import { makeMemoryDb as makeBareMemoryDb } from './helpers/memory-db'
 
 const tempDirs: string[] = []

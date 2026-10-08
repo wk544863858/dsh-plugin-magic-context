@@ -6,9 +6,9 @@
  * historian 终止事件 / promotion 字段契约与纯追加 / epoch 稳定 / 权威守卫 / 契约版本 fence。
  *
  * 用法:
- *   node packages/dsh-plugin/scripts/mc-acceptance.mjs
- *   node packages/dsh-plugin/scripts/mc-acceptance.mjs --json
- *   node packages/dsh-plugin/scripts/mc-acceptance.mjs --hours 24 --dsh-db <path> --mc-db <path>
+ *   node scripts/mc-acceptance.mjs
+ *   node scripts/mc-acceptance.mjs --json
+ *   node scripts/mc-acceptance.mjs --hours 24 --dsh-db <path> --mc-db <path>
  *
  * 退出码: 0 = 无 FAIL（可能有 WARN）；1 = 至少一条 FAIL；2 = 参数/环境错误。
  * 安全性: 两个库都以 readOnly 打开，绝不写入。绝不打印记忆原文（只打印 id/类别/计数）。
@@ -22,7 +22,6 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG = resolve(HERE, '..');
-const REPO = resolve(PKG, '..', '..');
 
 function parseArgs(argv) {
   const out = { json: false, hours: 24, dshDb: null, mcDb: null };

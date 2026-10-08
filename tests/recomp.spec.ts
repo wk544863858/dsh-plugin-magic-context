@@ -10,17 +10,17 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { Compartment, CompartmentDraft } from '<path>'
-import type { Journal } from '<path>'
-import { DEFAULT_POLICY } from '<path>'
-import { openStores } from '<path>'
+import type { Compartment, CompartmentDraft } from '../src/core/compartments.ts'
+import type { Journal } from '../src/core/journal.ts'
+import { DEFAULT_POLICY } from '../src/core/policy.ts'
+import { openStores } from '../src/index.ts'
 import {
   parseRecompSelection,
   recompactCompartments,
   registerCtxRecompCommand,
   selectRecompTargets,
   snapRangeToCompartments,
-} from '<path>'
+} from '../src/dsh/recomp.ts'
 import { scriptLlm } from './helpers/llm-fake'
 
 const tempDirs: string[] = []

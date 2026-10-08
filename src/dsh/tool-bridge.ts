@@ -23,6 +23,7 @@
  * placeholder's cited source event (durable, content-only replacement).
  */
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { Journal } from '../core/journal.ts'
 import type { MemoryWriter } from '../core/memory-write.ts'
 import { parseTagRanges } from '../core/policy.ts'
@@ -34,24 +35,50 @@ import {
   type SurfaceToolNode,
 } from './seams.ts'
 
-/** The subset of `defineTool`'s option shape this package authors. */
-export interface LocalToolOptions {
-  readonly name: string
-  readonly description: string
-  readonly parameters: Record<string, { readonly type: string; readonly required?: boolean }>
-  readonly output: {
-    readonly schema: { readonly type: 'json' }
-    readonly render: (args: never, value: unknown) => ContentBlock[]
-  }
-  readonly execute: (args: never, exec: LocalToolRunContext) => Promise<unknown>
+/** One authored tool parameter: the JSON-schema keywords this package uses. */
+export interface LocalToolParameter {
+  readonly type: string
+  readonly required?: boolean
+  readonly enum?: readonly string[]
+  readonly items?: LocalToolParameter
+  readonly description?: string
 }
 
-/** The execution identity these tools read (a structural subset of ToolRunContext). */
-export interface LocalToolRunContext {
-  readonly callId: string
+/**
+ * The subset of `defineTool`'s option shape this package authors, generic over
+ * the tool's validated arguments.
+ *
+ * Arguments are checked at the tool boundary — by {@link defineToolLocal}
+ * below, or by the host's own `defineTool` when the profile supplies one — so
+ * inside a tool body they carry the declared type instead of an implicit
+ * `any`. `exec` is the host's own `ToolRunContext`: the runtime always passes a
+ * real one, and the structural stand-in this used to declare
+ * (`{ session: { id: string } }`) is not assignable to the branded `Session`
+ * the seam functions take.
+ */
+export interface LocalToolOptions<A = Record<string, unknown>> {
   readonly name: string
-  readonly agent?: { readonly session: { readonly id: string } }
+  readonly description: string
+  readonly parameters: Record<string, LocalToolParameter>
+  readonly output: {
+    readonly schema: { readonly type: 'json' }
+    readonly render: (args: A, value: unknown) => ContentBlock[]
+  }
+  readonly execute: (args: A, exec: ToolRunContext) => Promise<unknown>
 }
+
+/**
+ * The call shape both tool builders answer to.
+ *
+ * `defineToolLocal` is a faithful subset of the host's `defineTool`, and the
+ * host's builder accepts a wider option type; this names the subset the call
+ * sites author, so they keep their contextual types. The seam used to read
+ * `(options: never) => unknown`, which kept the two casts quiet but denied
+ * every call site its parameter types — three "not assignable to never" errors
+ * and twelve implicit-`any` errors that only appeared once the host types
+ * became resolvable.
+ */
+export type LocalDefineTool = <A>(options: LocalToolOptions<A>) => unknown
 
 function parameterJsonSchema(
   parameters: LocalToolOptions['parameters'],
@@ -74,7 +101,7 @@ function parameterJsonSchema(
  * JSON Schema, publishes the `{}` output schema that `{ type: 'json' }`
  * compiles to, and validates model arguments the same way (`INVALID_ARGS`).
  */
-export function defineToolLocal(options: LocalToolOptions): unknown {
+export function defineToolLocal<A>(options: LocalToolOptions<A>): unknown {
   const schema = parameterJsonSchema(options.parameters)
   const validate = (args: unknown): string[] => {
     const violations: string[] = []
@@ -109,9 +136,9 @@ export function defineToolLocal(options: LocalToolOptions): unknown {
     parameters: schema,
     output: {
       schema: {},
-      render: (args: unknown, value: unknown) => render(args as never, value),
+      render: (args: unknown, value: unknown) => render(args as A, value),
     },
-    async execute(args: unknown, exec: LocalToolRunContext): Promise<unknown> {
+    async execute(args: unknown, exec: ToolRunContext): Promise<unknown> {
       const violations = validate(args)
       if (violations.length > 0) {
         const error = new Error(`invalid arguments: ${violations.join('; ')}`) as Error & { code?: string; violations?: string[] }
@@ -119,7 +146,7 @@ export function defineToolLocal(options: LocalToolOptions): unknown {
         error.violations = violations
         throw error
       }
-      return execute(args as never, exec)
+      return execute(args as A, exec)
     },
   }
 }
@@ -127,19 +154,21 @@ export function defineToolLocal(options: LocalToolOptions): unknown {
 export interface ToolBridgeDeps {
   readonly stores: AdapterStores
   /** Host-supplied constructor; absent falls back to the dynamic import, then to the local builder. */
-  readonly defineTool?: typeof import('@deepseek-ai/dsh-tools')['defineTool'] | ((options: never) => unknown)
+  readonly defineTool?: LocalDefineTool
   /** Validation-period activity journal (optional). */
   readonly journal?: Journal
 }
 
 /** Probe for the loading-mode diagnostics: resolves what apply() resolves as a fallback. */
 export function resolveDefineTool(): Promise<ToolBridgeDeps['defineTool']> {
-  return import('@deepseek-ai/dsh-tools').then(module => module.defineTool)
+  // The host builder takes its own (wider) option type; the seam names the
+  // subset we author, so the call sites keep their parameter types.
+  return import('@deepseek-ai/dsh-tools').then(module => module.defineTool as LocalDefineTool)
 }
 
 /** The constructor a tool factory actually uses. */
-function toolBuilder(deps: ToolBridgeDeps): (options: never) => unknown {
-  return (deps.defineTool as ((options: never) => unknown) | undefined) ?? (defineToolLocal as (options: never) => unknown)
+function toolBuilder(deps: ToolBridgeDeps): LocalDefineTool {
+  return deps.defineTool ?? defineToolLocal
 }
 
 interface TagVerdict {
@@ -166,7 +195,7 @@ function ackText(lines: string[]): ContentBlock[] {
 
 export function defineCtxReduceTool(deps: ToolBridgeDeps): unknown {
   const defineTool = toolBuilder(deps)
-  return defineTool({
+  return defineTool<{ readonly drop: string }>({
     name: 'ctx_reduce',
     description:
       'Mark conversation items you no longer need so their tokens are reclaimed. '
@@ -228,7 +257,7 @@ export function defineCtxReduceTool(deps: ToolBridgeDeps): unknown {
 
 export function defineCtxExpandTool(deps: ToolBridgeDeps): unknown {
   const defineTool = toolBuilder(deps)
-  return defineTool({
+  return defineTool<{ readonly tags: string }>({
     name: 'ctx_expand',
     description:
       'Restore previously dropped items in full. Pass tag IDs: tags: "3, 7". '
@@ -397,8 +426,7 @@ export interface MemoryToolRunContext {
 }
 
 export function defineCtxMemoryTool(deps: MemoryToolDeps): unknown {
-  const defineTool = (deps.defineTool as ((options: never) => unknown) | undefined)
-    ?? (defineToolLocal as (options: never) => unknown)
+  const defineTool = deps.defineTool ?? defineToolLocal
   /**
    * The session's project identity, which every write must carry: Magic Context
    * only lets an agent mutate its own project's memories.
@@ -410,7 +438,7 @@ export function defineCtxMemoryTool(deps: MemoryToolDeps): unknown {
       return undefined
     }
   }
-  return defineTool({
+  return defineTool<Record<string, unknown>>({
     name: 'ctx_memory',
     description:
       'Read and maintain the project memory store (shared with the other coding agents on this machine): '
@@ -450,6 +478,10 @@ export function defineCtxMemoryTool(deps: MemoryToolDeps): unknown {
           action?: string
           outcome?: string
           detail?: string
+          /** `search` action: the rendered hits line. */
+          search?: string
+          /** `search` action: how many rows the query matched. */
+          hits?: number
           memory?: { id: number; category: string; content: string; importance: number }
         }
         if (payload.reason !== undefined) return ackText([`Memory store unavailable: ${payload.reason}`])
@@ -535,10 +567,15 @@ export function defineCtxMemoryTool(deps: MemoryToolDeps): unknown {
         // The run context goes to the host alongside the request: a host whose
         // recall callback scopes by `config.memory.project ?? session cwd` has
         // no other way to see the session (index.ts), and `identity` is the
-        // identity this tool already resolved for the same purpose.
+        // identity this tool already resolved for the same purpose. The two
+        // model-supplied fields are narrowed here: `args` is the validated
+        // argument record, and a `query`/`limit` of the wrong type must not
+        // reach the host's recall as a non-string / non-number.
+        const query = typeof args.query === 'string' ? args.query : undefined
+        const limit = typeof args.limit === 'number' ? args.limit : undefined
         const result = recall({
-          ...args.query === undefined ? {} : { query: args.query },
-          ...args.limit === undefined ? {} : { limit: args.limit },
+          ...query === undefined ? {} : { query },
+          ...limit === undefined ? {} : { limit },
           ...identity === undefined ? {} : { identity },
         }, exec as MemoryToolRunContext)
         if (result === undefined) return finish({ empty: true })

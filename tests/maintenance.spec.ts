@@ -9,9 +9,9 @@
 import { DatabaseSync } from 'node:sqlite'
 import { rmSync } from 'node:fs'
 import { afterEach, describe, expect, it } from 'vitest'
-import { openMemoryWriter } from '<path>'
-import { runMaintenanceTick } from '<path>'
-import type { Journal, JournalEntry, JournalKind, JournalLevel } from '<path>'
+import { openMemoryWriter } from '../src/core/memory-write.ts'
+import { runMaintenanceTick } from '../src/core/maintenance.ts'
+import type { Journal, JournalEntry, JournalKind, JournalLevel } from '../src/core/journal.ts'
 import { makeMemoryDb } from './helpers/memory-db'
 import { scriptLlm } from './helpers/llm-fake'
 

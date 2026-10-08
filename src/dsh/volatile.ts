@@ -51,7 +51,10 @@ export function liveBoolean(value: unknown, fallback: boolean): boolean {
  */
 export function policyOf(configured: Partial<PressurePolicy> | undefined): PressurePolicy {
   const raw = (configured ?? {}) as Record<string, unknown>
-  const policy: PressurePolicy = { ...DEFAULT_POLICY }
+  // Deliberately unannotated: annotating this `PressurePolicy` makes every
+  // property below a read-only assignment (45 compile errors) even though the
+  // spread already produced a mutable copy. The return type still checks it.
+  const policy = { ...DEFAULT_POLICY }
   for (const key of Object.keys(DEFAULT_POLICY) as Array<keyof PressurePolicy>) {
     const value = raw[key]
     if (value === undefined) continue

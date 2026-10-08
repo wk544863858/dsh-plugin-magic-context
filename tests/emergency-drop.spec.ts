@@ -20,11 +20,11 @@ import {
   protectionWindowTokens,
   reclaimForEmergency,
   resolveToolTier,
-} from '<path>'
+} from '../src/dsh/emergency.ts'
 import {
   enumerateSurfaceToolResults,
-} from '<path>'
-import { DEFAULT_POLICY } from '<path>'
+} from '../src/dsh/seams.ts'
+import { DEFAULT_POLICY } from '../src/core/policy.ts'
 
 const tempDirs: string[] = []
 afterEach(() => {

@@ -2,7 +2,7 @@
 /**
  * Regenerate `src/core/reference-seeds.ts` from upstream's calibration corpus.
  *
- *   node scripts/build-reference-seeds.mjs [--check]
+ *   node scripts/build-reference-seeds.mjs [--check] --upstream <magic-context checkout>
  *
  * Upstream ships 60 full scored digest examples
  * (`packages/plugin/src/hooks/magic-context/reference-seeds.generated.ts`) that its
@@ -10,8 +10,11 @@
  * tokens of the signal they carry for our prompt, so this adapter keeps the scoring
  * signal — score, episode type, title, and the p3 tier — and drops the rest.
  *
- * `--check` regenerates in memory and fails when the committed file is stale: run it
- * from the upgrade flow after an upstream replay, like `sync-specs --check`.
+ * The corpus belongs to the upstream project, not to this repository, so the
+ * checkout must be named: `--upstream <dir>` or `MAGIC_CONTEXT_REPO`. This is a
+ * maintainer step, run when upstream's corpus moves — not part of the gate.
+ *
+ * `--check` regenerates in memory and fails when the committed file is stale.
  */
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -19,8 +22,16 @@ import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PKG = join(HERE, '..')
-const REPO = join(PKG, '..', '..')
-const UPSTREAM = join(REPO, 'packages/plugin/src/hooks/magic-context/reference-seeds.generated.ts')
+
+const argv = process.argv.slice(2)
+const upstreamIndex = argv.indexOf('--upstream')
+const UPSTREAM_REPO = upstreamIndex === -1 ? process.env.MAGIC_CONTEXT_REPO : argv[upstreamIndex + 1]
+if (!UPSTREAM_REPO) {
+  console.error('build-reference-seeds: the calibration corpus lives in upstream, not in this repository.')
+  console.error('  pass --upstream <magic-context checkout>, or set MAGIC_CONTEXT_REPO.')
+  process.exit(2)
+}
+const UPSTREAM = join(UPSTREAM_REPO, 'packages/plugin/src/hooks/magic-context/reference-seeds.generated.ts')
 const TARGET = join(PKG, 'src/core/reference-seeds.ts')
 
 const unescape = (text) => text.replace(/\\(n|r|t|'|"|\\)/g, (_all, code) => {

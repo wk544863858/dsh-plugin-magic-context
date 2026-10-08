@@ -361,6 +361,9 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
       dbPath,
       status: { ok: false, detail },
       recall: () => undefined,
+      // No space resolution without a store: recall is off, and so is every
+      // workspace-scoped read that would have used this.
+      searchSpace: () => undefined,
       maxMemoryId: () => 0,
       mutations: () => undefined,
       maxMemoryMutationId: () => 0,

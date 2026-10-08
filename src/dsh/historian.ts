@@ -29,7 +29,7 @@ import type { Journal } from '../core/journal.ts'
 import { REFERENCE_ANCHORS } from '../core/reference-seeds.ts'
 import type { PressurePolicy } from '../core/policy.ts'
 import type { LlmSeamMessage } from '../core/types.ts'
-import { spanRequestMessages, type SurfaceNode } from './seams.ts'
+import { spanRequestMessages, type SessionSeq, type SurfaceNode } from './seams.ts'
 
 /** The narrow LLM seam the historian needs (satisfied by `ctx.llm`). */
 export interface HistorianLlm {
@@ -465,7 +465,7 @@ export async function callHistorian(
     readonly route?: { provider: string; model: string }
     readonly signal?: AbortSignal
     /** The system head seq, replayed first for prefix-cache fidelity. */
-    readonly systemSeq?: number
+    readonly systemSeq?: SessionSeq
     /** Set by the manual (checkpoint) path so the journal can attribute the run. */
     readonly trigger?: 'automatic' | 'manual'
     /**
@@ -512,9 +512,9 @@ export async function callHistorian(
   // chunks with retries spent ~5.9min of the 4×180s budget, leaving the
   // merge 129s, which it overran.
   const deadline = startedAt + Math.min(600_000, timeoutMs * plannedCalls + (merging ? timeoutMs : 0))
-  const spanSeqsOf = (call: number): number[] =>
+  const spanSeqsOf = (call: number): SessionSeq[] =>
     (chunks[Math.min(call, chunks.length - 1)] as readonly SurfaceNode[]).map(node => node.seq)
-  const replayOf = (call: number): unknown[] => {
+  const replayOf = (call: number) => {
     const seqs = spanSeqsOf(call)
     return spanRequestMessages(
       input.session,
@@ -576,7 +576,10 @@ export async function callHistorian(
           ...baseData,
         }, input.sessionId)
       }
-      const baseMessagesForCall = isMerge
+      // Annotated: without it the nested ternary widens the message literals
+      // (`type: 'text'` becomes `string`) and the whole array collapses to
+      // `unknown[]`, which the LLM seam then rejects.
+      const baseMessagesForCall: LlmSeamMessage[] = isMerge
         ? [
           {
             role: 'user',
@@ -794,7 +797,7 @@ export async function runHistorian(
       ...input.signal === undefined ? {} : { signal: input.signal },
       ...input.nodes.find(node => node.role === 'system')?.seq === undefined
         ? {}
-        : { systemSeq: input.nodes.find(node => node.role === 'system')?.seq as number },
+        : { systemSeq: input.nodes.find(node => node.role === 'system')?.seq as SessionSeq },
     })
     const baselineEpoch = deps.stores.baselineState(input.sessionId)?.epoch ?? 0
     const first = range.nodes[0] as SurfaceNode

@@ -15,8 +15,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { registerMagicCompactionEngine } from '<path>'
-import { openStores, type AdapterStores } from '<path>'
+import { registerMagicCompactionEngine } from '../src/dsh/compaction-engine.ts'
+import { openStores, type AdapterStores } from '../src/core/stores.ts'
 
 const tempDirs: string[] = []
 afterEach(() => {

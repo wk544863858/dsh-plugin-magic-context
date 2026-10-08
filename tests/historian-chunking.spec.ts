@@ -15,11 +15,11 @@ import {
   planChunkSpans,
   type HistorianLlm,
   type SurfaceNode,
-} from '<path>'
-import { REFERENCE_ANCHORS } from '<path>'
-import type { Journal, JournalKind, JournalLevel } from '<path>'
-import { spanRequestMessages } from '<path>'
-import { DEFAULT_POLICY } from '<path>'
+} from '../src/dsh/historian.ts'
+import { REFERENCE_ANCHORS } from '../src/core/reference-seeds.ts'
+import type { Journal, JournalKind, JournalLevel } from '../src/core/journal.ts'
+import { spanRequestMessages } from '../src/dsh/seams.ts'
+import { DEFAULT_POLICY } from '../src/core/policy.ts'
 import { scriptLlm } from './helpers/llm-fake'
 
 const SESSION = 'mc-historian-chunking-session'

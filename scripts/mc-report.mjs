@@ -11,11 +11,11 @@
  *       以 0 退出；只有命令行参数错误才以 2 退出。
  *
  * 用法示例：
- *   node packages/dsh-plugin/scripts/mc-report.mjs
- *   node packages/dsh-plugin/scripts/mc-report.mjs --days 1 --limit 100
- *   node packages/dsh-plugin/scripts/mc-report.mjs --session session-xxx --kinds pass,historian
- *   node packages/dsh-plugin/scripts/mc-report.mjs --db D:\tmp\t.db --json > review.json
- *   node packages/dsh-plugin/scripts/mc-report.mjs --help
+ *   node scripts/mc-report.mjs
+ *   node scripts/mc-report.mjs --days 1 --limit 100
+ *   node scripts/mc-report.mjs --session session-xxx --kinds pass,historian
+ *   node scripts/mc-report.mjs --db D:\tmp\t.db --json > review.json
+ *   node scripts/mc-report.mjs --help
  *
  * 零依赖：只用 node:sqlite / node:fs / node:path / node:os。
  */
@@ -64,7 +64,7 @@ const SHORT_SESSION_LEN = 8
 const DATA_TEXT_LIMIT = 200
 
 const USAGE = `用法:
-  node packages/dsh-plugin/scripts/mc-report.mjs [选项]
+  node scripts/mc-report.mjs [选项]
 
 选项:
   --db <path>        SQLite 库路径
@@ -77,10 +77,10 @@ const USAGE = `用法:
   --help, -h         打印本用法并以 0 退出
 
 示例:
-  node packages/dsh-plugin/scripts/mc-report.mjs
-  node packages/dsh-plugin/scripts/mc-report.mjs --days 1 --limit 100
-  node packages/dsh-plugin/scripts/mc-report.mjs --session session-abc --kinds pass,error
-  node packages/dsh-plugin/scripts/mc-report.mjs --json > mc-review.json
+  node scripts/mc-report.mjs
+  node scripts/mc-report.mjs --days 1 --limit 100
+  node scripts/mc-report.mjs --session session-abc --kinds pass,error
+  node scripts/mc-report.mjs --json > mc-review.json
 
 退出码:
   0  报告已生成（包括库不存在 / 表缺失 / 被锁等所有容错情况）

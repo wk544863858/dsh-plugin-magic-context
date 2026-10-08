@@ -3,14 +3,14 @@
  * the only side effect — against a stub session.
  */
 import { describe, expect, it } from 'vitest'
-import type { Journal } from '<path>'
-import type { MemorySearchHit } from '<path>'
+import type { Journal } from '../src/core/journal.ts'
+import type { MemorySearchHit } from '../src/core/memory-search.ts'
 import {
   buildSearchHint,
   HINT_MAX_CHARS,
   planSearchHint,
   SearchHintTracker,
-} from '<path>'
+} from '../src/dsh/search-hint.ts'
 
 const hit = (id: number, category: string, preview: string, score = 0.9): MemorySearchHit =>
   ({ id, category, score, matchType: 'fts', preview })

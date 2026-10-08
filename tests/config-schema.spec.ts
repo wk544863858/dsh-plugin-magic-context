@@ -15,8 +15,8 @@
  *     memory on for every profile that never asked for it.
  */
 import { describe, expect, it } from 'vitest'
-import mcDshPlugin, { Config, policyOf } from '<path>'
-import { DEFAULT_POLICY } from '<path>'
+import mcDshPlugin, { Config, policyOf } from '../src/index.ts'
+import { DEFAULT_POLICY } from '../src/core/policy.ts'
 
 type Volatile = { get(): unknown }
 

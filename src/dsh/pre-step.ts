@@ -24,6 +24,7 @@ import {
   DSH_EVENTS,
   type PreStepEnterDecision,
   type PreStepPayload,
+  type Session,
   enumerateSurfaceToolResults,
   requestContextOf,
 } from './seams.ts'
@@ -481,10 +482,11 @@ export function injectReduceGuidance(deps: PreStepDeps): void {
       order: 910,
       text: (assembly: unknown) => {
         try {
-          const agent = (assembly as { agent?: { session?: { id: string } } }).agent
-          const sessionId = agent?.session?.id
-          if (sessionId === undefined) return ''
-          const tagged = enumerateSurfaceToolResults(agent!.session, callId =>
+          const agent = (assembly as { agent?: { session?: Session } }).agent
+          const session = agent?.session
+          if (session === undefined) return ''
+          const sessionId = session.id
+          const tagged = enumerateSurfaceToolResults(session, callId =>
             stores.getTag(sessionId, { kind: 'tool-result', callId }))
             .filter(node => node.tagNumber !== undefined)
           if (tagged.length === 0) return ''

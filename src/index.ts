@@ -49,10 +49,13 @@ import {
   readUsageFields,
   requestContextOf,
   tagToolResultContent,
+  type ContentBlock,
+  type Session,
+  type SessionEvent,
 } from './dsh/seams.ts'
 import { reclaimForEmergency } from './dsh/emergency.ts'
 import type { HistorianLlm } from './dsh/historian.ts'
-import { defineCtxExpandTool, defineCtxReduceTool, defineCtxMemoryTool } from './dsh/tool-bridge.ts'
+import { defineCtxExpandTool, defineCtxReduceTool, defineCtxMemoryTool, type LocalDefineTool } from './dsh/tool-bridge.ts'
 import { ReduceNudgeTracker } from './dsh/reduce-guidance.ts'
 import { registerCtxStatusCommand } from './dsh/status-command.ts'
 import { registerCtxRecompCommand } from './dsh/recomp.ts'
@@ -76,6 +79,37 @@ import {
   type ContextPressureReading,
   type LoggedPressureReading,
 } from './dsh/context-pressure.ts'
+
+/**
+ * Structural views of the host events this file listens to.
+ *
+ * Cordis types a listener from its declaration-merged event map; these events
+ * arrive through the string table in `./dsh/seams.ts`, so each handler names the
+ * fields it reads. Until the typecheck ran for real, `noCheck` let every one of
+ * these parameters be an implicit `any`.
+ */
+interface WaterfallDecision {
+  readonly kind: string
+  readonly content?: readonly ContentBlock[]
+  readonly value?: unknown
+}
+
+/** `tools/post-execute` — the landing waterfall for a tool result. */
+interface PostToolExecuteExec {
+  readonly callId: string
+  readonly agent?: { readonly session: Session }
+}
+interface PostToolExecuteResult {
+  readonly isError: boolean
+  readonly content?: readonly ContentBlock[]
+}
+
+/** `agent/request-error` — only the overflow path reads it. */
+interface RequestErrorPayload {
+  readonly failure: { readonly code: string }
+  readonly signal: { readonly aborted: boolean }
+  readonly agent: { readonly session: Session }
+}
 
 export type { MagicContextDshConfig, MagicContextDshConfigDefineTool }
 
@@ -182,13 +216,16 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
   }))
 
   // ── §N§ tags on tool results at landing (Phase 0) ─────────────────────────
-  on(DSH_EVENTS.postToolExecute, async (exec, result, next) => {
+  on(DSH_EVENTS.postToolExecute, async (exec: PostToolExecuteExec, result: PostToolExecuteResult, next: () => Promise<WaterfallDecision>) => {
     const decision = await next()
     if (decision.kind !== 'accept' || 'value' in decision || result.isError) return decision
     const sessionId = exec.agent?.session.id
     if (sessionId === undefined) return decision
     const tag = ensureTag(stores, sessionId, { kind: 'tool-result', callId: exec.callId })
     const base = decision.content ?? result.content
+    // Nothing to tag (a result without content blocks); the decision is
+    // already the host's, so it passes through unchanged.
+    if (base === undefined) return decision
     return { kind: 'accept', content: tagToolResultContent(base, tagPrefix, tag) }
   })
 
@@ -196,7 +233,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
   injectReduceGuidance({ ctx, config, stores, journal, llm, reduceTracker, lane, projects, seenSessions, activePolicy })
 
   // ── Usage recording from durable assistant/message events (Phase 0) ───────
-  on(DSH_EVENTS.sessionEvent, (session, event) => {
+  on(DSH_EVENTS.sessionEvent, (session: Session, event: SessionEvent) => {
     const fields = readUsageFields(event)
     if (fields === undefined) return
     const record: UsageRecord = { sessionId: session.id, recordedAt: Date.now(), ...fields }
@@ -214,7 +251,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
   })
 
   // ── Emergency reclaim + retry on provider-confirmed overflow ──────────────
-  on(DSH_EVENTS.requestError, async (payload, next) => {
+  on(DSH_EVENTS.requestError, async (payload: RequestErrorPayload, next: () => Promise<WaterfallDecision>) => {
     if (payload.failure.code !== CONTEXT_WINDOW_EXCEEDED_CODE || payload.signal.aborted) return next()
     const sessionId = payload.agent.session.id
     const before = payload.agent.session.surface.replaceGeneration
@@ -271,7 +308,11 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     }
     try {
       const registrar = (ctx as unknown as { tools: Registrar }).tools
-      const deps = { stores, ...defineTool === undefined ? {} : { defineTool }, ...journal === undefined ? {} : { journal } }
+      // The host's `defineTool` takes a wider option type than the subset this
+      // package authors; `tool-bridge`'s seam names that subset so the three
+      // tool bodies keep their argument types (see `LocalDefineTool`).
+      const toolConstructor = defineTool as LocalDefineTool | undefined
+      const deps = { stores, ...toolConstructor === undefined ? {} : { defineTool: toolConstructor }, ...journal === undefined ? {} : { journal } }
       registrar.register(defineCtxReduceTool(deps))
       registrar.register(defineCtxExpandTool(deps))
       if (memoryRecall !== undefined) {

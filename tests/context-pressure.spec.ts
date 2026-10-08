@@ -10,7 +10,7 @@ import {
   CONTEXT_PRESSURE_MIN_DELTA_TOKENS,
   pressureUsedTokens,
   shouldLogContextPressure,
-} from '<path>'
+} from '../src/dsh/context-pressure.ts'
 
 describe('shouldLogContextPressure', () => {
   it('always logs the first reading of a session (it anchors the gauge)', () => {

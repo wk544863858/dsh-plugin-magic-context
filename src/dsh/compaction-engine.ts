@@ -149,11 +149,13 @@ export async function registerMagicCompactionEngine(
     const first = input.nodes[0] as SurfaceNode
     const last = input.nodes[input.nodes.length - 1] as SurfaceNode
     const shadowedTokenCount = input.nodes.reduce((total, node) => total + estimateTokens(node.text), 0)
+    // `Session.append` accepts an options argument only for *surface* event
+    // types; `compaction/*` are not among them, so these appends take two.
     const startEvent = input.session.append('compaction/start', {
       compactionId,
       ...input.sourceCommandId === undefined ? {} : { sourceCommandId: input.sourceCommandId },
       turn: null,
-    } as never, {})
+    } as never)
     const summaryEvent = input.session.append('compaction/summary', {
       compactionId,
       ...input.sourceCommandId === undefined ? {} : { sourceCommandId: input.sourceCommandId },
@@ -166,7 +168,7 @@ export async function registerMagicCompactionEngine(
       maxTokens: deps.policy.historianMaxTokens,
       rawOutput: summary,
       llmStreamCall: true,
-    } as never, {})
+    } as never)
     // The replacement is appended synchronously after its metering event —
     // the shared shadow-price protocol the session documents.
     replaceSurfaceRange(
@@ -182,7 +184,7 @@ export async function registerMagicCompactionEngine(
       compactionId,
       ...input.sourceCommandId === undefined ? {} : { sourceCommandId: input.sourceCommandId },
       turn: null,
-    } as never, {})
+    } as never)
     deps.logger.info(
       `magic-context compaction: checkpoint over ${String(input.nodes.length)} nodes `
         + `(~${String(shadowedTokenCount)} tokens, importance ${String(draft.importance)})`,
@@ -284,7 +286,7 @@ export async function registerMagicCompactionEngine(
     }
   }
 
-  await ctx.plugin(EngineClass as never, {})
+  await ctx.plugin(EngineClass, {})
 }
 
 /** The manual range: the same eligibility rules, without the token gate. */

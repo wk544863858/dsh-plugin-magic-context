@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { resolveDefineTool } from '<path>'
+import { resolveDefineTool } from '../src/dsh/tool-bridge.ts'
 
 // Loading-mode probe: the adapter resolves @deepseek-ai/dsh-tools dynamically,
 // which vite only serves through the explicit vitest alias. Cold-transforming

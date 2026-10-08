@@ -15,6 +15,6 @@
 #     disabled: true
 - insert:
     - id: magic-context-dsh
-      name: '@cortexkit/dsh-magic-context'
+      name: 'dsh-plugin-magic-context'
       config:
         registerCompactionEngine: false

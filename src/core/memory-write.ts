@@ -1302,7 +1302,8 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
             )
             let changed = 0
             for (const id of ids) {
-              changed += statement.run(verifiedAt, identity, id).changes
+              // node:sqlite reports `changes` as `number | bigint`.
+              changed += Number(statement.run(verifiedAt, identity, id).changes)
             }
             return { ok: true, changed }
           })

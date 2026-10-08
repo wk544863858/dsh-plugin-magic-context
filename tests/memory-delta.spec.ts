@@ -25,15 +25,15 @@ import {
   renderMemoryUpdates,
   type Compartment,
   type MemoryUpdateLine,
-} from '<path>'
+} from '../src/core/compartments.ts'
 import {
   defaultMemoryDbPath,
   openMemoryBridge,
-} from '<path>'
-import { DEFAULT_POLICY } from '<path>'
-import { SCHEMA_VERSION, openStores } from '<path>'
-import { runManagementPass } from '<path>'
-import type { Session } from '<path>'
+} from '../src/core/memory-bridge.ts'
+import { DEFAULT_POLICY } from '../src/core/policy.ts'
+import { SCHEMA_VERSION, openStores } from '../src/core/stores.ts'
+import { runManagementPass } from '../src/dsh/management-pass.ts'
+import type { Session } from '../src/dsh/seams.ts'
 import { MUTATION_LOG_DDL, makeMemoryDb, PROJECT_STATE_DDL, WORKSPACES_DDL } from './helpers/memory-db'
 
 const tempDirs: string[] = []

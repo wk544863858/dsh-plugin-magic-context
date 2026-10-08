@@ -24,6 +24,7 @@ import type {
   UserMessage,
 } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent, SessionSeq } from '@deepseek-ai/dsh-session'
+import type { LlmSeamMessage } from '../core/types.ts'
 import { randomUUID } from 'node:crypto'
 
 /**
@@ -431,13 +432,21 @@ function messageOf(event: SessionEvent): unknown {
   return event.type === 'user/message' ? data : data.message
 }
 
+/**
+ * Replay the request messages a set of surface seqs would produce.
+ *
+ * The return type is the LLM seam's own message contract: this is the one wire
+ * boundary the adapter owns, and its consumer (the historian) feeds the result
+ * straight to `ctx.llm.stream`. The events' payloads arrive as `unknown`, so the
+ * per-message cast happens here rather than at every call site.
+ */
 export function spanRequestMessages(
   session: Session,
   seqs: readonly SessionSeq[],
-): unknown[] {
+): LlmSeamMessage[] {
   const events = session.snapshotEvents()
   const bySeq = new Map(events.map(event => [event.seq, event]))
-  const messages: unknown[] = []
+  const messages: LlmSeamMessage[] = []
   const requested = new Set<string>()
   for (const seq of seqs) {
     const event = bySeq.get(seq)
@@ -462,7 +471,7 @@ export function spanRequestMessages(
       const callId = (message as { toolCallId?: string }).toolCallId
       if (typeof callId === 'string' && !requested.has(callId)) continue
     }
-    messages.push(message)
+    messages.push(message as LlmSeamMessage)
   }
   return messages
 }

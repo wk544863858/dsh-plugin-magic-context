@@ -25,8 +25,8 @@ import ToolRuntime, { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import { MockAdapter, textResponse, toolCallResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
-import mcDshPlugin, { openStores } from '<path>'
+import { MockAdapter, textResponse, toolCallResponse } from './helpers/mock-adapter.ts'
+import mcDshPlugin, { openStores } from '../src/index.ts'
 import { makeMemoryDb as makeBareMemoryDb } from './helpers/memory-db'
 
 type AnyMessage = { role: string; content: Array<{ type: string; text?: string }> }

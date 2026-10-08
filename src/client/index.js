@@ -43,7 +43,7 @@ window.__ModuleLoader__.load({
    * all by the package name — not by the Loader row id (`magic-context-dsh`),
    * which is only the settings namespace.
    */
-  id: '@cortexkit/dsh-magic-context',
+  id: 'dsh-plugin-magic-context',
   factory: (require) => {
     const React = require('react')
     const { useEffect, useRef, useState } = React
@@ -56,7 +56,7 @@ window.__ModuleLoader__.load({
     /** Loader row id of the Host half; also the settings namespace. */
     const CFG_NS = 'magic-context-dsh'
     /** Package name; the `plugins.row.config` key is `<package name>#<row id>`. */
-    const PKG_NAME = '@cortexkit/dsh-magic-context'
+    const PKG_NAME = 'dsh-plugin-magic-context'
     const ROW_CONFIG_KEY = PKG_NAME + '#' + CFG_NS
     /** Host telemetry routes (loopback only, no auth — telemetry only). */
     const SUMMARY_URL = '/mc-telemetry/summary'

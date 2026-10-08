@@ -1,4 +1,13 @@
-# @cortexkit/dsh-magic-context — Magic Context 的 DeepSeek Harness 适配层
+# dsh-plugin-magic-context — Magic Context 的 DeepSeek Harness 适配层
+
+> **这是一个独立仓库。** 本包原本长在 [cortexkit/magic-context](https://github.com/cortexkit/magic-context)
+> 的 `packages/dsh-plugin` 下；为了让适配层能被单独安装、单独发版、长期维护，已抽出为
+> 自己的仓库。上游项目 MIT 许可，© 2025 Ufuk Altinok；本仓库新增部分 © 2026 wukai。
+> 出处、基线版本与内嵌第三方文件见 [NOTICE](NOTICE)，许可见 [LICENSE](LICENSE)。
+>
+> 设计与契约文档（`docs/dsh-plugin-*.md`）留在上游仓库里，正文中相关链接直接指向 GitHub。
+> 本包的数据库仍在 `~/.local/share/cortexkit/` 命名空间下——那是与 magic-context
+> **共享同一个记忆库**的互操作路径，刻意不随改名而改。
 
 状态：**已在真实 DeepSeek Harness Desktop 中安装并热生效**（2026-10-06）。插件以 DSH **bundle** 形态注册进 desktop profile，出现在 GUI 的"插件"页面，并在运行中的应用里即时开始工作（工具结果打 §N§ 标签、记录用量、压力管理、historian/基线）。
 
@@ -16,19 +25,27 @@
 
 ```powershell
 # 1) 构建（桌面运行时加载编译产物；包里没有 TS loader）
-cd packages/dsh-plugin; pnpm run build     # tsc → lib/（多文件 ESM）；不依赖 bun
+npm install
+npm run build     # tsc → lib/（多文件 ESM）
 
 # 2) 安装（应用自带 CLI；DSH_HOME 默认即 ~/.dsh）
-dsh plugin --profile desktop add <path>
+#    spec 可以是 Git 地址、本地路径或 registry 版本；DSH 的 plugin manager
+#    对 Git 仓库有专门支持（安装前 git ls-remote 探活）。
+dsh plugin --profile desktop add <git-url 或 本仓库路径>
 ```
 
-安装会做三件事：profile 里 `pnpm add`（`link:`）、把包名追加进
+安装会做三件事：profile 里 `pnpm add`（本地路径用 `link:`）、把包名追加进
 `dsh.profile.bundles`、随后由 loader 组合。**Desktop 带 HMR → 立即热生效**
 （无需重启；运行中的会话即刻开始打标签）。GUI 会弹一个刷新提示。
 
+`peerDependencies` 声明的是**实测过的 DSH 版本线**（`^0.2.1-alpha.1`）。装到别的
+DSH 版本上时，plugin manager 会在 pnpm 跑之前拒绝并给出 `incompatible-version`，
+而不是让你装上一个会在运行时崩的包；确认要冒险时用 `dsh plugin version-exemptions`
+显式放行。
+
 卸载 / 停用：
 - GUI 插件页停用该 bundle（写 profile patch 的 `disabled`），或
-- `dsh plugin --profile desktop remove @cortexkit/dsh-magic-context`
+- `dsh plugin --profile desktop remove dsh-plugin-magic-context`
 
 **为什么必须能脱离 `@deepseek-ai/*` 运行**：打包版把 profile 插件当编译 ESM 加载，
 而 Node 的 ESM 解析器不读 `NODE_PATH`，profile 的
@@ -41,7 +58,7 @@ dsh plugin --profile desktop add <path>
 
 ```yaml
 - id: magic-context-dsh
-  name: '@cortexkit/dsh-magic-context'
+  name: 'dsh-plugin-magic-context'
   config:
     # 读 Magic Context 共享记忆库（只读）并注入 m[0]
     memory: {}
@@ -113,16 +130,16 @@ dsh plugin --profile desktop add <path>
 复盘（只读，不动数据库）：
 
 ```powershell
-node packages/dsh-plugin/scripts/mc-report.mjs --days 7
-node packages/dsh-plugin/scripts/mc-report.mjs --days 30 --json > mc-review.json
-node packages/dsh-plugin/scripts/mc-report.mjs --session <id> --limit 100
+node scripts/mc-report.mjs --days 7
+node scripts/mc-report.mjs --days 30 --json > mc-review.json
+node scripts/mc-report.mjs --session <id> --limit 100
 ```
 
 **契约验收**（只读，一条命令给出通过/告警/失败的清单，失败时 exit 1）：
 
 ```powershell
-node packages/dsh-plugin/scripts/mc-acceptance.mjs              # 默认 24h 窗口
-node packages/dsh-plugin/scripts/mc-acceptance.mjs --hours 72 --json
+node scripts/mc-acceptance.mjs              # 默认 24h 窗口
+node scripts/mc-acceptance.mjs --hours 72 --json
 ```
 
 覆盖：适配器 schema 与 v6 列、boot 自检（读/写路径是否真的打开）、读路径成功注入、
@@ -173,7 +190,7 @@ epoch 指纹稳定、权威守卫（authority 表空 + privilege 未启用）、
   HARD 基线重建）· 🗑️ 丢弃上下文（应急丢弃 / 丢弃落地）· 🧭 归档已存 · 🧰 维护巡检 · ⚠️ 失败。
   噪声不进列表：`pass defer`、`boot`、`engine`、`context-pressure`、`memory-recall`，
   以及 **SOFT** 基线刷新（只数进节拍行；HARD 重建是 priced cache bust，算记录）。
-  逐条映射规则与两个 node 侧校验脚本见 [主界面遥测契约](../../docs/dsh-plugin-ui-telemetry-contract.md) 勘误第 8 条。
+  逐条映射规则与两个 node 侧校验脚本见 [主界面遥测契约](https://github.com/cortexkit/magic-context/blob/master/docs/dsh-plugin-ui-telemetry-contract.md) 勘误第 8 条。
   （2026-10-07 起对话流内的 turnTail 区块已移除：动作可查性由 `session-notice.ts` 的会话流 notice 承担，
   胶囊面板是实时/遥测面。）
 - **徽标面板自动关闭**：点击面板/徽标之外的任意位置、按 Esc、或窗口失焦即关闭
@@ -184,9 +201,9 @@ epoch 指纹稳定、权威守卫（authority 表空 + privilege 未启用）、
 **安全**：该路由没有 token 鉴权（仅 loopback），因此**只输出计数与单行摘要**——不含消息正文、
 不含文件路径、不含凭据（journal 本身即无正文）。
 
-> 配置界面的机制与坑见 [配置界面契约](../../docs/dsh-plugin-config-ui-contract.md)（含
+> 配置界面的机制与坑见 [配置界面契约](https://github.com/cortexkit/magic-context/blob/master/docs/dsh-plugin-config-ui-contract.md)（含
 > "profile patch config 整体替换"与"default export 吞掉 Config"两个实测陷阱）；
-> 遥测通路对比见 [主界面遥测契约](../../docs/dsh-plugin-ui-telemetry-contract.md)。
+> 遥测通路对比见 [主界面遥测契约](https://github.com/cortexkit/magic-context/blob/master/docs/dsh-plugin-ui-telemetry-contract.md)。
 
 ## 已实现（阶段 0 + 1 + 2）
 
@@ -214,7 +231,7 @@ epoch 指纹稳定、权威守卫（authority 表空 + privilege 未启用）、
 **同时在线证据**（真实 `dsh --profile mcpoc` 进程写下的 meta）：
 `adapter_version=phase2`、`compaction_engine=magic-context-dsh`、`schema_version=3`。
 
-**未实现 / 已知边界**：memory **写入**（需复刻 MC 的 hash/epoch/mutation-log/authority 不变量，刻意留给 MC 自己的存储层；也因此 `ctx_memory` 目前是**只读**召回，与 MC 的同名写入工具语义不同）；记忆的 m[1] 增量面（`maxMemoryId` 水位 / `memory_mutation_log` → `<memory-updates>`）未实现——写入前必须先有它，否则每次写入都会破坏缓存前缀；historian 触发预算用 chars/4 估算而非真 tokenizer；四层摘要在一次调用内产出（MC 是跨调用累积）。项目级记忆的完整复盘见 [docs/dsh-plugin-project-memory-review-2026-10-06.md](../../docs/dsh-plugin-project-memory-review-2026-10-06.md)。
+**未实现 / 已知边界**：memory **写入**（需复刻 MC 的 hash/epoch/mutation-log/authority 不变量，刻意留给 MC 自己的存储层；也因此 `ctx_memory` 目前是**只读**召回，与 MC 的同名写入工具语义不同）；记忆的 m[1] 增量面（`maxMemoryId` 水位 / `memory_mutation_log` → `<memory-updates>`）未实现——写入前必须先有它，否则每次写入都会破坏缓存前缀；historian 触发预算用 chars/4 估算而非真 tokenizer；四层摘要在一次调用内产出（MC 是跨调用累积）。项目级记忆的完整复盘见 [docs/dsh-plugin-project-memory-review-2026-10-06.md](https://github.com/cortexkit/magic-context/blob/master/docs/dsh-plugin-project-memory-review-2026-10-06.md)。
 
 ## 生产注入路径（已验证，2026-10-06）
 
@@ -224,7 +241,7 @@ epoch 指纹稳定、权威守卫（authority 表空 + privilege 未启用）、
    （pnpm link 进 profile 的 node_modules；会提示"no dsh.bundle"，正常——
    组合关系由下一步声明）。
 2. **组合进 profile 树**：profile 的 `cordis.patch.yml` 加一行按包名引用：
-   `- insert: [{ id: magic-context-dsh-poc, name: '@cortexkit/dsh-magic-context' }]`
+   `- insert: [{ id: magic-context-dsh-poc, name: 'dsh-plugin-magic-context' }]`
    （loader 会把模块解析为插件并读取其 `inject` 声明）。
    **阶段 2 起还需禁用内置压缩引擎**（base bundle 挂载 compaction-basic，
    与我们的引擎同时提供 `ctx.compaction` 会抛错）：
@@ -324,28 +341,28 @@ src/
 
 ## 跑测试
 
-集成测试放在 DSH 源码工作区（复用其 vitest + tsconfig paths 解析）：
+套件在本仓库里跑，不再需要 DSH 源码工作区：
 
 ```sh
-# harness checkout 根目录（上游 deepseek-ai/deepseek-harness，含本测试的拷贝）
-pnpm install --ignore-scripts
-pnpm vitest run packages/test-support/mc-dsh-poc/tests/poc.spec.ts --coverage.enabled=false
+npm install
+npm test           # vitest run（30 个 spec）
+npm run gate       # 完整门禁：typecheck + 套件 + build + acceptance + memory audit + records
 ```
 
-测试驱动真实 agent loop（mock adapter）完成一次工具调用回合，断言：
+`@deepseek-ai/*` 由 `devDependencies` 提供，锁在与本适配器同版本的 DSH 发布线上
+（npm 的 `latest` 落后一个发布线，原因见 [NOTICE](NOTICE)）。`tests/helpers/mock-adapter.ts`
+从 DSH 测试树内嵌而来，因此不需要 checkout。细节见 [tests/README.md](tests/README.md)。
+
+specs 驱动真实 agent loop（mock adapter）完成一次工具调用回合，断言：
 标签持久落地、无额外请求（零额外 bust）、usage 行正确、surface 替换后派生
 请求携带占位符且原文可恢复。
 
-注：测试文件内含指向本包 `src/index.ts` 的绝对路径导入（PoC 阶段的临时手段，
-跨仓库 vite-tsconfig-paths match-all 使其内部 `@deepseek-ai/*` 导入正确解析）。
-阶段 1 应将本包作为 devDependency（`link:`）挂入 harness 工作区消除绝对路径。
-
-不依赖 harness 的可跑检查（本机 `node` 直接跑，不需要 DB / 浏览器）：
+只读检查（本机 `node` 直接跑，不需要 DB / 浏览器）：
 
 ```sh
-node packages/dsh-plugin/scripts/mc-i18n-check.mjs                 # 多语言：宿主 notice 英文 + 字典键对齐 + 槽位接线
-node packages/dsh-plugin/scripts/mc-records-check.mjs [adapterDb]  # 用真实 journal 验证面板分类（需库文件）
-node packages/dsh-plugin/scripts/dsh-doctor.mjs [--store db] [--json]  # 只读健康报告：fence 余量裁决 / 悬空 run / 失败尾部 / embedding 车道
+node scripts/mc-i18n-check.mjs                 # 多语言：宿主 notice 英文 + 字典键对齐 + 槽位接线
+node scripts/mc-records-check.mjs [adapterDb]  # 用真实 journal 验证面板分类（需库文件）
+node scripts/dsh-doctor.mjs [--store db] [--json]  # 只读健康报告：fence 余量裁决 / 悬空 run / 失败尾部 / embedding 车道
 ```
 
 ## 多语言（2026-10-07）
@@ -354,7 +371,7 @@ node packages/dsh-plugin/scripts/dsh-doctor.mjs [--store db] [--json]  # 只读�
 四个槽位注册项都声明 `locale: 'magic-context'`，文案一律走框架注入的 `t`，切换语言即时生效、无需刷新。
 宿主（node）侧没有 locale 服务，写进会话流、**模型可见**的 `session-notice` 保持英文常量（与其它宿主面
 一致，也避免同一会话中途换语言造成 cached prefix 抖动）。机制与理由见
-[docs/dsh-plugin-ui-telemetry-contract.md 勘误 §7](../../docs/dsh-plugin-ui-telemetry-contract.md)。
+[docs/dsh-plugin-ui-telemetry-contract.md 勘误 §7](https://github.com/cortexkit/magic-context/blob/master/docs/dsh-plugin-ui-telemetry-contract.md)。
 
 ## 阶段 1 衔接点（下一步）
 

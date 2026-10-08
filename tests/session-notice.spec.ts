@@ -20,7 +20,7 @@ import {
   sessionNoticeSummary,
   NOTICE_SUMMARY_MAX_CHARS,
   type SessionNoticeResult,
-} from '<path>'
+} from '../src/dsh/session-notice.ts'
 
 const base: SessionNoticeResult = {
   published: [],

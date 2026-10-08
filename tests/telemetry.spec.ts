@@ -10,8 +10,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { openStores } from '<path>'
-import { createTelemetryService } from '<path>'
+import { openStores } from '../src/index.ts'
+import { createTelemetryService } from '../src/dsh/telemetry.ts'
 
 const cleanups: Array<() => void> = []
 afterEach(() => {

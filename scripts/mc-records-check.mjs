@@ -1,12 +1,15 @@
 // 用**真实 journal 数据**验证客户端「操作记录」分类，并打印主界面即将显示的内容。
 // 不走浏览器：用 new Function 评估 client/index.js 的模块外壳，注入 stub React，
-// 调 __diagnostics 映射真实事件。用法：node records-check.mjs [adapterDb]
+// 调 __diagnostics 映射真实事件。用法：node scripts/mc-records-check.mjs [adapterDb]
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const CLIENT = '<path>';
+const HERE = dirname(fileURLToPath(import.meta.url));
+/** The client half this check evaluates: derived from the script's own location. */
+const CLIENT = join(HERE, '..', 'src', 'client', 'index.js');
 const DB = process.argv[2] ?? join(homedir(), '.local', 'share', 'cortexkit', 'magic-context-dsh-poc', 'dsh-magic-context.db');
 
 let definition = null;

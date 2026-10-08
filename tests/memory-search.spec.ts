@@ -33,8 +33,8 @@ import {
   sanitizeFtsQuery,
   workspaceVisibilityPredicate,
   type MemorySearchSpace,
-} from '<path>'
-import { defineCtxMemoryTool } from '<path>'
+} from '../src/core/memory-search.ts'
+import { defineCtxMemoryTool } from '../src/dsh/tool-bridge.ts'
 import { makeMemoryDb } from './helpers/memory-db'
 
 const OWN = 'git:1111111111111111111111111111111111111111'

@@ -36,12 +36,12 @@ import ToolRuntime from '@deepseek-ai/dsh-tools'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import mcDshPlugin, { openStores } from '<path>'
+import mcDshPlugin, { openStores } from '../src/index.ts'
 import {
   normalizedMemoryHash,
   openMemoryWriter,
-} from '<path>'
-import { defineCtxMemoryTool } from '<path>'
+} from '../src/core/memory-write.ts'
+import { defineCtxMemoryTool } from '../src/dsh/tool-bridge.ts'
 import { makeMemoryDb } from './helpers/memory-db'
 
 const OWN = 'git:1111111111111111111111111111111111111111'

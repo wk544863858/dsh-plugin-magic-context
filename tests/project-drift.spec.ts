@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { detectProjectDrift } from '<path>'
+import { detectProjectDrift } from '../src/dsh/project-drift.ts'
 
 // Real git spawns under a parallel vitest pool can stall past the default 5s
 // test timeout (antivirus scans, worker contention) — the detector's own 3s

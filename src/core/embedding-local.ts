@@ -94,9 +94,17 @@ export function cosineSimilarity(a: ArrayLike<number>, b: ArrayLike<number>): nu
  */
 export function openLocalEmbedder(options: LocalEmbedderOptions): LocalEmbedder {
   const logger = options.logger;
-  let pipelinePromise: Promise<{
-    extract(texts: readonly string[], opts: Record<string, unknown>): Promise<{ data: Float32Array; dims: number[] }>
-  }> | null = null;
+  /**
+   * What `transformers.pipeline('feature-extraction', …)` returns: a callable
+   * that extracts mean-pooled features. The previous annotation modelled the
+   * return as an object with an `extract` method, which the call site never
+   * matches — the pipeline *is* the function.
+   */
+  type FeatureExtractionPipeline = (
+    texts: readonly string[],
+    opts: Record<string, unknown>,
+  ) => Promise<{ data: Float32Array; dims: number[] }>;
+  let pipelinePromise: Promise<FeatureExtractionPipeline> | null = null;
 
   const load = async (): Promise<NonNullable<typeof pipelinePromise>> => {
     if (pipelinePromise === null) {

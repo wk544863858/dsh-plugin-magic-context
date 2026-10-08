@@ -12,7 +12,7 @@ import {
   selectTier,
   stripBaseline,
   type Compartment,
-} from '<path>'
+} from '../src/core/compartments.ts'
 
 const VALID = JSON.stringify({
   summary: { p1: 'full detail', p2: 'essentials', p3: 'terse', p4: 'gist' },

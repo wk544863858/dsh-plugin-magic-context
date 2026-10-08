@@ -2,21 +2,28 @@
 /**
  * One command for the adapter's local gate.
  *
- *   node scripts/mc-test.mjs           # --quick: spec parity + the vitest suite
+ *   node scripts/mc-test.mjs           # --quick: typecheck + the vitest suite
  *   node scripts/mc-test.mjs --full    # + build, acceptance, memory audit, records
  *
- * The suite runs inside the resolved test host (see `test-host.mjs`); this
- * script owns the whole sequence so no step depends on a remembered command
- * line. Children are started as `node <entry>.mjs` rather than through the
- * `node_modules/.bin` shims, because those are `.CMD` files here and going
- * through `cmd.exe` breaks on the space in `C:\Program Files\nodejs`. Output is
- * inherited, so failures are readable in place.
+ * The suite runs in this repository. It used to run inside a DSH checkout,
+ * mirrored there by `sync-specs.mjs`, because the sources had no `node_modules`
+ * of their own; now `npm install` provides `vitest` and the pinned
+ * `@deepseek-ai/*` packages, so there is no host to resolve and no mirror to
+ * verify. The specs address `../src/...` directly.
+ *
+ * This script owns the whole sequence so no step depends on a remembered
+ * command line. Children are started as `node <entry>.mjs` rather than through
+ * the `node_modules/.bin` shims, because those are `.CMD` files on Windows and
+ * going through `cmd.exe` breaks on the space in `C:\Program Files\nodejs`.
+ * Output is inherited, so failures are readable in place.
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-import { PKG, SCRIPTS, SUITE_TESTS, resolveTestHost } from './test-host.mjs'
+/** This package's root. */
+const PKG = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 const full = process.argv.includes('--full')
 
@@ -42,46 +49,34 @@ function report() {
   console.log(`  ${failed ? 'GATE FAILED' : 'GATE PASSED'}`)
 }
 
-let host
-try {
-  host = resolveTestHost()
-} catch (error) {
-  console.error(`mc-test: ${error.message}`)
-  process.exit(2)
-}
-
-const vitestEntry = join(host.root, 'node_modules', 'vitest', 'vitest.mjs')
+const vitestEntry = join(PKG, 'node_modules', 'vitest', 'vitest.mjs')
 const tscEntry = join(PKG, 'node_modules', 'typescript', 'bin', 'tsc')
 
-console.log(`mc-test: host   = ${host.root}  (${host.source})`)
-console.log(`mc-test: mode   = ${full ? '--full' : '--quick'}`)
+console.log(`mc-test: package = ${PKG}`)
+console.log(`mc-test: mode    = ${full ? '--full' : '--quick'}`)
 
-if (!host.installed || !existsSync(vitestEntry)) {
-  console.error(`mc-test: host has no runnable vitest — run: node ${join(SCRIPTS, 'bootstrap-testhost.mjs')} --install`)
+if (!existsSync(join(PKG, 'node_modules'))) {
+  console.error('mc-test: no node_modules — run: npm install')
   process.exit(2)
 }
 
-// The suite is a byte-identical mirror of tests/; write it when absent, then
-// always verify, so a stale mirror cannot pass silently.
-if (!host.suite) run('sync-specs (write)', process.execPath, [join(SCRIPTS, 'sync-specs.mjs')])
-if (!run('sync-specs --check', process.execPath, [join(SCRIPTS, 'sync-specs.mjs'), '--check'])) {
-  report()
-  process.exit(1)
-}
+// Typecheck first: it is the cheapest step and it is the one the build's
+// `noCheck` cannot give. A green compile that does not typecheck is exactly
+// the failure mode this step exists to prevent.
+run('typecheck (tsc)', process.execPath, [tscEntry, '--noEmit'])
 
-run('vitest suite', process.execPath, [vitestEntry, 'run', SUITE_TESTS.replace(/\\/g, '/'), '--coverage.enabled=false'], host.root)
+if (!existsSync(vitestEntry)) {
+  console.error('mc-test: vitest is not installed — run: npm install')
+  process.exit(2)
+}
+run('vitest suite', process.execPath, [vitestEntry, 'run'])
 
 if (full) {
-  if (existsSync(tscEntry)) {
-    run('build (tsc)', process.execPath, [tscEntry, '-p', 'tsconfig.build.json'])
-  } else {
-    results.push({ label: 'build (tsc)', code: 1, seconds: '0.0' })
-    failed = true
-  }
-  run('build (client)', process.execPath, [join(SCRIPTS, 'copy-client.mjs')])
-  run('acceptance', process.execPath, [join(SCRIPTS, 'mc-acceptance.mjs')])
-  run('memory audit', process.execPath, [join(SCRIPTS, 'mc-memory-audit.mjs'), '--json'])
-  run('records check', process.execPath, [join(SCRIPTS, 'mc-records-check.mjs')])
+  run('build (tsc)', process.execPath, [tscEntry, '-p', 'tsconfig.build.json'])
+  run('build (client)', process.execPath, [join(PKG, 'scripts', 'copy-client.mjs')])
+  run('acceptance', process.execPath, [join(PKG, 'scripts', 'mc-acceptance.mjs')])
+  run('memory audit', process.execPath, [join(PKG, 'scripts', 'mc-memory-audit.mjs'), '--json'])
+  run('records check', process.execPath, [join(PKG, 'scripts', 'mc-records-check.mjs')])
 }
 
 report()

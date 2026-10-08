@@ -10,10 +10,10 @@
  * the queued-drops scan (step 1) and compartment publishing (step 2+4).
  */
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_POLICY } from '<path>'
-import type { AdapterStores } from '<path>'
-import type { Journal } from '<path>'
-import { runManagementPass } from '<path>'
+import { DEFAULT_POLICY } from '../src/core/policy.ts'
+import type { AdapterStores } from '../src/core/stores.ts'
+import type { Journal } from '../src/core/journal.ts'
+import { runManagementPass } from '../src/dsh/management-pass.ts'
 
 interface Recorded {
   level: string

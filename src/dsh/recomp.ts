@@ -22,7 +22,7 @@ import type { Journal } from '../core/journal.ts'
 import type { PressurePolicy } from '../core/policy.ts'
 import type { AdapterStores } from '../core/stores.ts'
 import { callHistorian, historianTriggerBudget, type HistorianLlm } from './historian.ts'
-import { nodesForSeqs, requestContextOf, type SurfaceNode } from './seams.ts'
+import { nodesForSeqs, requestContextOf, type SessionSeq, type SurfaceNode } from './seams.ts'
 
 export const RECOMP_USAGE = 'Usage: /ctx-recomp [all | last:<n> | <startSeq>-<endSeq>]'
 
@@ -132,6 +132,13 @@ export async function recompactCompartments(
     readonly targets: readonly Compartment[]
   },
 ): Promise<RecompOutcome> {
+  // `llm` is optional on the deps (the command is registered without one only
+  // to report that recompaction is off), but every path below calls the
+  // historian, so it is required here. Captured in a local because narrowing a
+  // property does not survive the intervening calls.
+  const llm = deps.llm
+  if (llm === undefined) throw new Error('recompaction requires an LLM seam')
+  const historianDeps = { ...deps, llm }
   const recompacted: number[] = []
   const skipped: Array<{ compartmentId: number; reason: string }> = []
   const failed: Array<{ compartmentId: number; reason: string }> = []
@@ -143,7 +150,10 @@ export async function recompactCompartments(
     deps.policy.historianMinBudgetTokens,
   )
   for (const target of input.targets) {
-    const nodes: SurfaceNode[] = nodesForSeqs(input.session, target.coveredSeqs)
+    // The compartment stores its covered seqs as plain numbers (they round-trip
+    // through SQLite); the seam addresses surface positions with the branded
+    // `SessionSeq`, so the boundary conversion is explicit here.
+    const nodes: SurfaceNode[] = nodesForSeqs(input.session, target.coveredSeqs.map(seq => seq as SessionSeq))
     if (nodes.length < 2) {
       skipped.push({
         compartmentId: target.compartmentId,
@@ -153,7 +163,7 @@ export async function recompactCompartments(
     }
     const tokens = nodes.reduce((total, node) => total + Math.max(1, Math.ceil(node.text.length / 4)), 0)
     try {
-      const draft: CompartmentDraft = await callHistorian(deps, {
+      const draft: CompartmentDraft = await callHistorian(historianDeps, {
         sessionId: input.sessionId,
         session: input.session,
         nodes,

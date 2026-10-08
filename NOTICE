@@ -1,0 +1,50 @@
+# Notices
+
+This repository is the DeepSeek Harness adapter extracted from **magic-context**.
+It carries work from more than one project, under more than one copyright, and
+MIT requires the notices to travel with it. This file records where each part
+came from and the exact revisions it was taken at.
+
+## magic-context — https://github.com/cortexkit/magic-context
+
+MIT License, Copyright (c) 2025 Ufuk Altinok.
+
+The adapter is derived from this project: it shares its memory contracts, its
+on-disk formats, and its design language. Extracted from upstream tag
+**v0.46.0** (commit `651c105a9`). The adapter's own commits were replayed out of
+the `dsh` branch of a local magic-context checkout at `e34eda955`
+(2026-10-08) — 60 commits, authors and dates preserved.
+
+The adapter's own database lives under the upstream project's directory
+(`~/.local/share/cortexkit/magic-context-dsh-poc`) and reads the shared memory
+bank at (`~/.local/share/cortexkit/magic-context/context.db`) on purpose: that
+is the interoperability path with magic-context, so the namespace stays.
+
+## DeepSeek Harness (DSH) — https://github.com/deepseek-ai/deepseek-harness
+
+MIT License.
+
+DSH is a separate project and is **not** included here; its packages are
+consumed as dependencies. The adapter implements the DSH plugin seams
+(`@deepseek-ai/cordis`, `@deepseek-ai/dsh-agent`, `-compaction`, `-llm`,
+`-session`, `-tools`, and the client/session services). It is written against
+DSH **0.2.1-alpha.1** — checkout `e0f83cbfe`, published on npm under the
+coordinated dist-tag `dsh-0-2-1-alpha-1`.
+
+Note that npm's `latest` tag on those packages is an *older* release line
+(`0.0.1-rc.x` / `0.1.0-rc.6`); the pinned `devDependencies` are what the suite
+is tested against. Individual `@deepseek-ai` packages are BSD-3-Clause rather
+than MIT where their own metadata says so; that is their licence, not this
+repository's.
+
+## Vendored file: `tests/helpers/mock-adapter.ts`
+
+Taken verbatim from DSH (`packages/core/agent-loop/tests/mock-adapter.ts`,
+MIT) so that this repository's suite runs without a DSH checkout. The body is
+byte-identical to upstream; only a provenance header was added.
+
+## Everything else
+
+No other third-party code is bundled. The build output (`lib/`) is compiled
+from this repository's own `src/`, and the browser half is hand-written here;
+`scripts/copy-client.mjs` copies it verbatim.

@@ -16,7 +16,7 @@ import {
   openMemoryBridge,
   renderMemoryLine,
   resolveProjectIdentity,
-} from '<path>'
+} from '../src/core/memory-bridge.ts'
 import { makeMemoryDb as makeBareMemoryDb } from './helpers/memory-db'
 
 const tempDirs: string[] = []

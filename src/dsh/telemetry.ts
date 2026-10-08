@@ -182,7 +182,7 @@ export function createTelemetryService(deps: TelemetryDeps): TelemetryService {
       for (const row of deps.stores.journalByKind(since, sessionId)) {
         if (row.level === 'error') errors24h += row.count
         const field = KIND_COUNTS[row.kind]
-        if (field !== undefined) h[field] += row.count
+        if (field !== undefined) h[field] = (h[field] ?? 0) + row.count
       }
       for (const row of deps.stores.journalByKind(bootSince, sessionId)) {
         if (row.level === 'error') errorsSinceBoot += row.count

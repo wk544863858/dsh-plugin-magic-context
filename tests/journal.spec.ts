@@ -19,8 +19,8 @@ import ToolRuntime, { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import { MockAdapter, textResponse, toolCallResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
-import mcDshPlugin, { openJournal, openStores, redactData, formatJournalLine, recoverOrphanHistorianRuns } from '<path>'
+import { MockAdapter, textResponse, toolCallResponse } from './helpers/mock-adapter.ts'
+import mcDshPlugin, { openJournal, openStores, redactData, formatJournalLine, recoverOrphanHistorianRuns } from '../src/index.ts'
 
 class WindowedAdapter extends MockAdapter {
   constructor(script: ConstructorParameters<typeof MockAdapter>[0], private readonly contextWindow: number) {
