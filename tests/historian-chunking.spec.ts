@@ -15,6 +15,7 @@ import {
   type SurfaceNode,
 } from '<path>'
 import type { Journal, JournalKind, JournalLevel } from '<path>'
+import { spanRequestMessages } from '<path>'
 import { DEFAULT_POLICY } from '<path>'
 import { scriptLlm } from './helpers/llm-fake'
 
@@ -48,7 +49,7 @@ const historianCalls = (calls: readonly Call[]): Call[] => calls.filter(call => 
 const phases = (calls: readonly Call[]): string[] =>
   historianCalls(calls).map(call => String(call.data?.phase ?? '?'))
 
-function node(seq: number, text: string): SurfaceNode {
+function node(seq: number, text: string, overrides: Partial<SurfaceNode> = {}): SurfaceNode {
   return {
     seq,
     type: 'user/message',
@@ -57,6 +58,7 @@ function node(seq: number, text: string): SurfaceNode {
     hasText: true,
     isPlaceholder: false,
     hasToolCalls: false,
+    ...overrides,
   } as unknown as SurfaceNode
 }
 
@@ -125,6 +127,46 @@ describe('planChunkSpans', () => {
     // contiguous, order-preserving, covering every node exactly once
     const seqs = groups.flat().map(node => node.seq)
     expect(seqs).toEqual(nodes.map(node => node.seq))
+  })
+
+  it('never opens a chunk on a tool result or closes one on a tool-requesting assistant', () => {
+    // One turn's shape: user, assistant(tool-call), tool result, assistant. The
+    // token target (2 000) is reached exactly on the tool-requesting assistant,
+    // so a naive split opens the second chunk on its result — the shape the live
+    // chunked run answered with 400. The cut must wait for the next safe node.
+    const nodes = [
+      node(1, 'a'.repeat(4_000)),
+      node(2, 'b'.repeat(4_000), { role: 'assistant', hasToolCalls: true }),
+      node(3, 'c'.repeat(4_000), { role: 'tool' }),
+      node(4, 'd'.repeat(4_000), { role: 'assistant' }),
+      node(5, 'e'.repeat(4_000)),
+      node(6, 'f'.repeat(4_000)),
+      node(7, 'g'.repeat(4_000)),
+      node(8, 'h'.repeat(4_000)),
+    ]
+    const groups = planChunkSpans(nodes, 4_000, 2_000)
+    expect(groups.length).toBeGreaterThanOrEqual(2)
+    // Contiguous and order-preserving, and the first cut landed AFTER the result.
+    expect(groups.flat().map(item => item.seq)).toEqual(nodes.map(item => item.seq))
+    expect(groups[0]?.map(item => item.seq)).toEqual([1, 2, 3])
+    for (const group of groups) {
+      expect(group[0]?.role).not.toBe('tool')
+      expect(group[group.length - 1]?.hasToolCalls).toBe(false)
+    }
+  })
+})
+
+describe('spanRequestMessages', () => {
+  it('omits a tool result whose assistant tool-call is not in the same request', () => {
+    const events = [
+      { seq: 1, type: 'user/message', data: { id: 'u1', role: 'user', content: [{ type: 'text', text: 'hi' }] } },
+      { seq: 2, type: 'tool/result', data: { message: { id: 'orphan', role: 'tool', toolCallId: 'call-gone', content: [{ type: 'text', text: 'orphan' }] } } },
+      { seq: 3, type: 'assistant/message', data: { turn: 1, step: 1, message: { id: 'a1', role: 'assistant', content: [{ type: 'tool-call', id: 'call-1', name: 'echo' }] } } },
+      { seq: 4, type: 'tool/result', data: { message: { id: 'r1', role: 'tool', toolCallId: 'call-1', content: [{ type: 'text', text: 'paired' }] } } },
+    ]
+    const session = { snapshotEvents: () => events } as unknown as Parameters<typeof spanRequestMessages>[0]
+    const messages = spanRequestMessages(session, [1, 2, 3, 4] as never) as Array<{ id?: string }>
+    expect(messages.map(message => message.id)).toEqual(['u1', 'a1', 'r1'])
   })
 })
 

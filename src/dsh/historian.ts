@@ -390,14 +390,26 @@ export function planChunkSpans(
   const groups: SurfaceNode[][] = []
   let current: SurfaceNode[] = []
   let acc = 0
-  for (const node of nodes) {
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index] as SurfaceNode
     current.push(node)
     acc += Math.max(1, Math.ceil(node.text.length / 4))
-    if (acc >= target && groups.length < count - 1) {
-      groups.push(current)
-      current = []
-      acc = 0
-    }
+    if (acc < target || groups.length >= count - 1) continue
+    // TOOL-PAIRING at the chunk edges, not only at the span edges the scan above
+    // guards: a chunk must not OPEN on a tool result (its assistant tool-call
+    // would sit in the previous chunk) and must not CLOSE on an assistant that
+    // requested tools (whose results would land in the next one). Providers
+    // reject both (`host: packages/core/session/src/repair.ts:164`: "providers
+    // reject dangling assistant calls"), and the live failure was this shape — a
+    // chunked run whose second call opened on a tool result answered 400
+    // "tool_result ... must have a corresponding tool_use block in the previous
+    // message". Waiting for the next safe boundary keeps the target approximate:
+    // the chunk count is a cap, not a promise.
+    const next = nodes[index + 1]
+    if (next === undefined || next.role === 'tool' || node.hasToolCalls) continue
+    groups.push(current)
+    current = []
+    acc = 0
   }
   if (current.length > 0) groups.push(current)
   return groups.length > 0 ? groups : [nodes]

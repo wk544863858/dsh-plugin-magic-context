@@ -410,12 +410,30 @@ export function spanRequestMessages(
   const events = session.snapshotEvents()
   const bySeq = new Map(events.map(event => [event.seq, event]))
   const messages: unknown[] = []
+  const requested = new Set<string>()
   for (const seq of seqs) {
     const event = bySeq.get(seq)
     if (event === undefined) continue
     if (ROLE_BY_TYPE[event.type] === undefined) continue
     const message = messageOf(event)
     if (message === undefined) continue
+    // A request is a wire boundary: a provider rejects a tool result whose
+    // tool-call is not in the same request (`host: packages/core/session/src/
+    // repair.ts:164` states the mirror rule — "providers reject dangling
+    // assistant calls"). Every edge this adapter controls is kept pairing-safe
+    // (`planChunkSpans`, the historian's span scan), but a surface written by an
+    // OLDER build can still hold an interior orphan: the publish lane used to
+    // cite only the covered subset and the live journal carries the 400 it
+    // produced. Drop the orphan rather than send a request that cannot succeed.
+    if (event.type === 'assistant/message') {
+      const content = (message as { content?: Array<{ type?: string; id?: string }> }).content ?? []
+      for (const block of content) {
+        if (block.type === 'tool-call' && typeof block.id === 'string') requested.add(block.id)
+      }
+    } else if (event.type === 'tool/result') {
+      const callId = (message as { toolCallId?: string }).toolCallId
+      if (typeof callId === 'string' && !requested.has(callId)) continue
+    }
     messages.push(message)
   }
   return messages
