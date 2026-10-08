@@ -34,6 +34,7 @@ import { DEFAULT_POLICY } from '<path>'
 import { SCHEMA_VERSION, openStores } from '<path>'
 import { runManagementPass } from '<path>'
 import type { Session } from '<path>'
+import { MUTATION_LOG_DDL, makeMemoryDb, PROJECT_STATE_DDL, WORKSPACES_DDL } from './helpers/memory-db'
 
 const tempDirs: string[] = []
 
@@ -242,45 +243,13 @@ function makeContextDb(input: {
   withMutationLog?: boolean
   withProjectState?: boolean
 }): string {
-  const path = join(tempDir('mc-delta-'), 'context.db')
+  const { path } = makeMemoryDb({ prefix: 'mc-delta-', schemaVersion: 94 })
   const db = new DatabaseSync(path)
-  db.exec(`
-    CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER);
-    CREATE TABLE memories(
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_path TEXT NOT NULL,
-      category TEXT NOT NULL,
-      content TEXT NOT NULL,
-      normalized_hash TEXT NOT NULL,
-      importance INTEGER,
-      scope TEXT NOT NULL DEFAULT 'project',
-      shareable INTEGER NOT NULL DEFAULT 0,
-      source_session_id TEXT,
-      source_type TEXT DEFAULT 'historian',
-      seen_count INTEGER DEFAULT 1,
-      retrieval_count INTEGER DEFAULT 0,
-      first_seen_at INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL DEFAULT 0,
-      updated_at INTEGER NOT NULL DEFAULT 0,
-      last_seen_at INTEGER NOT NULL DEFAULT 0,
-      last_retrieved_at INTEGER,
-      status TEXT DEFAULT 'active',
-      expires_at INTEGER,
-      verification_status TEXT DEFAULT 'unverified',
-      verified_at INTEGER,
-      classified_at INTEGER,
-      superseded_by_memory_id INTEGER,
-      merged_from TEXT,
-      metadata_json TEXT,
-      UNIQUE(project_path, category, normalized_hash)
-    );
-  `)
-  db.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES(94, 0)').run()
 
   const insertMemory = db.prepare(
     `INSERT INTO memories(id, project_path, category, content, normalized_hash, scope, shareable, status, expires_at,
-                          superseded_by_memory_id, updated_at, last_seen_at)
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                          superseded_by_memory_id, first_seen_at, created_at, updated_at, last_seen_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
   input.memories.forEach((row, index) => {
     insertMemory.run(
@@ -296,23 +265,13 @@ function makeContextDb(input: {
       row.supersededBy ?? null,
       row.updatedAt ?? 1000,
       row.updatedAt ?? 1000,
+      row.updatedAt ?? 1000,
+      row.updatedAt ?? 1000,
     )
   })
 
   if (input.withMutationLog !== false) {
-    db.exec(`
-      CREATE TABLE memory_mutation_log(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_path TEXT NOT NULL,
-        mutation_type TEXT NOT NULL CHECK (mutation_type IN ('archive', 'delete', 'update', 'superseded')),
-        target_memory_id INTEGER NOT NULL,
-        superseded_by_id INTEGER,
-        category TEXT,
-        new_content TEXT,
-        queued_at INTEGER NOT NULL
-      );
-      CREATE INDEX idx_memory_mutation_log_project ON memory_mutation_log(project_path, id);
-    `)
+    db.exec(MUTATION_LOG_DDL)
     const insertMutation = db.prepare(
       `INSERT INTO memory_mutation_log(id, project_path, mutation_type, target_memory_id, superseded_by_id,
                                        category, new_content, queued_at)
@@ -333,14 +292,7 @@ function makeContextDb(input: {
   }
 
   if (input.withProjectState !== false) {
-    db.exec(`
-      CREATE TABLE project_state(
-        project_path TEXT PRIMARY KEY,
-        project_memory_epoch INTEGER NOT NULL DEFAULT 0,
-        project_user_profile_version INTEGER NOT NULL DEFAULT 0,
-        updated_at INTEGER NOT NULL DEFAULT 0
-      );
-    `)
+    db.exec(PROJECT_STATE_DDL)
     const insertEpoch = db.prepare(
       'INSERT INTO project_state(project_path, project_memory_epoch, updated_at) VALUES(?, ?, 0)',
     )
@@ -348,10 +300,7 @@ function makeContextDb(input: {
   }
 
   if (input.workspace !== undefined) {
-    db.exec(`
-      CREATE TABLE workspaces(id INTEGER PRIMARY KEY, name TEXT, share_categories TEXT, created_at INTEGER, updated_at INTEGER);
-      CREATE TABLE workspace_members(workspace_id INTEGER, project_path TEXT, display_name TEXT, display_path TEXT, added_at INTEGER);
-    `)
+    db.exec(WORKSPACES_DDL)
     db.prepare('INSERT INTO workspaces(id, name, share_categories, created_at, updated_at) VALUES(1, ?, ?, 0, 0)')
       .run(input.workspace.name, JSON.stringify(input.workspace.shareCategories))
     for (const member of input.workspace.members) {

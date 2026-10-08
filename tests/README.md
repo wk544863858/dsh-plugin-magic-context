@@ -1,8 +1,8 @@
 # The DSH adapter's runnable suite
 
-These 25 specs are the **canonical** copy of the only executable test suite for
-`packages/dsh-plugin`. They are committed here so the suite cannot be lost with
-a temporary directory.
+These 25 specs (plus the shared fixtures under `helpers/`) are the **canonical**
+copy of the only executable test suite for `packages/dsh-plugin`. They are
+committed here so the suite cannot be lost with a temporary directory.
 
 ## Why the canonical copy is not the one vitest runs
 
@@ -44,3 +44,11 @@ Set-Location $env:MC_DSH_CHECKOUT   # or the default path above
    instead of a block array; `user/message` events stubbed with a
    `data.message` wrapper that no live session produces). When a defect is
    found through a fake, fix the fake in the same change.
+4. The Magic Context store DDL has a single source:
+   `helpers/memory-db.ts`. Never inline a `CREATE TABLE memories` (or the
+   mutation-log / authority / workspaces blocks) in a spec — eleven specs used
+   to carry near-identical copies and three had already lost the `mural_cue`
+   columns. The fixture's DDL is the contract-pinned shape validated
+   byte-for-byte against a real v94 store; scenario-specific variants (e.g.
+   memory-search's minimal FTS) stay local to the spec that needs them, on
+   purpose.

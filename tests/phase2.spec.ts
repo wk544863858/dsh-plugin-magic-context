@@ -24,6 +24,7 @@ import { CompactionEngine } from '@deepseek-ai/dsh-compaction'
 import { MockAdapter, textResponse, toolCallResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
 import mcDshPlugin, { openStores, runManagementPass, DEFAULT_POLICY } from '<path>'
 import { BASELINE_OPEN, compactedPlaceholder } from '<path>'
+import { makeMemoryDb as makeBareMemoryDb } from './helpers/memory-db'
 
 type AnyMessage = { role: string; content: Array<{ type: string; text?: string }> }
 
@@ -150,25 +151,15 @@ async function until(check: () => boolean, timeoutMs = 4000): Promise<void> {
 }
 
 function makeMemoryDb(rows: Array<{ project: string; category: string; content: string; shareable?: number }>): string {
-  const dir = mkdtempSync(join(tmpdir(), 'mc-p2-mem-'))
-  const path = join(dir, 'context.db')
-  const db = new DatabaseSync(path)
-  db.exec(`
-    CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER);
-    CREATE TABLE memories(
-      id INTEGER PRIMARY KEY AUTOINCREMENT, project_path TEXT NOT NULL, category TEXT, content TEXT NOT NULL,
-      importance INTEGER, scope TEXT DEFAULT 'project', shareable INTEGER DEFAULT 0,
-      status TEXT DEFAULT 'active', expires_at INTEGER, updated_at INTEGER NOT NULL, last_seen_at INTEGER, verified_at INTEGER
-    );
-  `)
-  db.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES(94, 0)').run()
-  for (const row of rows) {
+  const bare = makeBareMemoryDb({ prefix: 'mc-p2-mem-', schemaVersion: 94 })
+  const db = new DatabaseSync(bare.path)
+  rows.forEach((row, index) => {
     db.prepare(
-      'INSERT INTO memories(project_path, category, content, importance, shareable, status, updated_at, last_seen_at) VALUES(?, ?, ?, 80, ?, ?, ?, ?)',
-    ).run(row.project, row.category, row.content, row.shareable ?? 0, 'active', 1000, 1000)
-  }
+      'INSERT INTO memories(project_path, category, content, normalized_hash, importance, shareable, status, first_seen_at, created_at, updated_at, last_seen_at) VALUES(?, ?, ?, ?, 80, ?, ?, ?, ?, ?, ?)',
+    ).run(row.project, row.category, row.content, `hash-${index + 1}`, row.shareable ?? 0, 'active', 1000, 1000, 1000, 1000)
+  })
   db.close()
-  return path
+  return bare.path
 }
 
 describe('magic-context dsh adapter (phase 2: historian, baseline, memories, engine)', () => {

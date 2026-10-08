@@ -17,6 +17,7 @@ import {
   renderMemoryLine,
   resolveProjectIdentity,
 } from '<path>'
+import { makeMemoryDb as makeBareMemoryDb } from './helpers/memory-db'
 
 const tempDirs: string[] = []
 
@@ -32,49 +33,30 @@ function makeDb(schemaVersion: number, rows: Array<{
   updatedAt?: number
   lastSeenAt?: number
 }>): string {
-  const dir = mkdtempSync(join(tmpdir(), 'mc-mem-'))
+  const { path, dir } = makeBareMemoryDb({ prefix: 'mc-mem-', schemaVersion })
   tempDirs.push(dir)
-  const path = join(dir, 'context.db')
   const db = new DatabaseSync(path)
-  db.exec(`
-    CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER);
-    CREATE TABLE memories(
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_path TEXT NOT NULL,
-      category TEXT,
-      content TEXT NOT NULL,
-      normalized_hash TEXT,
-      importance INTEGER,
-      scope TEXT DEFAULT 'project',
-      shareable INTEGER DEFAULT 0,
-      source_type TEXT DEFAULT 'historian',
-      status TEXT DEFAULT 'active',
-      expires_at INTEGER,
-      first_seen_at INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL DEFAULT 0,
-      updated_at INTEGER NOT NULL DEFAULT 0,
-      last_seen_at INTEGER,
-      verified_at INTEGER
-    );
-  `)
-  db.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)').run(schemaVersion, 0)
-  for (const row of rows) {
+  rows.forEach((row, index) => {
     db.prepare(
-      `INSERT INTO memories(project_path, category, content, importance, scope, shareable, status, expires_at, updated_at, last_seen_at)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO memories(project_path, category, content, normalized_hash, importance, scope, shareable, status,
+                            expires_at, first_seen_at, created_at, updated_at, last_seen_at)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       row.project,
       row.category,
       row.content,
+      `hash-${index + 1}`,
       row.importance ?? 50,
       row.scope ?? 'project',
       row.shareable ?? 0,
       row.status ?? 'active',
       row.expiresAt ?? null,
       row.updatedAt ?? 1000,
+      row.updatedAt ?? 1000,
+      row.updatedAt ?? 1000,
       row.lastSeenAt ?? row.updatedAt ?? 1000,
     )
-  }
+  })
   db.close()
   return path
 }
@@ -283,30 +265,16 @@ function makeDbWorkspaced(input: {
   peerRows: Array<{ project: string; category: string; content: string; shareable?: number }>
   workspace: { name: string; shareCategories: string[]; members: string[] }
 }): string {
-  const dir = mkdtempSync(join(tmpdir(), 'mc-mem-ws-'))
+  const { path, dir } = makeBareMemoryDb({ prefix: 'mc-mem-ws-', schemaVersion: 94, workspaces: true })
   tempDirs.push(dir)
-  const path = join(dir, 'context.db')
   const db = new DatabaseSync(path)
-  db.exec(`
-    CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER);
-    CREATE TABLE memories(
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_path TEXT NOT NULL, category TEXT, content TEXT, normalized_hash TEXT,
-      importance INTEGER, scope TEXT DEFAULT 'project', shareable INTEGER DEFAULT 0,
-      source_type TEXT DEFAULT 'historian', status TEXT DEFAULT 'active', expires_at INTEGER,
-      first_seen_at INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0,
-      updated_at INTEGER NOT NULL DEFAULT 0, last_seen_at INTEGER, verified_at INTEGER
-    );
-    CREATE TABLE workspaces(id INTEGER PRIMARY KEY, name TEXT, share_categories TEXT, created_at INTEGER, updated_at INTEGER);
-    CREATE TABLE workspace_members(workspace_id INTEGER, project_path TEXT, display_name TEXT, display_path TEXT, added_at INTEGER);
-  `)
-  db.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES(94, 0)').run()
   const insert = db.prepare(
-    `INSERT INTO memories(project_path, category, content, scope, shareable, status, updated_at, last_seen_at)
-     VALUES(?, ?, ?, 'project', ?, 'active', 1000, 1000)`,
+    `INSERT INTO memories(project_path, category, content, normalized_hash, scope, shareable, status,
+                          first_seen_at, created_at, updated_at, last_seen_at)
+     VALUES(?, ?, ?, ?, 'project', ?, 'active', 1000, 1000, 1000, 1000)`,
   )
-  for (const row of [...input.ownRows, ...input.peerRows]) {
-    insert.run(row.project, row.category, row.content, row.shareable ?? 0)
+  for (const [index, row] of [...input.ownRows, ...input.peerRows].entries()) {
+    insert.run(row.project, row.category, row.content, `hash-${index + 1}`, row.shareable ?? 0)
   }
   db.prepare('INSERT INTO workspaces(id, name, share_categories, created_at, updated_at) VALUES(1, ?, ?, 0, 0)')
     .run(input.workspace.name, JSON.stringify(input.workspace.shareCategories))

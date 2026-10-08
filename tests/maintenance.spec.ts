@@ -7,13 +7,12 @@
  * packages/plugin/src/features/magic-context/dreamer/verify.ts, constants.ts.
  */
 import { DatabaseSync } from 'node:sqlite'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { rmSync } from 'node:fs'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openMemoryWriter } from '<path>'
 import { runMaintenanceTick } from '<path>'
 import type { Journal, JournalEntry, JournalKind, JournalLevel } from '<path>'
+import { makeMemoryDb } from './helpers/memory-db'
 
 const T0 = 1_700_000_000_000
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -23,109 +22,11 @@ const silentLogger = { info: () => {}, warn: () => {} }
 
 const tempDirs: string[] = []
 
-/** Magic Context's `memories` DDL (contract §1.1, verbatim). */
-const MEMORIES_DDL = `
-  CREATE TABLE memories (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_path TEXT NOT NULL,
-    category TEXT NOT NULL,
-    content TEXT NOT NULL,
-    normalized_hash TEXT NOT NULL,
-    importance INTEGER,
-    scope TEXT NOT NULL DEFAULT 'project',
-    shareable INTEGER NOT NULL DEFAULT 0,
-    source_session_id TEXT,
-    source_type TEXT DEFAULT 'historian',
-    seen_count INTEGER DEFAULT 1,
-    retrieval_count INTEGER DEFAULT 0,
-    first_seen_at INTEGER NOT NULL,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    last_seen_at INTEGER NOT NULL,
-    last_retrieved_at INTEGER,
-    status TEXT DEFAULT 'active',
-    expires_at INTEGER,
-    verification_status TEXT DEFAULT 'unverified',
-    verified_at INTEGER,
-    classified_at INTEGER,
-    superseded_by_memory_id INTEGER,
-    merged_from TEXT,
-    metadata_json TEXT,
-    mural_cue TEXT,
-    mural_cue_hash TEXT,
-    mural_cue_at INTEGER,
-    mural_cue_rejection_count INTEGER NOT NULL DEFAULT 0,
-    UNIQUE(project_path, category, normalized_hash)
-  );
-`
-
-const SUPPORT_DDL = `
-  CREATE TABLE memory_mutation_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_path TEXT NOT NULL,
-    mutation_type TEXT NOT NULL CHECK (mutation_type IN ('archive', 'delete', 'update', 'superseded')),
-    target_memory_id INTEGER NOT NULL,
-    superseded_by_id INTEGER,
-    category TEXT,
-    new_content TEXT,
-    queued_at INTEGER NOT NULL
-  );
-  CREATE TABLE project_state (
-    project_path TEXT PRIMARY KEY,
-    project_memory_epoch INTEGER NOT NULL DEFAULT 0,
-    project_user_profile_version INTEGER NOT NULL DEFAULT 0,
-    updated_at INTEGER NOT NULL DEFAULT 0
-  );
-  CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER);
-`
-
-const AUTHORITY_DDL = `
-  CREATE TABLE authority_managed (
-    project_path TEXT PRIMARY KEY, context_store_uuid TEXT NOT NULL, marked_at INTEGER NOT NULL);
-  CREATE TABLE authority_repair_pending (
-    project_path TEXT PRIMARY KEY, started_at INTEGER NOT NULL);
-  CREATE TABLE context_privilege_state (
-    id INTEGER PRIMARY KEY CHECK(id = 1),
-    enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)));
-  INSERT INTO context_privilege_state(id, enabled) VALUES(1, 0);
-
-  CREATE TRIGGER memories_authority_guard_insert
-  BEFORE INSERT ON memories
-  WHEN (EXISTS (SELECT 1 FROM authority_managed WHERE project_path = NEW.project_path)
-     OR EXISTS (SELECT 1 FROM authority_repair_pending WHERE project_path = NEW.project_path))
-    AND COALESCE((SELECT enabled FROM context_privilege_state WHERE id = 1), 0) = 0
-  BEGIN SELECT RAISE(ABORT, 'context.db memory writes are managed by the Rust module'); END;
-
-  CREATE TRIGGER memories_authority_guard_update
-  BEFORE UPDATE ON memories
-  WHEN (EXISTS (SELECT 1 FROM authority_managed WHERE project_path = OLD.project_path)
-     OR EXISTS (SELECT 1 FROM authority_managed WHERE project_path = NEW.project_path)
-     OR EXISTS (SELECT 1 FROM authority_repair_pending WHERE project_path = OLD.project_path)
-     OR EXISTS (SELECT 1 FROM authority_repair_pending WHERE project_path = NEW.project_path))
-    AND COALESCE((SELECT enabled FROM context_privilege_state WHERE id = 1), 0) = 0
-  BEGIN SELECT RAISE(ABORT, 'context.db memory writes are managed by the Rust module'); END;
-
-  CREATE TRIGGER memories_authority_guard_delete
-  BEFORE DELETE ON memories
-  WHEN (EXISTS (SELECT 1 FROM authority_managed WHERE project_path = OLD.project_path)
-     OR EXISTS (SELECT 1 FROM authority_repair_pending WHERE project_path = OLD.project_path))
-    AND COALESCE((SELECT enabled FROM context_privilege_state WHERE id = 1), 0) = 0
-  BEGIN SELECT RAISE(ABORT, 'context.db memory writes are managed by the Rust module'); END;
-`
-
 function createDb(schemaVersion = 94): string {
-  const dir = mkdtempSync(join(tmpdir(), 'mc-maintenance-'))
+  const { path, dir } = makeMemoryDb({
+    prefix: 'mc-maintenance-', schemaVersion, mutationLog: true, projectState: true, authority: true,
+  })
   tempDirs.push(dir)
-  const path = join(dir, 'context.db')
-  const db = new DatabaseSync(path)
-  try {
-    db.exec(MEMORIES_DDL)
-    db.exec(SUPPORT_DDL)
-    db.exec(AUTHORITY_DDL)
-    db.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES(?, 0)').run(schemaVersion)
-  } finally {
-    db.close()
-  }
   return path
 }
 

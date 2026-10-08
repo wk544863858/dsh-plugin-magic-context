@@ -35,6 +35,7 @@ import {
   type MemorySearchSpace,
 } from '<path>'
 import { defineCtxMemoryTool } from '<path>'
+import { makeMemoryDb } from './helpers/memory-db'
 
 const OWN = 'git:1111111111111111111111111111111111111111'
 const PEER = 'git:2222222222222222222222222222222222222222'
@@ -53,78 +54,11 @@ afterEach(() => {
   }
 })
 
-/** The v94 subset the search lanes touch (contract §1.1, §5.1). */
-const DDL = `
-  CREATE TABLE memories (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_path TEXT NOT NULL,
-    category TEXT NOT NULL,
-    content TEXT NOT NULL,
-    normalized_hash TEXT NOT NULL,
-    importance INTEGER,
-    scope TEXT NOT NULL DEFAULT 'project',
-    shareable INTEGER NOT NULL DEFAULT 0,
-    source_session_id TEXT,
-    source_type TEXT DEFAULT 'historian',
-    seen_count INTEGER DEFAULT 1,
-    retrieval_count INTEGER DEFAULT 0,
-    first_seen_at INTEGER NOT NULL,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    last_seen_at INTEGER NOT NULL,
-    last_retrieved_at INTEGER,
-    status TEXT DEFAULT 'active',
-    expires_at INTEGER,
-    verification_status TEXT DEFAULT 'unverified',
-    verified_at INTEGER,
-    classified_at INTEGER,
-    superseded_by_memory_id INTEGER,
-    merged_from TEXT,
-    metadata_json TEXT,
-    mural_cue TEXT,
-    mural_cue_hash TEXT,
-    mural_cue_at INTEGER,
-    mural_cue_rejection_count INTEGER NOT NULL DEFAULT 0,
-    UNIQUE(project_path, category, normalized_hash)
-  );
-  CREATE TABLE memory_mutation_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_path TEXT NOT NULL,
-    mutation_type TEXT NOT NULL CHECK (mutation_type IN ('archive', 'delete', 'update', 'superseded')),
-    target_memory_id INTEGER NOT NULL,
-    superseded_by_id INTEGER,
-    category TEXT,
-    new_content TEXT,
-    queued_at INTEGER NOT NULL
-  );
-  CREATE TABLE project_state (
-    project_path TEXT PRIMARY KEY,
-    project_memory_epoch INTEGER NOT NULL DEFAULT 0,
-    project_user_profile_version INTEGER NOT NULL DEFAULT 0,
-    updated_at INTEGER NOT NULL DEFAULT 0
-  );
-  CREATE TABLE authority_managed (
-    project_path TEXT PRIMARY KEY, context_store_uuid TEXT NOT NULL, marked_at INTEGER NOT NULL);
-  CREATE TABLE authority_repair_pending (
-    project_path TEXT PRIMARY KEY, started_at INTEGER NOT NULL);
-  CREATE TABLE context_privilege_state (
-    id INTEGER PRIMARY KEY CHECK(id = 1),
-    enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)));
-  INSERT INTO context_privilege_state(id, enabled) VALUES(1, 0);
-`
-
 function createDb(version: number = SUPPORTED): string {
-  const dir = mkdtempSync(join(tmpdir(), 'mc-search-'))
+  const { path, dir } = makeMemoryDb({
+    prefix: 'mc-search-', schemaVersion: version, mutationLog: true, projectState: true, authority: true,
+  })
   tempDirs.push(dir)
-  const path = join(dir, 'context.db')
-  const db = new DatabaseSync(path)
-  try {
-    db.exec(DDL)
-    db.exec('CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER)')
-    db.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES(?, 0)').run(version)
-  } finally {
-    db.close()
-  }
   return path
 }
 

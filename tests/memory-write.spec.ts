@@ -10,6 +10,7 @@ import {
   openMemoryWriter,
 } from '<path>'
 import { V2_MEMORY_CATEGORIES } from '<path>'
+import { makeMemoryDb } from './helpers/memory-db'
 
 const OWN = 'git:1111111111111111111111111111111111111111'
 const OTHER = 'git:2222222222222222222222222222222222222222'
@@ -49,136 +50,6 @@ function collectingLogger(): { readonly messages: string[]; info: (m: string) =>
   }
 }
 
-/** Magic Context's `memories` DDL, verbatim (contract §1.1). */
-const MEMORIES_DDL = `
-  CREATE TABLE memories (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_path TEXT NOT NULL,
-    category TEXT NOT NULL,
-    content TEXT NOT NULL,
-    normalized_hash TEXT NOT NULL,
-    importance INTEGER,
-    scope TEXT NOT NULL DEFAULT 'project',
-    shareable INTEGER NOT NULL DEFAULT 0,
-    source_session_id TEXT,
-    source_type TEXT DEFAULT 'historian',
-    seen_count INTEGER DEFAULT 1,
-    retrieval_count INTEGER DEFAULT 0,
-    first_seen_at INTEGER NOT NULL,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    last_seen_at INTEGER NOT NULL,
-    last_retrieved_at INTEGER,
-    status TEXT DEFAULT 'active',
-    expires_at INTEGER,
-    verification_status TEXT DEFAULT 'unverified',
-    verified_at INTEGER,
-    classified_at INTEGER,
-    superseded_by_memory_id INTEGER,
-    merged_from TEXT,
-    metadata_json TEXT,
-    mural_cue TEXT,
-    mural_cue_hash TEXT,
-    mural_cue_at INTEGER,
-    mural_cue_rejection_count INTEGER NOT NULL DEFAULT 0,
-    UNIQUE(project_path, category, normalized_hash)
-  );
-  CREATE INDEX idx_memories_project_status_category ON memories(project_path, status, category);
-  CREATE INDEX idx_memories_project_status_expires ON memories(project_path, status, expires_at);
-  CREATE INDEX idx_memories_project_category_hash ON memories(project_path, category, normalized_hash);
-`
-
-/** The non-memory tables the write path touches (contract §5.1, §6.1). */
-const SUPPORT_DDL = `
-  CREATE TABLE memory_mutation_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_path TEXT NOT NULL,
-    mutation_type TEXT NOT NULL CHECK (mutation_type IN ('archive', 'delete', 'update', 'superseded')),
-    target_memory_id INTEGER NOT NULL,
-    superseded_by_id INTEGER,
-    category TEXT,
-    new_content TEXT,
-    queued_at INTEGER NOT NULL
-  );
-  CREATE INDEX idx_memory_mutation_log_project ON memory_mutation_log(project_path, id);
-  CREATE INDEX idx_memory_mutation_log_visibility ON memory_mutation_log(project_path, category, id, target_memory_id);
-  CREATE INDEX idx_memory_mutation_log_target ON memory_mutation_log(project_path, target_memory_id, id);
-
-  CREATE TABLE project_state (
-    project_path TEXT PRIMARY KEY,
-    project_memory_epoch INTEGER NOT NULL DEFAULT 0,
-    project_user_profile_version INTEGER NOT NULL DEFAULT 0,
-    updated_at INTEGER NOT NULL DEFAULT 0
-  );
-
-  CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER);
-  INSERT INTO schema_migrations(version, applied_at) VALUES(94, 0);
-`
-
-/** The authority tables and their three triggers, verbatim (contract §8.4). */
-const AUTHORITY_DDL = `
-  CREATE TABLE authority_managed (
-    project_path TEXT PRIMARY KEY, context_store_uuid TEXT NOT NULL, marked_at INTEGER NOT NULL);
-  CREATE TABLE authority_repair_pending (
-    project_path TEXT PRIMARY KEY, started_at INTEGER NOT NULL);
-  CREATE TABLE context_privilege_state (
-    id INTEGER PRIMARY KEY CHECK(id = 1),
-    enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)));
-  INSERT INTO context_privilege_state(id, enabled) VALUES(1, 0);
-
-  CREATE TRIGGER memories_authority_guard_insert
-  BEFORE INSERT ON memories
-  WHEN (EXISTS (SELECT 1 FROM authority_managed WHERE project_path = NEW.project_path)
-     OR EXISTS (SELECT 1 FROM authority_repair_pending WHERE project_path = NEW.project_path))
-    AND COALESCE((SELECT enabled FROM context_privilege_state WHERE id = 1), 0) = 0
-  BEGIN SELECT RAISE(ABORT, 'context.db memory writes are managed by the Rust module'); END;
-
-  CREATE TRIGGER memories_authority_guard_update
-  BEFORE UPDATE ON memories
-  WHEN (EXISTS (SELECT 1 FROM authority_managed WHERE project_path = OLD.project_path)
-     OR EXISTS (SELECT 1 FROM authority_managed WHERE project_path = NEW.project_path)
-     OR EXISTS (SELECT 1 FROM authority_repair_pending WHERE project_path = OLD.project_path)
-     OR EXISTS (SELECT 1 FROM authority_repair_pending WHERE project_path = NEW.project_path))
-    AND COALESCE((SELECT enabled FROM context_privilege_state WHERE id = 1), 0) = 0
-  BEGIN SELECT RAISE(ABORT, 'context.db memory writes are managed by the Rust module'); END;
-
-  CREATE TRIGGER memories_authority_guard_delete
-  BEFORE DELETE ON memories
-  WHEN (EXISTS (SELECT 1 FROM authority_managed WHERE project_path = OLD.project_path)
-     OR EXISTS (SELECT 1 FROM authority_repair_pending WHERE project_path = OLD.project_path))
-    AND COALESCE((SELECT enabled FROM context_privilege_state WHERE id = 1), 0) = 0
-  BEGIN SELECT RAISE(ABORT, 'context.db memory writes are managed by the Rust module'); END;
-`
-
-/** The FTS external-content table and its sync triggers (contract §1.5). */
-const FTS_DDL = `
-  CREATE VIRTUAL TABLE memories_fts USING fts5(
-    content, category, content='memories', content_rowid='id', tokenize='porter unicode61');
-
-  CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN
-    INSERT INTO memories_fts(rowid, content, category) VALUES (new.id, new.content, new.category);
-  END;
-  CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN
-    INSERT INTO memories_fts(memories_fts, rowid, content, category) VALUES ('delete', old.id, old.content, old.category);
-  END;
-  CREATE TRIGGER memories_au AFTER UPDATE ON memories BEGIN
-    INSERT INTO memories_fts(memories_fts, rowid, content, category) VALUES ('delete', old.id, old.content, old.category);
-    INSERT INTO memories_fts(rowid, content, category) VALUES (new.id, new.content, new.category);
-  END;
-`
-
-/** The classify/verify artefact tables the §4.5 clears target. */
-const ARTEFACT_DDL = `
-  CREATE TABLE memory_embeddings (
-    memory_id INTEGER NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
-    model TEXT NOT NULL, embedding BLOB, created_at INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY(memory_id, model));
-  CREATE TABLE memory_verifications (
-    memory_id INTEGER NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
-    file_path TEXT NOT NULL, verified_at INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY(memory_id, file_path));
-`
-
 function makeTempDir(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix))
   tempDirs.push(dir)
@@ -186,25 +57,20 @@ function makeTempDir(prefix: string): string {
 }
 
 function createDb(): string {
-  const path = join(makeTempDir('mc-mw-'), 'context.db')
-  const db = new DatabaseSync(path)
-  try {
-    db.exec(MEMORIES_DDL + SUPPORT_DDL + AUTHORITY_DDL + FTS_DDL + ARTEFACT_DDL)
-  } finally {
-    db.close()
-  }
+  const { path, dir } = makeMemoryDb({
+    prefix: 'mc-mw-', schemaVersion: SCHEMA_VERSION,
+    mutationLog: true, projectState: true, authority: true, fts: true, artefacts: true,
+  })
+  tempDirs.push(dir)
   return path
 }
 
 /** A trimmed database: no authority tables, no embedding/verification tables. */
 function createTrimmedDb(): string {
-  const path = join(makeTempDir('mc-mw-trim-'), 'context.db')
-  const db = new DatabaseSync(path)
-  try {
-    db.exec(MEMORIES_DDL + SUPPORT_DDL)
-  } finally {
-    db.close()
-  }
+  const { path, dir } = makeMemoryDb({
+    prefix: 'mc-mw-trim-', schemaVersion: SCHEMA_VERSION, mutationLog: true, projectState: true,
+  })
+  tempDirs.push(dir)
   return path
 }
 
@@ -1007,4 +873,3 @@ describe('taxonomy helpers', () => {
     expect(normalizedMemoryHash('  Mixed   CASE  ')).toBe(normalizedMemoryHash('mixed case'))
   })
 })
-

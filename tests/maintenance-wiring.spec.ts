@@ -29,62 +29,10 @@ import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { MockAdapter, textResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
 import mcDshPlugin from '<path>'
 import { resolveIdentitySpec } from '<path>'
+import { makeMemoryDb as makeBareMemoryDb } from './helpers/memory-db'
 
 const tempDirs: string[] = []
 const VERIFY_ROUTE = { provider: 'mock-verify', model: 'mock' }
-
-/** Magic Context's `memories` DDL plus the tables the writer touches. */
-const MEMORIES_DDL = `
-  CREATE TABLE memories (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_path TEXT NOT NULL,
-    category TEXT NOT NULL,
-    content TEXT NOT NULL,
-    normalized_hash TEXT NOT NULL,
-    importance INTEGER,
-    scope TEXT NOT NULL DEFAULT 'project',
-    shareable INTEGER NOT NULL DEFAULT 0,
-    source_session_id TEXT,
-    source_type TEXT DEFAULT 'historian',
-    seen_count INTEGER DEFAULT 1,
-    retrieval_count INTEGER DEFAULT 0,
-    first_seen_at INTEGER NOT NULL,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    last_seen_at INTEGER NOT NULL,
-    last_retrieved_at INTEGER,
-    status TEXT DEFAULT 'active',
-    expires_at INTEGER,
-    verification_status TEXT DEFAULT 'unverified',
-    verified_at INTEGER,
-    classified_at INTEGER,
-    superseded_by_memory_id INTEGER,
-    merged_from TEXT,
-    metadata_json TEXT,
-    mural_cue TEXT,
-    mural_cue_hash TEXT,
-    mural_cue_at INTEGER,
-    mural_cue_rejection_count INTEGER NOT NULL DEFAULT 0,
-    UNIQUE(project_path, category, normalized_hash)
-  );
-  CREATE TABLE memory_mutation_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_path TEXT NOT NULL,
-    mutation_type TEXT NOT NULL CHECK (mutation_type IN ('archive', 'delete', 'update', 'superseded')),
-    target_memory_id INTEGER NOT NULL,
-    superseded_by_id INTEGER,
-    category TEXT,
-    new_content TEXT,
-    queued_at INTEGER NOT NULL
-  );
-  CREATE TABLE project_state (
-    project_path TEXT PRIMARY KEY,
-    project_memory_epoch INTEGER NOT NULL DEFAULT 0,
-    project_user_profile_version INTEGER NOT NULL DEFAULT 0,
-    updated_at INTEGER NOT NULL DEFAULT 0
-  );
-  CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER);
-`
 
 function tempDir(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix))
@@ -94,10 +42,11 @@ function tempDir(prefix: string): string {
 
 /** A memory store seeded with one unverified row owned by `identity`. */
 function makeMemoryDb(identity: string): { path: string; id: number } {
-  const path = join(tempDir('mc-maint-wire-'), 'context.db')
+  const { path, dir } = makeBareMemoryDb({
+    prefix: 'mc-maint-wire-', schemaVersion: 94, mutationLog: true, projectState: true,
+  })
+  tempDirs.push(dir)
   const db = new DatabaseSync(path)
-  db.exec(MEMORIES_DDL)
-  db.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES(94, 0)').run()
   const now = Date.now()
   const inserted = db.prepare(
     `INSERT INTO memories(project_path, category, content, normalized_hash, importance, scope, shareable,
