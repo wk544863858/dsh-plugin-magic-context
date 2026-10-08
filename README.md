@@ -206,6 +206,7 @@ epoch 指纹稳定、权威守卫（authority 表空 + privilege 未启用）、
 | **项目记忆接入** | 只读打开 MC 共享 `context.db`：版本 fence（≤94）、身份匹配、可注入过滤、工作区共享白名单、预算裁剪；注入 m[0] + `ctx_memory` 只读检索工具。**身份自动推导**：`git:<root-commit-sha>`（git 仓库）→ `dir:<md5(path.resolve)>`（对齐 MC，含 Windows 反斜杠语义）；**未配置时用会话 cwd**；工作区成员与共享类别**从库里的 `workspaces`/`workspace_members` 自动解析** | ✅ 单元 10 + 集成 + **真实库只读端到端**（对 `<path>` 解析出 `git:dfbf85f5…`，与库中身份逐字节一致，注入 40 行） |
 | **CompactionEngine 替换** | 注入/动态解析基类；`compactIfNeeded`=管理通道（永不写 checkpoint）、`compactNow/compactRegion`=真实 `compaction/start\|summary\|replace\|end` 协议；占用 `ctx.compaction` | ✅ 集成测试 + 冒烟 + 真实进程 meta |
 | /ctx-status | 压力/决策/回收台账/compartments/基线/策略 | ✅ 挂载验证 |
+| /ctx-recomp | **重做已压缩历史**：`all` \| `last:<n>` \| `<startSeq>-<endSeq>`（区间按 compartment 吸附、绝不切分）；重跑 historian 后**原地替换 store 里的摘要**（身份/覆盖/已落地占位符都不变），下一趟 pre-step 重建基线 | ✅ 单元 7 |
 | **维护 tick（MC dreamer 切片）** | 每 30min（`maintenance.intervalMs`）：① TTL 到期行经 `archiveMemory` 契约动作归档（mutation log/authority 守卫全程在环）；② LLM verify——未验证行批量判定，keep→`markVerified`（per-memory `verified_at`，纯元数据）、stale→`updateMemory`、wrong→`archiveMemory`（对齐 MC `dreamer/verify.ts` 的 host-side manifest 语义）；tick 无会话，verify 需显式 `maintenance.verifyProvider/verifyModel` | ✅ 单元 7 + live boot 概要 |
 | **journal 自愈** | 挂载时 `recoverOrphanHistorianRuns`：为被 remount 杀死的 historian start 补 `adapter-remount` 合成终局（含 supersede 双 start 场景，`recoveredStartAt` 标记幂等） | ✅ 单元 + live（修复后 180 start/180 terminal） |
 | 存储迁移链 | v1（tags/usage）→ v2（pending_drops）→ v3（compartments/baseline_state），版本 fence fail-closed | ✅ 真实进程 v2→v3 |

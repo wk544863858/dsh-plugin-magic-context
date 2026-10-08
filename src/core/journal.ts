@@ -31,6 +31,7 @@ export type JournalKind =
   | 'pass'
   | 'drop-landed'
   | 'compartment-published'
+  | 'compartment-recomp'
   | 'historian'
   | 'baseline'
   | 'emergency-reclaim'

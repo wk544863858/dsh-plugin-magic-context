@@ -350,6 +350,24 @@ function sourceKindOf(event: SessionEvent): string | undefined {
   return typeof kind === 'string' ? kind : undefined
 }
 
+/** One node view, or undefined when the event carries no surface message. */
+function surfaceNodeOf(seq: SessionSeq, event: SessionEvent): SurfaceNode | undefined {
+  const role = ROLE_BY_TYPE[event.type]
+  if (role === undefined) return undefined
+  const text = textOfSurfaceEvent(event)
+  const sourceKind = sourceKindOf(event)
+  return {
+    seq,
+    type: event.type,
+    role,
+    text,
+    hasText: text.trim().length > 0,
+    isPlaceholder: PLACEHOLDER_PATTERN.test(text.trim()),
+    hasToolCalls: contentOf(event).some(block => block.type === 'tool-call'),
+    ...sourceKind === undefined ? {} : { sourceKind },
+  }
+}
+
 /**
  * Enumerate the CURRENT surface in provider-visible order. `session.surface.nodes`
  * excludes shadowed events, which is exactly the live window the historian may
@@ -362,20 +380,30 @@ export function enumerateSurfaceNodes(session: Session): SurfaceNode[] {
   for (const seq of session.surface.nodes) {
     const event = bySeq.get(seq)
     if (event === undefined) continue
-    const role = ROLE_BY_TYPE[event.type]
-    if (role === undefined) continue
-    const text = textOfSurfaceEvent(event)
-    const sourceKind = sourceKindOf(event)
-    nodes.push({
-      seq,
-      type: event.type,
-      role,
-      text,
-      hasText: text.trim().length > 0,
-      isPlaceholder: PLACEHOLDER_PATTERN.test(text.trim()),
-      hasToolCalls: contentOf(event).some(block => block.type === 'tool-call'),
-      ...sourceKind === undefined ? {} : { sourceKind },
-    })
+    const node = surfaceNodeOf(seq, event)
+    if (node !== undefined) nodes.push(node)
+  }
+  return nodes
+}
+
+/**
+ * Node views for EXPLICIT seqs, shadowed events included. The recomp lane
+ * re-digests history that already left the surface (a replacement cites the
+ * events it shadowed, and they stay in the log forever), so
+ * `enumerateSurfaceNodes` — the live window — cannot serve it.
+ * @param session - the session whose log is the source of truth.
+ * @param seqs - the seqs to render, in the order they should appear.
+ * @returns one node per resolvable message-bearing event, skipping the rest.
+ */
+export function nodesForSeqs(session: Session, seqs: readonly SessionSeq[]): SurfaceNode[] {
+  const events = session.snapshotEvents()
+  const bySeq = new Map(events.map(event => [event.seq, event]))
+  const nodes: SurfaceNode[] = []
+  for (const seq of seqs) {
+    const event = bySeq.get(seq)
+    if (event === undefined) continue
+    const node = surfaceNodeOf(seq, event)
+    if (node !== undefined) nodes.push(node)
   }
   return nodes
 }

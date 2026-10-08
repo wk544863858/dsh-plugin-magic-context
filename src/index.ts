@@ -55,6 +55,7 @@ import type { HistorianLlm } from './dsh/historian.ts'
 import { defineCtxExpandTool, defineCtxReduceTool, defineCtxMemoryTool } from './dsh/tool-bridge.ts'
 import { ReduceNudgeTracker } from './dsh/reduce-guidance.ts'
 import { registerCtxStatusCommand } from './dsh/status-command.ts'
+import { registerCtxRecompCommand } from './dsh/recomp.ts'
 import { registerMagicCompactionEngine } from './dsh/compaction-engine.ts'
 import { createTelemetryService } from './dsh/telemetry.ts'
 import { openMemoryLane } from './dsh/memory-lane.ts'
@@ -284,7 +285,19 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
   }
   if (config.registerStatusCommand !== false) {
     registerCtxStatusCommand(ctx, { stores, policy })
-    ctx.logger.info('magic-context dsh adapter: /ctx-status registered')
+    // Recomp rides the same gate: it needs the same seams as the historian, and
+    // its handler refuses with a readable message when the LLM is absent or the
+    // historian is switched off.
+    registerCtxRecompCommand(ctx, {
+      stores,
+      policy,
+      logger: ctx.logger,
+      enabled: liveBoolean(config.historianEnabled, true) !== false,
+      ...journal === undefined ? {} : { journal },
+      ...llm === undefined ? {} : { llm },
+      ...config.historian === undefined ? {} : { route: config.historian },
+    })
+    ctx.logger.info('magic-context dsh adapter: /ctx-status and /ctx-recomp registered')
   }
 
   // ── The compaction seam ────────────────────────────────────────────────────

@@ -84,6 +84,13 @@ export interface AdapterStores {
   /** Compartments whose reclaim placeholder has not landed yet. */
   listUnlandedCompartments(sessionId: string): Compartment[]
   markCompartmentLanded(sessionId: string, compartmentId: number, landedEventSeq: number): void
+  /**
+   * Replace a stored compartment's DIGEST (tiers, importance, facts, events)
+   * while keeping its identity, coverage and landed placeholder. The recomp lane
+   * re-digests history that already left the surface, so no row may be re-added:
+   * only the text the model sees changes.
+   */
+  replaceCompartmentDraft(sessionId: string, compartmentId: number, draft: CompartmentDraft): void
   /** Every surface seq already digested by a compartment (historian eligibility). */
   coveredSeqs(sessionId: string): Set<number>
   baselineState(sessionId: string): BaselineState | undefined
@@ -563,6 +570,23 @@ export function openStores(dataDir: string): AdapterStores {
     ).run(landedEventSeq, sessionId, compartmentId)
   }
 
+  const replaceCompartmentDraft = (sessionId: string, compartmentId: number, draft: CompartmentDraft): void => {
+    db.prepare(
+      'UPDATE compartments SET importance = ?, tier_p1 = ?, tier_p2 = ?, tier_p3 = ?, tier_p4 = ?, facts = ?, events = ? '
+        + 'WHERE session_id = ? AND compartment_id = ?',
+    ).run(
+      draft.importance,
+      draft.tiers.p1,
+      draft.tiers.p2,
+      draft.tiers.p3,
+      draft.tiers.p4,
+      JSON.stringify([...draft.facts]),
+      JSON.stringify([...draft.events]),
+      sessionId,
+      compartmentId,
+    )
+  }
+
   const coveredSeqs = (sessionId: string): Set<number> => {
     const rows = db.prepare('SELECT covered_seqs FROM compartments WHERE session_id = ?')
       .all(sessionId) as Array<{ covered_seqs: string }>
@@ -642,6 +666,7 @@ export function openStores(dataDir: string): AdapterStores {
     listCompartments,
     listUnlandedCompartments,
     markCompartmentLanded,
+    replaceCompartmentDraft,
     coveredSeqs,
     baselineState,
     saveBaselineState,
