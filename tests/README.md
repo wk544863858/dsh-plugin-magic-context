@@ -1,6 +1,6 @@
 # The DSH adapter's runnable suite
 
-These 25 specs (plus the shared fixtures under `helpers/`) are the **canonical**
+These 27 specs (plus the shared fixtures under `helpers/`) are the **canonical**
 copy of the only executable test suite for `packages/dsh-plugin`. They are
 committed here so the suite cannot be lost with a temporary directory.
 

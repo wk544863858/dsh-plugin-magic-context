@@ -1697,7 +1697,13 @@ window.__ModuleLoader__.load({
       name: 'magic-context-client',
       inject: ['slots', 'locale'],
       apply,
-      __diagnostics: { recordOf, recordsOf, recordCounts, noiseLine, dictionaryKeys, dictionaryTranslator, dictionaries: DICTIONARIES },
+      __diagnostics: {
+        recordOf, recordsOf, recordCounts, noiseLine, dictionaryKeys, dictionaryTranslator, dictionaries: DICTIONARIES,
+        // The number/text formatters are the panel's display contract; the
+        // node-side spec pins them so a formatting regression (the scope bug
+        // that briefly unmounted the pill) cannot come back silently.
+        compactTok, fmtInt, spanOf, trimSummary, timeShort,
+      },
     }
   },
 })
