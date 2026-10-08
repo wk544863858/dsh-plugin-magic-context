@@ -179,7 +179,7 @@ export function splitBaselineSets(
  * nodes are already shadowed is marked landed with seq 0 ("nothing to
  * replace") so the pass does not retry forever.
  */
-function publishCompartments(input: ManagementPassInput, nodes: readonly SurfaceNode[]): {
+function publishCompartments(input: ManagementPassInput): {
   ids: number[]
   factsPromoted: number
   factsSeenAgain: number
@@ -190,34 +190,63 @@ function publishCompartments(input: ManagementPassInput, nodes: readonly Surface
   const baselineNodeSeq = input.stores.baselineState(input.sessionId)?.nodeSeq
   for (const compartment of input.stores.listUnlandedCompartments(input.sessionId)) {
     const covered = new Set(compartment.coveredSeqs)
-    const current = nodes.filter(node => covered.has(node.seq))
-    if (current.length === 0 || (baselineNodeSeq !== undefined && covered.has(baselineNodeSeq))) {
+    // The host shadows every node in the POSITIONAL range between the two
+    // endpoints, not the subset the compartment covered
+    // (`host: packages/core/session/src/surface.ts:433`, asserted at `:363`).
+    // Citing only the covered subset threw on the first node that had entered
+    // the range since the compartment was drafted, and that threw the whole
+    // pass — every pass, so nothing ever landed. Enumerate the live surface here
+    // (the snapshot at the call site predates the previous replacement) and cite
+    // the whole range.
+    const live = enumerateSurfaceNodes(input.session)
+    const positions: number[] = []
+    live.forEach((node, index) => {
+      if (covered.has(node.seq)) positions.push(index)
+    })
+    if (positions.length === 0 || (baselineNodeSeq !== undefined && covered.has(baselineNodeSeq))) {
       input.stores.markCompartmentLanded(input.sessionId, compartment.compartmentId, 0)
       continue
     }
-    const first = current[0] as SurfaceNode
-    const last = current[current.length - 1] as SurfaceNode
+    const range = live.slice(positions[0] as number, (positions[positions.length - 1] as number) + 1)
+    // m[0] is frozen at the head of the surface: folding it into a compartment
+    // would leave the next refresh rewriting an unrelated `user` node as the
+    // baseline. Defer instead; the guard clears once the surface moves on.
+    if (baselineNodeSeq !== undefined && range.some(node => node.seq === baselineNodeSeq)) {
+      input.journal?.warn(
+        'compartment-published',
+        `compartment §C${String(compartment.compartmentId)}§ deferred: its range now contains the m[0] baseline node`,
+        {
+          compartmentId: compartment.compartmentId,
+          reason: 'baseline-in-range',
+          nodes: range.length,
+        },
+        input.sessionId,
+      )
+      continue
+    }
+    const first = range[0] as SurfaceNode
+    const last = range[range.length - 1] as SurfaceNode
     const landedSeq = replaceSurfaceRange(
       input.session,
       first.seq,
       last.seq,
       [{ type: 'text', text: compactedPlaceholder(compartment.compartmentId) }],
-      current.map(node => node.seq),
+      range.map(node => node.seq),
       syntheticNodeId(`mc-compacted-${String(compartment.compartmentId)}`),
       magicContextSource(
-        `Magic Context · compartment §C${String(compartment.compartmentId)}§ replaced ${String(current.length)} node(s) on the wire`,
+        `Magic Context · compartment §C${String(compartment.compartmentId)}§ replaced ${String(range.length)} node(s) on the wire`,
       ),
     )
     input.stores.markCompartmentLanded(input.sessionId, compartment.compartmentId, landedSeq)
     published.push(compartment.compartmentId)
     input.journal?.info(
       'compartment-published',
-      `compartment §C${String(compartment.compartmentId)}§ replaced ${String(current.length)} nodes on the wire`,
+      `compartment §C${String(compartment.compartmentId)}§ replaced ${String(range.length)} nodes on the wire`,
       {
         compartmentId: compartment.compartmentId,
-        nodes: current.length,
+        nodes: range.length,
         coveredTokens: compartment.coveredTokens,
-        estTokensReclaimed: current.reduce((total, node) => total + estimateTokens(node.text), 0),
+        estTokensReclaimed: range.reduce((total, node) => total + estimateTokens(node.text), 0),
         nodeSeq: landedSeq,
         importance: compartment.importance,
       },
@@ -503,7 +532,7 @@ export function runManagementPass(input: ManagementPassInput): ManagementPassRes
 
     // 2 + 4: publish compartments, then refresh the baseline over the result.
     const nodes = enumerateSurfaceNodes(input.session)
-    const { ids: published, factsPromoted, factsSeenAgain } = publishCompartments(input, nodes)
+    const { ids: published, factsPromoted, factsSeenAgain } = publishCompartments(input)
     const afterPublish = published.length === 0 ? nodes : enumerateSurfaceNodes(input.session)
     const baselineUpdated = refreshBaseline(input, afterPublish)
 
