@@ -79,6 +79,11 @@ export interface MagicContextDshConfig {
    */
   reduceGuidance?: boolean
   /**
+   * Auto-search hint: one "you may recall something related" entry per user turn
+   * (default true, `search-hint.ts`). The hint is FTS-only and deadline-bounded.
+   */
+  searchHint?: boolean
+  /**
    * The maintenance tick's schedule + verify route. Profile-JSON only (the
    * settings schema at index.ts declares the volatile fields the form may
    * edit; these arrive through the same patch object either way).

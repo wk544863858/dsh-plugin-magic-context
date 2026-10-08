@@ -4,7 +4,7 @@
  * the tag/reclaim ledger.
  */
 import type { Context } from '@deepseek-ai/cordis'
-import { decidePass, pressurePercent } from '../core/policy.ts'
+import { decidePass, pressurePercent, pressureWindowTokens } from '../core/policy.ts'
 import type { PressurePolicy } from '../core/policy.ts'
 import type { AdapterStores } from '../core/stores.ts'
 import { enumerateSurfaceToolResults, requestContextOf } from './seams.ts'
@@ -42,7 +42,10 @@ export function registerCtxStatusCommand(ctx: Context, deps: StatusDeps): void {
       const sessionId = invocation.agent.session.id
       const latest = deps.stores.latestUsage(sessionId)
       const { contextWindow } = requestContextOf(invocation.agent.session as never)
-      const pressure = pressurePercent(latest, contextWindow)
+      // The same denominator the pass decision uses, so the reported percent
+      // and the decision printed below it can never disagree.
+      const pressureWindow = pressureWindowTokens(contextWindow, deps.policy)
+      const pressure = pressurePercent(latest, pressureWindow)
       const decision = decidePass({ latest, pressure, now: Date.now(), policy: deps.policy })
       const nodes = enumerateSurfaceToolResults(invocation.agent.session as never, callId =>
         deps.stores.getTag(sessionId, { kind: 'tool-result', callId }))
@@ -73,7 +76,8 @@ export function registerCtxStatusCommand(ctx: Context, deps: StatusDeps): void {
         'Magic Context (dsh adapter) — status',
         `- usage: ${latest === undefined
           ? 'no response recorded yet'
-          : `${pressure === undefined ? '?' : pressure.toFixed(1)}% of ${String(contextWindow ?? '?')} tokens `
+          : `${pressure === undefined ? '?' : pressure.toFixed(1)}% of ${String(pressureWindow)} tokens`
+            + `${contextWindow === undefined ? ' (assumed; the route discloses none)' : ''} `
             + `(last input ${String(latest.inputTokens ?? 0)} + cache `
             + `${String((latest.cacheReadTokens ?? 0) + (latest.cacheWriteTokens ?? 0))}, `
             + `at ${new Date(latest.recordedAt).toISOString()})`}`,
@@ -89,7 +93,8 @@ export function registerCtxStatusCommand(ctx: Context, deps: StatusDeps): void {
             + `${baseline.memoriesDigest === undefined ? '' : ', memories injected'}`}`,
         `- policy: execute ≥ ${String(deps.policy.executeThreshold)}%, force ≥ ${String(deps.policy.forceThreshold)}%, `
           + `ttl ${String(Math.round(deps.policy.ttlMs / 1000))}s, protect newest ${String(deps.policy.protectedToolResults)} `
-          + `(+${String(deps.policy.historianProtectedNodes)} from the historian)`,
+          + `(+${String(deps.policy.historianProtectedNodes)} from the historian), `
+          + `assumed window ${String(deps.policy.assumedContextWindow)} tokens`,
         journalLine,
       ]
       return { kind: 'success', text: lines.join('\n') }

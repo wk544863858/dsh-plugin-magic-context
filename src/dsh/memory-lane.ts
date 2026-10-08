@@ -12,7 +12,7 @@ import type { Journal } from '../core/journal.ts'
 import type { PressurePolicy } from '../core/policy.ts'
 import { openMemoryBridge, DEFAULT_SHARE_CATEGORIES, defaultMemoryDbPath, resolveIdentitySpec } from '../core/memory-bridge.ts'
 import { openMemoryWriter, type MemoryWriter } from '../core/memory-write.ts'
-import { openMemorySearch, type MemorySearch } from '../core/memory-search.ts'
+import { openMemorySearch, type MemorySearch, type MemorySearchHit } from '../core/memory-search.ts'
 import { cosineSimilarity, defaultEmbeddingCacheDir, openLocalEmbedder } from '../core/embedding-local.ts'
 import { defineCtxMemoryTool } from './tool-bridge.ts'
 import type { MagicContextDshConfig, MagicContextDshConfigDefineTool } from './config.ts'
@@ -39,6 +39,11 @@ export interface MemoryLane {
   /** A2: per-session memory ids the injected block currently renders. */
   visibleMemoryIdsBySession: Map<string, Set<number>>
   memorySearchForTool: MemoryToolSearch | undefined
+  /**
+   * The auto-search hint lane's FTS-only search, keyed by session rather than by
+   * tool exec. `undefined` when the memory lane is off.
+   */
+  searchForSession: ((session: unknown, query: string, limit: number) => Promise<readonly MemorySearchHit[]>) | undefined
   /** One wording for the writer's state (boot log + telemetry meta). */
   describeMemoryWrite(): string
   /** The `defineCtxMemoryTool` deps object (identity resolution + recall + search). */
@@ -214,6 +219,41 @@ export function openMemoryLane(
     return `read-write${memorySettings?.autoPromote === false ? ' (promotion off)' : ' auto-promote'}`
   }
 
+  /**
+   * The auto-search hint lane's search (upstream `auto-search-runner`). Same space
+   * and shared-space gate as the tool's `search`, but the identity comes from the
+   * session — preStep has no tool exec — and the query runs FTS-only: the hint is
+   * a nudge, and waiting for the local embedding model to load would delay the
+   * turn it is meant to inform.
+   * @param session - the session whose cwd/config resolves the identity.
+   * @param query - the user's own words.
+   * @param limit - how many hits to consider.
+   * @returns ranked hits, or an empty list when the lane is unavailable.
+   */
+  const searchForSession: MemoryLane['searchForSession'] = memorySearch === undefined || memoryRecall === undefined
+    ? undefined
+    : async (session, query, limit) => {
+      const spec = config.memory?.project ?? (session as { header?: { cwd?: string } }).header?.cwd
+      if (spec === undefined) return []
+      const space = memoryRecall.searchSpace(resolveIdentitySpec(spec))
+      if (space === undefined) return []
+      // FTS-only: no embedding request, so no model load on the turn path. The
+      // stored-vector lane stays available to ctx_search, where the agent asked.
+      const outcome = await memorySearch.search({
+        query,
+        limit,
+        now: Date.now(),
+        space: {
+          ownIdentities: space.ownIdentities,
+          foreignIdentities: space.foreignIdentities,
+          shareCategories: space.shareCategories ?? [...DEFAULT_SHARE_CATEGORIES],
+        },
+        queryEmbedding: null,
+        queryModelId: null,
+      })
+      return outcome.ok ? outcome.hits : []
+    }
+
   return {
     memoryEnabled,
     memorySettings,
@@ -222,6 +262,7 @@ export function openMemoryLane(
     memorySearch,
     visibleMemoryIdsBySession,
     memorySearchForTool,
+    searchForSession,
     describeMemoryWrite,
     ctxMemoryRegistration: ({ activePolicy, defineTool, journal }) => ({
       ...defineTool === undefined ? {} : { defineTool },

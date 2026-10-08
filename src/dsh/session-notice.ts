@@ -97,6 +97,34 @@ export function sessionNoticeSummary(result: SessionNoticeResult): string | null
 }
 
 /**
+ * Append one magic-context entry to the live stream. The single home of the entry
+ * shape: a user-role message carrying the plugin source, appended with
+ * `surfaceOp: 'append'` so the host accepts it as a normal tail node.
+ * Never throws: a broken transcript nicety must not wedge the turn.
+ * @param session - the session whose stream is appended to.
+ * @param text - the model-visible body (keep it short; it becomes context).
+ * @param summary - the one-line collapsed row the transcript shows.
+ * @returns the appended seq, or the append failure.
+ */
+export function appendMagicContextEntry(
+  session: SessionNoticeSession,
+  text: string,
+  summary: string,
+): { readonly ok: true; readonly seq: unknown } | { readonly ok: false; readonly detail: string } {
+  const message = {
+    id: randomUUID(),
+    role: 'user',
+    content: [{ type: 'text', text }],
+    source: magicContextSource(boundSummary(summary)),
+  }
+  try {
+    return { ok: true, seq: session.append('user/message', message, { surfaceOp: 'append' }) }
+  } catch (error) {
+    return { ok: false, detail: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/**
  * Append one notice entry for a management pass outcome. Never throws: a
  * broken transcript nicety must not wedge the turn (fail-open, like every
  * other best-effort surface in the adapter).
@@ -106,20 +134,7 @@ export function appendSessionNotice(input: SessionNoticeInput): SessionNoticeOut
   if (summary === null) return { ok: false, reason: 'not-notable' }
   const lines: string[] = [summary]
   if (input.result.baselineUpdated) lines.push('Baseline refreshed (m[0] frozen point advanced)')
-  const message = {
-    id: randomUUID(),
-    role: 'user',
-    content: [{ type: 'text', text: lines.join('\n') }],
-    source: magicContextSource(summary),
-  }
-  try {
-    const seq = input.session.append('user/message', message, { surfaceOp: 'append' })
-    return { ok: true, summary, seq }
-  } catch (error) {
-    return {
-      ok: false,
-      reason: 'append-failed',
-      detail: error instanceof Error ? error.message : String(error),
-    }
-  }
+  const appended = appendMagicContextEntry(input.session, lines.join('\n'), summary)
+  if (!appended.ok) return { ok: false, reason: 'append-failed', detail: appended.detail }
+  return { ok: true, summary, seq: appended.seq }
 }

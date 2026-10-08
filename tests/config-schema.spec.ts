@@ -31,6 +31,7 @@ describe('runtime Config schema', () => {
     expect(typeof (value.policy.executeThreshold as Volatile).get).toBe('function')
     expect((value.policy.executeThreshold as Volatile).get()).toBe(DEFAULT_POLICY.executeThreshold)
     expect((value.policy.forceThreshold as Volatile).get()).toBe(DEFAULT_POLICY.forceThreshold)
+    expect((value.policy.assumedContextWindow as Volatile).get()).toBe(DEFAULT_POLICY.assumedContextWindow)
     expect((value.policy.baselineTokens as Volatile).get()).toBe(DEFAULT_POLICY.baselineTokens)
     expect((value.policy.memoryLimit as Volatile).get()).toBe(DEFAULT_POLICY.memoryLimit)
     expect((value.journal.retentionDays as Volatile).get()).toBe(30)
@@ -41,11 +42,13 @@ describe('runtime Config schema', () => {
   })
 
   it('accepts the percent-based thresholds the policy actually uses', () => {
-    const value = Config({ policy: { executeThreshold: 30, forceThreshold: 95 } }) as unknown as Record<string, any>
+    const value = Config({ policy: { executeThreshold: 30, forceThreshold: 95, assumedContextWindow: 12_000 } }) as unknown as Record<string, any>
     expect((value.policy.executeThreshold as Volatile).get()).toBe(30)
     expect((value.policy.forceThreshold as Volatile).get()).toBe(95)
+    expect((value.policy.assumedContextWindow as Volatile).get()).toBe(12_000)
     // Out-of-range values are rejected rather than silently clamped.
     expect(() => Config({ policy: { executeThreshold: 150 } })).toThrow()
+    expect(() => Config({ policy: { assumedContextWindow: 0 } })).toThrow()
   })
 
   it('never materialises the memory block, and passes unknown keys through', () => {

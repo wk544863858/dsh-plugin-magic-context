@@ -150,6 +150,10 @@ window.__ModuleLoader__.load({
         hint: 'Adoption percentage at which reclaim becomes unconditional (0-100).',
       },
       {
+        path: ['policy', 'assumedContextWindow'], kind: 'number', label: 'Assumed window (tokens)',
+        hint: 'Window used for scheduling when the routed model discloses none.',
+      },
+      {
         path: ['policy', 'ttlMs'], kind: 'number', label: 'Reclaim TTL (ms)',
         hint: 'How long a reclaimed compartment stays reversible.',
       },

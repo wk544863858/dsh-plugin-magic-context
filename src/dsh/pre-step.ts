@@ -16,7 +16,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { AdapterStores } from '../core/stores.ts'
 import type { Journal } from '../core/journal.ts'
-import { decidePass, pressurePercent, type PressurePolicy } from '../core/policy.ts'
+import { decidePass, pressurePercent, pressureWindowTokens, type PressurePolicy } from '../core/policy.ts'
 import { resolveIdentitySpec } from '../core/memory-bridge.ts'
 import type { MemoryFact } from '../core/memory-categories.ts'
 import { errText } from '../core/types.ts'
@@ -41,6 +41,7 @@ import { detectProjectDrift } from './project-drift.ts'
 import type { MagicContextDshConfig } from './config.ts'
 import type { MemoryLane } from './memory-lane.ts'
 import { liveBoolean } from './volatile.ts'
+import { planSearchHint, type SearchHintTracker } from './search-hint.ts'
 
 /** Identities shared by the preStep, the maintenance sweep and the panel. */
 export interface PreStepProjects {
@@ -64,6 +65,30 @@ export interface PreStepDeps {
   seenSessions: Set<string>
   /** Live thresholds: a settings-form edit reaches the next pass immediately. */
   activePolicy: () => PressurePolicy
+  /** Auto-search hint state: one hint per user turn, shared across preSteps. */
+  searchHints?: SearchHintTracker
+}
+
+/**
+ * The newest REAL user prompt in this request, for the auto-search hint. Host
+ * context nodes and this adapter's own entries are user-role messages too, so they
+ * are skipped by their markers instead of by role alone.
+ */
+function latestUserPromptText(
+  messages: readonly unknown[],
+): { readonly text: string; readonly turnKey: string } | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] as { id?: unknown; role?: unknown; content?: unknown } | undefined
+    if (message === undefined || message.role !== 'user' || !Array.isArray(message.content)) continue
+    const text = (message.content as Array<{ type?: string; text?: unknown }>)
+      .filter(block => block.type === 'text' && typeof block.text === 'string')
+      .map(block => block.text as string)
+      .join('\n')
+    if (text.trim().length === 0) continue
+    if (text.includes('<magic-context>') || text.startsWith('Magic Context ·')) continue
+    return { text, turnKey: typeof message.id === 'string' ? message.id : text.slice(0, 64) }
+  }
+  return undefined
 }
 
 /** The seam-local listener shape (kept here so upstream renames touch one file). */
@@ -108,6 +133,28 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
         if (newest !== undefined) reduceTracker.observeUserMessage(sessionId, newest.id)
       } catch {
         // counting is advisory; never fail the turn for it
+      }
+    }
+
+    // Auto-search hint (upstream `auto-search-runner`): one hint per user turn,
+    // built from the user's own words and appended to the tail. Awaited, because
+    // the hint has to ride the request it was computed for, but every path is
+    // fail-open and the search carries its own deadline.
+    if (deps.searchHints !== undefined && liveBoolean(config.searchHint, true)) {
+      try {
+        const prompt = latestUserPromptText(messages)
+        if (prompt !== undefined) {
+          await planSearchHint(
+            {
+              search: lane.searchForSession,
+              tracker: deps.searchHints,
+              ...journal === undefined ? {} : { journal },
+            },
+            { sessionId, session: payload.agent.session as never, text: prompt.text, turnKey: prompt.turnKey },
+          )
+        }
+      } catch {
+        // a hint is an optimisation; never fail the turn for it
       }
     }
 
@@ -170,9 +217,13 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
       }
       const latest = stores.latestUsage(sessionId)
       const context = requestContextOf(payload.agent.session)
-      const pressure = pressurePercent(latest, context.contextWindow)
       // Live thresholds: a settings-form edit reaches this pass immediately.
       const policy = activePolicy()
+      // A route that discloses no window is scheduled against the assumed one:
+      // an undefined denominator defers 'no-window' on every step, so the
+      // execute band — and every drop waiting behind it — would never open.
+      const pressureWindow = pressureWindowTokens(context.contextWindow, policy)
+      const pressure = pressurePercent(latest, pressureWindow)
       const pass = decidePass({ latest, pressure, now: Date.now(), policy })
       const usage = latest === undefined ? undefined : {
         input: latest.inputTokens ?? 0,
@@ -182,7 +233,10 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
       const basePassData = {
         reason: pass.reason,
         pressure: pressure === undefined ? undefined : Number(pressure.toFixed(1)),
-        contextWindow: context.contextWindow,
+        // The denominator the decision actually used, flagged when it was the
+        // assumption rather than the route's own reading.
+        contextWindow: pressureWindow,
+        ...context.contextWindow === undefined ? { contextWindowAssumed: true } : {},
         route: context.provider === undefined || context.model === undefined
           ? undefined
           : `${context.provider}/${context.model}`,

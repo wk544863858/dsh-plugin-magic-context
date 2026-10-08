@@ -36,6 +36,7 @@ export type JournalKind =
   | 'baseline'
   | 'emergency-reclaim'
   | 'memory-recall'
+  | 'search-hint'
   | 'memory-promote'
   | 'maintenance'
   | 'session-notice'

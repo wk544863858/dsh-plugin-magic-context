@@ -15,6 +15,16 @@ export interface PressurePolicy {
   readonly executeThreshold: number
   /** Usage percent at or above which automatic reclaim runs (MC force band). */
   readonly forceThreshold: number
+  /**
+   * Window assumed when the routed model discloses none, for the pressure
+   * decision and everything that reports it. Without a denominator every pass
+   * defers 'no-window' and the execute band never opens, so a route that
+   * publishes no window must still be scheduled against something.
+   * Scheduling only: emergency reclaim keeps the disclosed window
+   * (dsh/emergency.ts), and the historian trigger budget keeps its own
+   * {@link historianAssumedWindow}.
+   */
+  readonly assumedContextWindow: number
   /** Idle past this since the last response presumes the provider cache dead (MC cache TTL). */
   readonly ttlMs: number
   /** Newest tool-result tags the reclaim never touches (MC protected tail, count-based MVP). */
@@ -48,6 +58,7 @@ export interface PressurePolicy {
 export const DEFAULT_POLICY: PressurePolicy = {
   executeThreshold: 65,
   forceThreshold: 85,
+  assumedContextWindow: 256_000,
   ttlMs: 5 * 60_000,
   protectedToolResults: 8,
   historianProtectedNodes: 8,
@@ -81,6 +92,24 @@ export function pressurePercent(
   const total = totalInputTokens(latest)
   if (total <= 0) return 0
   return (total / contextWindow) * 100
+}
+
+/**
+ * The denominator for pressure math: the window the routed model disclosed, or
+ * {@link PressurePolicy.assumedContextWindow} when it disclosed none (also for
+ * a placeholder 0 or a non-finite reading).
+ *
+ * Every pressure reader resolves through here, so one number governs the pass
+ * decision, its journal row and `/ctx-status`. Callers that need the fact
+ * itself — the DSH route window as disclosed — still read `contextWindow`.
+ */
+export function pressureWindowTokens(
+  contextWindow: number | undefined,
+  policy: PressurePolicy,
+): number {
+  return contextWindow !== undefined && Number.isFinite(contextWindow) && contextWindow > 0
+    ? contextWindow
+    : policy.assumedContextWindow
 }
 
 export type PassDecision =

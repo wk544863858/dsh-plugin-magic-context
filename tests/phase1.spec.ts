@@ -29,7 +29,7 @@ import mcDshPlugin, {
   openStores,
   reclaimForEmergency,
 } from '<path>'
-import { parseTagRanges } from '<path>'
+import { parseTagRanges, pressureWindowTokens } from '<path>'
 import { enumerateSurfaceToolResults } from '<path>'
 
 type AnyMessage = { role: string; content: Array<{ type: string; text?: string }> }
@@ -65,7 +65,14 @@ class WindowedAdapter extends MockAdapter {
   }
 }
 
-async function boot(adapter: MockAdapter, dataDir: string): Promise<Context> {
+/** The band the specs below drive: execute early, nobody protected. */
+const TEST_POLICY = { executeThreshold: 50, forceThreshold: 90, protectedToolResults: 0 }
+
+async function boot(
+  adapter: MockAdapter,
+  dataDir: string,
+  policy: Record<string, number> = TEST_POLICY,
+): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(SessionStore)
@@ -74,10 +81,7 @@ async function boot(adapter: MockAdapter, dataDir: string): Promise<Context> {
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(AgentLoop, { agents: [] })
-  await ctx.plugin(mcDshPlugin, {
-    dataDir,
-    policy: { executeThreshold: 50, forceThreshold: 90, protectedToolResults: 0 },
-  })
+  await ctx.plugin(mcDshPlugin, { dataDir, policy })
   ctx.llm.registerAdapter(['mock'], adapter)
   return ctx
 }
@@ -211,6 +215,77 @@ describe('magic-context dsh adapter (phase 1: management loop)', () => {
       const texts = derivedTools.map(message => textOf(message))
       // The protected newest node keeps its full content — tag prefix included.
       expect(texts).toEqual(['[dropped §1§]', '[dropped §2§]', '§3§ echo:third output'])
+    } finally {
+      try {
+        await ctx.fiber.dispose()
+      } catch {
+        /* best effort */
+      }
+      try {
+        rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+      } catch {
+        /* OS temp sweep covers residue */
+      }
+    }
+  })
+
+  it('resolves the pressure denominator from the route, or the assumed window when it discloses none', () => {
+    const policy = { ...DEFAULT_POLICY, assumedContextWindow: 256_000 }
+    // The route's own reading always wins, however small or large.
+    expect(pressureWindowTokens(1_048_576, policy)).toBe(1_048_576)
+    expect(pressureWindowTokens(12, policy)).toBe(12)
+    // Absent, placeholder-zero and non-finite readings share one fallback: a
+    // denominator has to exist, or every pass defers 'no-window' forever.
+    expect(pressureWindowTokens(undefined, policy)).toBe(256_000)
+    expect(pressureWindowTokens(0, policy)).toBe(256_000)
+    expect(pressureWindowTokens(Number.NaN, policy)).toBe(256_000)
+    expect(DEFAULT_POLICY.assumedContextWindow).toBe(256_000)
+  })
+
+  it('opens the execute band for a route whose model discloses no context window', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'mc-dsh-p1-a-'))
+    // The base MockAdapter declares no model context at all, so the route's own
+    // reading is absent and only the assumed window can carry the decision
+    // (10 tokens of an assumed 12 = 83%, over the 50% band).
+    const adapter = new MockAdapter([
+      toolCallResponse('call-1', 'echo', { text: 'tool one' }),
+      toolCallResponse('call-2', 'ctx_reduce', { drop: '1' }),
+      textResponse('queued'),
+      textResponse('done'),
+    ])
+    const ctx = await boot(adapter, dataDir, { ...TEST_POLICY, assumedContextWindow: 12 })
+    ctx.tools.register(defineContentToolFixture({
+      name: 'echo',
+      description: 'echo fixture',
+      parameters: { text: { type: 'string', required: true } },
+      async execute(args) {
+        return [{ type: 'text', text: `echo:${args.text}` }]
+      },
+    }))
+    const agent = await ctx.agentLoop.create(SessionId('mc-p1-3'), { provider: 'mock', model: 'mock' })
+
+    try {
+      send(agent, 'hello world')
+      await waitForIdle(ctx, agent)
+
+      // The route WAS logged, just without a window — so the pass below cannot
+      // have used a disclosed one.
+      const route = agent.session.requestContext()
+      expect(route?.model).toBe('mock')
+      expect(route?.contextWindow).toBeUndefined()
+
+      // The queued mark landed on the very next pre-step. Under the old
+      // 'no-window' defer this never happened: decidePass returned before the
+      // threshold test, so the mark would still be queued and this request
+      // would carry the full tool output.
+      expect(toolTexts(adapter.requests[2])).toContain('[dropped §1§]')
+      expect(toolTexts(adapter.requests[2])).not.toContain('echo:tool one')
+      const reader = openStores(dataDir)
+      try {
+        expect(reader.listPendingDrops(agent.session.id)).toEqual([])
+      } finally {
+        reader.close()
+      }
     } finally {
       try {
         await ctx.fiber.dispose()

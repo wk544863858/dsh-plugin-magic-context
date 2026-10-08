@@ -56,6 +56,7 @@ import { defineCtxExpandTool, defineCtxReduceTool, defineCtxMemoryTool } from '.
 import { ReduceNudgeTracker } from './dsh/reduce-guidance.ts'
 import { registerCtxStatusCommand } from './dsh/status-command.ts'
 import { registerCtxRecompCommand } from './dsh/recomp.ts'
+import { SearchHintTracker } from './dsh/search-hint.ts'
 import { registerMagicCompactionEngine } from './dsh/compaction-engine.ts'
 import { createTelemetryService } from './dsh/telemetry.ts'
 import { openMemoryLane } from './dsh/memory-lane.ts'
@@ -162,6 +163,9 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
   // panel scopes by — one registry, three consumers.
   const projects: PreStepProjects = { seenIdentities: new Set<string>(), sessionIdentity: new Map<string, string>() }
 
+  // Auto-search hint state: one hint per user turn (preStep runs per model step).
+  const searchHints = new SearchHintTracker()
+
   // ── §N§ tags + the pressure decision on the admitted user batch ───────────
   on(DSH_EVENTS.preStep, preStepListener({
     ctx,
@@ -174,6 +178,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     projects,
     seenSessions,
     activePolicy,
+    searchHints,
   }))
 
   // ── §N§ tags on tool results at landing (Phase 0) ─────────────────────────
@@ -497,6 +502,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     policy: {
       executeThreshold: policy.executeThreshold,
       forceThreshold: policy.forceThreshold,
+      assumedContextWindow: policy.assumedContextWindow,
       ttlMs: policy.ttlMs,
       protectedToolResults: policy.protectedToolResults,
       historianProtectedNodes: policy.historianProtectedNodes,
@@ -561,6 +567,11 @@ export const Config = z.object({
   registerCompactionEngine: z.boolean().default(false).volatile(),
   /** One notice entry in the session stream per action-bearing pass (see session-notice.ts). */
   sessionNotices: z.boolean().default(true).volatile(),
+  /**
+   * Auto-search hint: one "you may recall something related" entry per user turn,
+   * built from the user's own words (see search-hint.ts).
+   */
+  searchHint: z.boolean().default(true).volatile(),
 
   /**
    * Maintenance tick (the adapter's slice of MC's dreamer): TTL expiry always
@@ -587,6 +598,12 @@ export const Config = z.object({
     executeThreshold: z.number().min(0).max(100).default(65).volatile(),
     /** Usage percent (0-100) at which reclaim becomes unconditional. */
     forceThreshold: z.number().min(0).max(100).default(85).volatile(),
+    /**
+     * Window assumed for scheduling when the routed model discloses none.
+     * Without it a route that publishes no window defers 'no-window' forever,
+     * which silently disables the execute band.
+     */
+    assumedContextWindow: z.number().min(1).default(256_000).volatile(),
     ttlMs: z.number().default(300_000).volatile(),
     protectedToolResults: z.number().default(8).volatile(),
     historianProtectedNodes: z.number().default(8).volatile(),
