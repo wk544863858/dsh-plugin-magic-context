@@ -516,9 +516,18 @@ export function runManagementPass(input: ManagementPassInput): ManagementPassRes
         ...input.contextWindow === undefined ? {} : { contextWindow: input.contextWindow },
         ...input.route === undefined ? {} : { route: input.route },
       }).catch((error: unknown) => {
+        const why = errText(error)
         input.logger.warn(
-          `magic-context historian failed (continuing): ${errText(error)}`,
+          `magic-context historian failed (continuing): ${why}`,
         )
+        // runHistorian journals its own terminal events; this row fires only
+        // if the promise itself rejects — a bug in the guard plumbing. Better
+        // a phase-less error row than a silent failure.
+        input.journal?.error('error', `historian promise rejected: ${why}`, {
+          scope: 'historian-unhandled',
+          detail: why,
+          errorName: error instanceof Error ? error.name : typeof error,
+        }, input.sessionId)
       })
       historianStarted = true
     }
@@ -542,10 +551,20 @@ export function runManagementPass(input: ManagementPassInput): ManagementPassRes
     }
   } catch (error) {
     // A failed management pass must never wedge the turn: log and continue
-    // with the tagged messages (MC per-turn fail-open).
+    // with the tagged messages (MC per-turn fail-open). The journal row is
+    // what makes the failure diagnosable — the logger line alone is why a
+    // run of silent failures could survive unnoticed (test-design audit P1-3).
+    const why = errText(error)
     input.logger.warn(
-      `magic-context: management pass failed (continuing): ${errText(error)}`,
+      `magic-context: management pass failed (continuing): ${why}`,
     )
+    input.journal?.error('error', `management pass failed: ${why}`, {
+      scope: 'management-pass',
+      detail: why,
+      errorName: error instanceof Error ? error.name : typeof error,
+      pressure: input.pressure,
+      trigger: input.pass.reason,
+    }, input.sessionId)
     return result
   }
 }

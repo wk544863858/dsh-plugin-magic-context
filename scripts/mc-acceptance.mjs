@@ -292,11 +292,15 @@ if (dsh) {
       for (const m of mutationByType) agg.set(m.mutation_type, (agg.get(m.mutation_type) ?? 0) + Number(m.n));
       const mutationRows = [...agg].map(([mutation_type, n]) => ({ mutation_type, n }));
       const forbidden = mutationRows.filter((m) => m.mutation_type === 'insert' || m.mutation_type === 'delete');
+      // 显式 update 的三个来源：agent 的 update 工具调用、写入通道的 update op、
+      // 以及维护 tick 的 stale→updateMemory（dreamer verify manifest，§P5）——
+      // 后者写变更日志但不经过工具调用，漏计它会把窗口口径搞成假阳性。
       const explicitUpdates = dsh.prepare(`SELECT COUNT(*) AS n FROM journal WHERE kind='tool-call' AND data LIKE '%"action":"update"%' AND at > ?`).get(SINCE).n
-        + dsh.prepare(`SELECT COUNT(*) AS n FROM journal WHERE kind='memory-write' AND data LIKE '%"op":"update"%' AND at > ?`).get(SINCE).n;
+        + dsh.prepare(`SELECT COUNT(*) AS n FROM journal WHERE kind='memory-write' AND data LIKE '%"op":"update"%' AND at > ?`).get(SINCE).n
+        + dsh.prepare(`SELECT COALESCE(SUM(CAST(JSON_EXTRACT(data, '$.updated') AS INTEGER)), 0) AS n FROM journal WHERE kind='maintenance' AND at > ?`).get(SINCE).n;
       const updateRows = mutationRows.filter((m) => m.mutation_type === 'update').reduce((a, m) => a + m.n, 0);
       add(forbidden.length === 0 && updateRows <= explicitUpdates ? 'PASS' : 'FAIL', 'promotion.appendOnly',
-        `提升行的变更日志: ${mutationRows.length ? mutationRows.map((m) => `${m.mutation_type}=${m.n}`).join(' ') : '无'}；显式 update 调用 ${explicitUpdates}；update 日志 ${updateRows}`);
+        `提升行的变更日志: ${mutationRows.length ? mutationRows.map((m) => `${m.mutation_type}=${m.n}`).join(' ') : '无'}；显式 update 来源合计 ${explicitUpdates}（工具调用+写入通道+maintenance）；update 日志 ${updateRows}`);
     }
 
     // 检索计数（契约 §9.1）：只有 agent 的显式检索才 +1 —— 不带 id 的 get、list、
