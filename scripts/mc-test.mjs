@@ -81,7 +81,7 @@ if (full) {
   run('build (client)', process.execPath, [join(SCRIPTS, 'copy-client.mjs')])
   run('acceptance', process.execPath, [join(SCRIPTS, 'mc-acceptance.mjs')])
   run('memory audit', process.execPath, [join(SCRIPTS, 'mc-memory-audit.mjs'), '--json'])
-  run('records check', process.execPath, [join(SCRIPTS, 'records-check.mjs')])
+  run('records check', process.execPath, [join(SCRIPTS, 'mc-records-check.mjs')])
 }
 
 report()
