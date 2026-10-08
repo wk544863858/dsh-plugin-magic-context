@@ -110,6 +110,39 @@ describe('telemetry service', () => {
     expect(missing.status).toBe(404)
   })
 
+  it('hands memoryStats the SAME project identity the header reports', () => {
+    const { stores } = fixture()
+    // A recall row is the header's own source for `project.identity`.
+    stores.appendJournal({
+      at: Date.now(), level: 'info', kind: 'memory-recall', summary: 'recalled 12 memories',
+      data: { rows: 12, identity: 'git:aaaa1111bbbb2222cccc3333dddd4444eeee5555' },
+      sessionId: 'session-x',
+    })
+    const seen: Array<{ sessionId?: string; identity?: string }> = []
+    const service = createTelemetryService({
+      stores,
+      meta: () => ({}),
+      memoryStats: (sessionId?: string, identity?: string) => {
+        seen.push({ ...sessionId === undefined ? {} : { sessionId }, ...identity === undefined ? {} : { identity } })
+        return { total: 12, verified: 3, unverified: 9 }
+      },
+    })
+    cleanups.push(() => service.close())
+
+    const summary = service.summary() as { project: { identity?: string }, health: { memoryStats?: Record<string, number> } }
+    expect(summary.project.identity).toBe('git:aaaa1111bbbb2222cccc3333dddd4444eeee5555')
+    // The KPI was asked about exactly that project (the 2026-10-08 mismatch:
+    // the header showed git:93eea8… while the totals belonged to another one).
+    expect(seen).toEqual([{ identity: 'git:aaaa1111bbbb2222cccc3333dddd4444eeee5555' }])
+    expect(summary.health.memoryStats).toEqual({ total: 12, verified: 3, unverified: 9 })
+
+    // A scoped request carries its session through, plus that scope's identity.
+    seen.length = 0
+    service.summary('session-x')
+    expect(seen[0]?.sessionId).toBe('session-x')
+    expect(seen[0]?.identity).toBe('git:aaaa1111bbbb2222cccc3333dddd4444eeee5555')
+  })
+
   it('streams a snapshot then new journal entries as SSE frames', async () => {
     const { stores } = fixture()
     const service = createTelemetryService({ stores, meta: () => ({}), pollMs: 20 })

@@ -26,7 +26,12 @@ const api = definition.factory((name) => {
   if (name === 'react') return stubReact;
   throw new Error('unexpected require: ' + name);
 });
-const { recordOf, recordsOf, recordCounts, noiseLine, dictionaryKeys, dictionaryTranslator } = api.__diagnostics;
+const { recordOf, recordsOf, recordCounts, noiseLine, dictionaryKeys, dictionaryTranslator, recordCategories } = api.__diagnostics;
+// The panel's own category table (icon + label key), NOT a hand-copied mirror:
+// the mirror had drifted (`maintain` was added to the client and the copy was
+// not), and the script crashed on a category it did not know instead of saying
+// so. Labels come from the shipped zh dictionary for the same reason.
+const zh = dictionaryTranslator('zh');
 
 // 取每类 kind 的最新一行 + 最近 80 行，覆盖所有分类分支。
 const db = new DatabaseSync(DB, { readOnly: true });
@@ -41,9 +46,9 @@ const rows = [...newest, ...perKind].map((r) => ({
 console.log(`=== 用 ${rows.length} 条真实 journal 行映射出的「操作记录」（面板会这样显示）===\n`);
 const records = recordsOf(rows);
 for (const record of records.slice(0, 22)) {
-  const meta = { write: ['🧠', '写入记忆'], read: ['🔎', '加载记忆'], reclaim: ['✂️', '压缩上下文'], drop: ['🗑️', '丢弃上下文'], archive: ['🧭', '历史归档'], error: ['⚠️', '失败'] }[record.category];
+  const meta = recordCategories[record.category] ?? { icon: '❔', labelKey: 'category.' + record.category };
   const detail = (record.detail !== '' ? record.detail : String(record.summary ?? '')) + (record.count > 1 ? ' ×' + record.count : '');
-  console.log(`  ${meta[0]} ${meta[1].padEnd(7)} │ ${record.text.padEnd(12)} │ ${detail.slice(0, 74)}`);
+  console.log(`  ${meta.icon} ${zh(meta.labelKey).padEnd(7)} │ ${record.text.padEnd(12)} │ ${detail.slice(0, 74)}`);
 }
 console.log(`\n=== 分类计数 chips ===`);
 console.log('  ' + recordCounts(records).map((e) => `${e.icon}${e.label} ${e.count}`).join('   '));
@@ -51,16 +56,21 @@ console.log(`\n=== 折叠的噪声 ===\n  ${noiseLine(rows)}`);
 
 // ── 断言
 const byKind = (kind, predicate) => rows.filter((r) => r.kind === kind && (predicate === undefined || predicate(r)));
+// Kinds the panel shows as records. `memory-recall` and `baseline` are NOT here
+// on purpose: they are folded into the noise line (NOISE_KINDS in the client),
+// which is what keeps the panel readable on a busy session. The script used to
+// demand records for them — a stale expectation, not a client bug.
 const mustMap = [
   ...byKind('memory-promote'),
-  ...byKind('memory-recall'),
   ...byKind('compartment-published'),
-  ...byKind('baseline'),
   ...byKind('emergency-reclaim'),
   ...byKind('historian', (r) => r.level === 'error'),
+  ...byKind('maintenance'),
   ...byKind('tool-call', (r) => ['write', 'update', 'archive', 'merge', 'list', 'get'].includes(r.data?.action)),
 ];
+const foldedKinds = [...byKind('memory-recall'), ...byKind('baseline')];
 const unmapped = mustMap.filter((r) => recordOf(r) === null);
+const notFolded = foldedKinds.filter((r) => recordOf(r) !== null);
 const deferPasses = byKind('pass', (r) => r.data?.decision !== 'execute').filter((r) => recordOf(r) !== null);
 const noiseKindsMapped = rows.filter((r) => ['boot', 'session-first-seen', 'engine'].includes(r.kind) && recordOf(r) !== null);
 let failures = 0;
@@ -72,10 +82,19 @@ check('boot/session/engine 噪声不进入记录列表', noiseKindsMapped.length
 check('分类计数之和等于记录数', recordCounts(records).reduce((a, e) => a + e.count, 0) === records.length,
   `${recordCounts(records).reduce((a, e) => a + e.count, 0)} vs ${records.length}`);
 check('每条记录都有分类/文案/时间', records.every((r) => typeof r.category === 'string' && typeof r.text === 'string' && typeof r.at === 'number'));
+const unknownCategories = [...new Set(records.map((r) => r.category))].filter((c) => recordCategories[c] === undefined);
+check('每个分类都在面板的分类表里（防镜像漂移）', unknownCategories.length === 0,
+  unknownCategories.length ? unknownCategories.join(', ') : `${new Set(records.map((r) => r.category)).size} 类`);
 const promote = records.find((r) => r.text === '记忆提升');
 check('promotion 记录带真实条数', promote !== undefined && /新增 \d+/.test(promote.detail), promote?.detail ?? '(无样本)');
-const recall = records.find((r) => r.text === '加载记忆');
-check('recall 记录带 m[0]/m[1] 条数', recall !== undefined && /m\[0\]/.test(recall.detail), recall?.detail ?? '(无样本)');
+// The folded half of the design: recall/baseline are noise, and the noise line
+// names them with their counts instead of vanishing silently.
+check('recall/baseline 折叠为噪声而不是记录', notFolded.length === 0, `${notFolded.length} 行泄漏`);
+const noise = noiseLine(rows);
+const recallRows = byKind('memory-recall').length;
+const baselineRows = byKind('baseline').length;
+check('噪声行点名加载记忆与基线刷新', (recallRows === 0 || noise.includes('加载记忆')) && (baselineRows === 0 || noise.includes('基线刷新')),
+  noise);
 
 // ── i18n：字典键集合必须对齐，英文渲染不得回退到中文
 const keys = dictionaryKeys();

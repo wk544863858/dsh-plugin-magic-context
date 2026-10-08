@@ -68,6 +68,12 @@ import { openJournal, recoverOrphanHistorianRuns, type Journal, type JournalLeve
 import { defaultDataDir, openStores, SCHEMA_VERSION } from './core/stores.ts'
 import { errText, type UsageRecord } from './core/types.ts'
 import { liveBoolean, liveNumber, liveString, policyOf } from './dsh/volatile.ts'
+import {
+  pressureUsedTokens,
+  shouldLogContextPressure,
+  type ContextPressureReading,
+  type LoggedPressureReading,
+} from './dsh/context-pressure.ts'
 
 export type { MagicContextDshConfig, MagicContextDshConfigDefineTool }
 
@@ -362,14 +368,19 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
       // Dreamer-slice KPIs for the panel: the viewed session's project
       // verification coverage + the newest maintenance tally. Lazy getters —
       // the panel polls them, nothing runs at mount.
-      memoryStats: (sessionId?: string) => {
+      memoryStats: (sessionId?: string, identity?: string) => {
         if (memoryWriter === undefined) return undefined
-        const identity = config.memory?.project
+        // The identity telemetry resolved from this scope's newest recall comes
+        // first: it is the very project the header shows, and the process
+        // serves several sessions (first-seen would answer for someone else's
+        // project). Config and the session registry are the fallbacks.
+        const resolved = identity
+          ?? config.memory?.project
           ?? (sessionId !== undefined ? projects.sessionIdentity.get(sessionId) : undefined)
           ?? [...projects.seenIdentities][0]
-        if (identity === undefined) return undefined
+        if (resolved === undefined) return undefined
         try {
-          const stats = memoryWriter.stats(identity)
+          const stats = memoryWriter.stats(resolved)
           return { total: stats.rows, verified: stats.verified, unverified: stats.unverified }
         } catch {
           return undefined
@@ -411,8 +422,10 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
   // request's prompt-side usage plus the surface's signed movement since the
   // sample — the answer for the NEXT request, not the last-request bill our
   // pass ledger carries (the two read differently and the user noticed).
-  // Every distinct reading lands once in the journal; telemetry serves the
-  // newest to the panel so both gauges agree.
+  // A reading lands in the journal only when it is genuinely new (see
+  // dsh/context-pressure.ts): every distinct reading used to write a row,
+  // measured at ~10 rows/minute during heavy work. Telemetry serves the newest
+  // row to the panel, so both gauges agree within one threshold step.
   ctx.inject(['sessionProjections'], (scope) => {
     if (journal === undefined) return
     const registry = (scope as unknown as {
@@ -420,20 +433,19 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
         onChanged(listener: (session: { id?: string }, key: string, value: unknown) => void): () => void
       }
     }).sessionProjections
-    const lastBySession = new Map<string, string>()
+    const lastBySession = new Map<string, LoggedPressureReading>()
     const disposeListener = registry.onChanged((session, key, value) => {
       try {
         if (key !== 'contextPressure') return
-        const reading = value as { projectedTokens?: number; pressureTokens?: number; contextWindow?: number }
-        const signature = JSON.stringify([reading.projectedTokens, reading.pressureTokens, reading.contextWindow])
+        const reading = value as ContextPressureReading
         const sid = typeof session?.id === 'string' ? session.id : ''
-        if (lastBySession.get(sid) === signature) return
-        lastBySession.set(sid, signature)
+        if (!shouldLogContextPressure(lastBySession.get(sid), reading)) return
+        lastBySession.set(sid, { used: pressureUsedTokens(reading), window: reading.contextWindow ?? 0 })
         if (lastBySession.size > 64) {
           const oldest = lastBySession.keys().next().value
           if (oldest !== undefined) lastBySession.delete(oldest)
         }
-        const used = reading.projectedTokens ?? reading.pressureTokens ?? 0
+        const used = pressureUsedTokens(reading)
         journal.info('context-pressure', `context pressure reading: ${String(used)} / ${String(reading.contextWindow ?? 0)} tok`, {
           projectedTokens: reading.projectedTokens,
           pressureTokens: reading.pressureTokens,

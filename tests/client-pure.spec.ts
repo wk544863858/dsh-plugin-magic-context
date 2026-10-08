@@ -38,6 +38,9 @@ const api = factory((name) => {
     timeShort: (value: unknown) => string
     trimSummary: (summary: unknown) => Record<string, unknown>
     recordOf: (event: unknown) => { category: string; text: string } | null
+    recordsOf: (rows: readonly unknown[]) => Array<{ category: string; text: string }>
+    recordCategories: Record<string, { icon: string; labelKey: string; tone: string }>
+    dictionaryKeys: () => { zh: string[]; en: string[] }
   }
 }
 
@@ -82,6 +85,41 @@ describe('spanOf — durations', () => {
   })
   it('empty when the Host sent no number', () => {
     expect(spanOf(undefined)).toBe('')
+  })
+})
+
+describe('recordCategories — the panel table is the single source', () => {
+  it('every category the client can emit exists in its own table', () => {
+    const rows = [
+      { at: 1, level: 'info', kind: 'memory-promote', summary: 'promoted 2 facts', data: { promoted: 2 } },
+      { at: 2, level: 'info', kind: 'memory-recall', summary: 'recalled 40 project memories', data: { rows: 40 } },
+      { at: 3, level: 'info', kind: 'compartment-published', summary: 'published §C1§', data: { id: 'C1' } },
+      { at: 4, level: 'info', kind: 'baseline', summary: 'baseline HARD rebuild (epoch 3)', data: { mode: 'hard', epoch: 3 } },
+      { at: 5, level: 'warn', kind: 'emergency-reclaim', summary: 'emergency reclaim', data: { dropped: 3 } },
+      { at: 6, level: 'error', kind: 'historian', summary: 'historian run failed (invalid-output)', data: { phase: 'failed', kind: 'invalid-output', reason: 'x' } },
+      { at: 7, level: 'info', kind: 'maintenance', summary: 'maintenance: expired 0 · verified 1', data: { verified: 1 } },
+      { at: 8, level: 'warn', kind: 'maintenance', summary: 'maintenance: verify call failed', data: {} },
+      { at: 9, level: 'info', kind: 'tool-call', summary: 'ctx_memory', data: { action: 'write' } },
+      { at: 10, level: 'info', kind: 'drop-landed', summary: 'landed 3 drop(s)', data: { count: 3 } },
+      { at: 11, level: 'error', kind: 'error', summary: 'boom', data: {} },
+    ]
+    const { recordsOf, recordCategories, dictionaryKeys } = api.__diagnostics
+    const records = recordsOf(rows)
+    expect(records.length).toBeGreaterThan(4)
+    for (const record of records) {
+      // The records-check script used to keep a hand-copied table; it drifted
+      // when `maintain` was added and crashed on a category it did not know.
+      expect(Object.keys(recordCategories)).toContain(record.category)
+    }
+    // The seven shipped roles, each renderable (icon + a label the zh dictionary knows).
+    for (const role of ['write', 'read', 'reclaim', 'drop', 'maintain', 'archive', 'error']) {
+      expect(Object.keys(recordCategories)).toContain(role)
+    }
+    const zhKeys = dictionaryKeys().zh
+    for (const entry of Object.values(recordCategories)) {
+      expect(typeof entry.icon).toBe('string')
+      expect(zhKeys).toContain(entry.labelKey)
+    }
   })
 })
 

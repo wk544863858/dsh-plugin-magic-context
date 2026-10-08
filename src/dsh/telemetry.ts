@@ -56,10 +56,12 @@ export interface TelemetryDeps {
   /**
    * Dreamer-slice KPIs for the panel: the session's project verification
    * coverage and the newest maintenance tick's tally. Receives the summary's
-   * sessionId so per-session panels answer for their own project; the
-   * composition root decides the fallback (the configured project).
+   * sessionId AND the identity the header resolved for this scope (the newest
+   * recall of the scope) so the KPI can never count a different project than
+   * `project.identity` reports; the composition root decides the fallback when
+   * no identity was resolved.
    */
-  readonly memoryStats?: (sessionId?: string) => {
+  readonly memoryStats?: (sessionId?: string, identity?: string) => {
     readonly total?: number
     readonly verified?: number
     readonly unverified?: number
@@ -240,7 +242,17 @@ export function createTelemetryService(deps: TelemetryDeps): TelemetryService {
     let memoryStats: Record<string, unknown> | undefined
     let maintenanceLast: Record<string, unknown> | undefined
     try {
-      memoryStats = deps.memoryStats?.(sessionId) as Record<string, unknown> | undefined
+      // The KPI must count the SAME project the header reports, or a global
+      // summary shows one project's identity above another project's totals
+      // (measured: identity git:93eea8… with 101 rows that belonged to
+      // git:a81f6372…, because the fallback picked the first-seen identity of a
+      // process serving several sessions). `project()` resolves it from the
+      // newest recall of this scope — the same source as `project.identity`.
+      const scopeIdentity = project(sessionId).identity
+      memoryStats = deps.memoryStats?.(
+        sessionId,
+        typeof scopeIdentity === 'string' ? scopeIdentity : undefined,
+      ) as Record<string, unknown> | undefined
       maintenanceLast = deps.maintenanceLast?.() as Record<string, unknown> | undefined
     } catch {
       /* stats are panel decoration; never let them break the summary */

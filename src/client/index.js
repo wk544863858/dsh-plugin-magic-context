@@ -1699,6 +1699,11 @@ window.__ModuleLoader__.load({
       apply,
       __diagnostics: {
         recordOf, recordsOf, recordCounts, noiseLine, dictionaryKeys, dictionaryTranslator, dictionaries: DICTIONARIES,
+        // The category table the panel renders from. Exposed so node-side checks
+        // use THIS table instead of a hand-copied mirror — the mirror had
+        // already drifted (`maintain` was missing) and the records-check script
+        // crashed on it instead of reporting a category it did not know.
+        recordCategories: RECORD_CATEGORIES,
         // The number/text formatters are the panel's display contract; the
         // node-side spec pins them so a formatting regression (the scope bug
         // that briefly unmounted the pill) cannot come back silently.

@@ -716,6 +716,11 @@ function computeMetrics(rows) {
       start: 0,
       done: 0,
       failed: 0,
+      // Remount recoveries are synthetic terminals the host writes for runs a
+      // rebuild killed (the client renders them as dim bookkeeping). Counting
+      // them as failures pushed the rate to 81.8% on 2026-10-08's window — a
+      // number about MY rebuilds, not about the historian.
+      recovered: 0,
       other: 0,
       durations: [],
       tokens: 0,
@@ -830,8 +835,10 @@ switch (row.kind) {
       }
       case 'historian': {
         const phase = toText(d.phase)
+        const remountTerminal = phase === 'failed' && toText(d.kind) === 'adapter-remount'
         if (phase === 'start') m.historian.start += 1
         else if (phase === 'done') m.historian.done += 1
+        else if (remountTerminal) m.historian.recovered += 1
         else if (phase === 'failed') m.historian.failed += 1
         else m.historian.other += 1
         const duration = toNum(d.durationMs)
@@ -847,8 +854,29 @@ switch (row.kind) {
         const usage = d.usage !== null && typeof d.usage === 'object' ? d.usage : {}
         m.historian.usageInput += toNum(usage.inputTokens) ?? 0
         m.historian.usageOutput += toNum(usage.outputTokens) ?? 0
-        if (phase === 'failed') {
-          m.historian.failures.push({ at: row.at, error: toText(d.error), attempts: toNum(d.attempts) })
+        if (phase === 'failed' && !remountTerminal) {
+          // `kind` + `reason` are what a failed row actually carries (reading
+          // `d.error` printed an empty column for every failure). The 2026-10-08
+          // review added finishReason/outputChars/partialChars/attemptCaps: an
+          // "invalid JSON" is a cut stream when finishReason says 'none' or the
+          // output stopped at the cap, and a model problem when it says 'stop'.
+          const finish = toText(d.finishReason)
+          const partial = toNum(d.partialChars)
+          const output = toNum(d.outputChars)
+          const caps = Array.isArray(d.attemptCaps) ? d.attemptCaps.map((c) => String(c)).join('/') : ''
+          m.historian.failures.push({
+            at: row.at,
+            kind: toText(d.kind) || toText(d.error),
+            reason: toText(d.reason) || toText(d.error),
+            stage: toText(d.stage),
+            attempts: toNum(d.attempts),
+            detail: [
+              finish !== '' ? `finish=${finish}` : '',
+              partial !== null ? `partial=${String(partial)}` : '',
+              output !== null ? `output=${String(output)}` : '',
+              caps !== '' ? `caps=${caps}` : '',
+            ].filter((part) => part !== '').join(' '),
+          })
         }
         break
       }
@@ -902,10 +930,11 @@ switch (row.kind) {
   m.pass.lastContextWindow = m.pass.contextWindows.length > 0 ? m.pass.contextWindows[0] : null
   m.historian.avgDurationMs = avg(m.historian.durations)
   m.historian.maxDurationMs = max(m.historian.durations)
-  m.historian.failureRate =
-    m.historian.start > 0 ? m.historian.failed / m.historian.start : m.historian.done + m.historian.failed > 0
-      ? m.historian.failed / (m.historian.done + m.historian.failed)
-      : null
+  // The rate over CONCLUDED runs: a run a rebuild killed is an interrupt, not a
+// historian failure, so neither side of the ratio counts it. (Before this,
+// `failed` included 543 synthetic remount terminals and the rate read 81.8%.)
+  const concluded = m.historian.done + m.historian.failed
+  m.historian.failureRate = concluded > 0 ? m.historian.failed / concluded : null
   m.toolCall.avgMs = avg(m.toolCall.durations)
   m.memoryRecall.avgUsedTokens = m.memoryRecall.total > 0 ? m.memoryRecall.usedTokens / m.memoryRecall.total : null
   return m
@@ -952,13 +981,14 @@ function buildHealth(ctx) {
         push('no-execute-pass', '窗口内没有任何 execute pass（插件可能未激活或压力始终低于阈值）。')
       }
       const hist = metrics.historian
-      if (hist.start + hist.done + hist.failed === 0) {
+      if (hist.start + hist.done + hist.failed + hist.recovered === 0) {
         push('historian-never-ran', 'historian 从未运行（窗口内没有 phase=start/done/failed 事件）。')
       }
       if (hist.failureRate !== null && hist.failureRate > 0.2) {
         push(
           'historian-failure-rate',
-          `historian 失败率 ${(hist.failureRate * 100).toFixed(1)}% > 20%（start=${hist.start}, failed=${hist.failed}）。`,
+          `historian 失败率 ${(hist.failureRate * 100).toFixed(1)}% > 20%（done=${hist.done}, failed=${hist.failed}`
+          + `${hist.recovered > 0 ? `, 另有重建补记 ${hist.recovered} 不计入` : ''}）。`,
         )
       }
       if (metrics.errors.length > 0) {
@@ -1212,8 +1242,10 @@ function renderText(payload) {
     const h = metrics.historian
     lines.push(
       `  historian     : start ${fmtInt(h.start)} / done ${fmtInt(h.done)} / failed ${fmtInt(h.failed)}`
+      + `${h.recovered > 0 ? ` / 重挂载补记 ${fmtInt(h.recovered)}` : ''}`
       + `${h.other > 0 ? ` / 其他 ${fmtInt(h.other)}` : ''}`
-      + `；失败率 ${h.failureRate === null ? '-' : `${(h.failureRate * 100).toFixed(1)}%`}`,
+      + `；失败率 ${h.failureRate === null ? '-' : `${(h.failureRate * 100).toFixed(1)}%`}`
+      + `${h.recovered > 0 ? '（实时失败率，已排除重建补记）' : ''}`,
     )
     lines.push(
       `    耗时        : 平均 ${fmtDuration(h.avgDurationMs)}，最大 ${fmtDuration(h.maxDurationMs)}（样本 ${h.durations.length}）`
@@ -1225,7 +1257,9 @@ function renderText(payload) {
     if (h.failures.length > 0) {
       lines.push('    最近失败    :')
       for (const failure of h.failures.slice(-5)) {
-        lines.push(`      ${fmtLocal(failure.at)}  attempts=${failure.attempts ?? '-'}  ${truncate(failure.error, 120)}`)
+        const where = failure.stage !== '' ? `${failure.stage} ` : ''
+        const why = failure.detail !== '' ? ` [${failure.detail}]` : ''
+        lines.push(`      ${fmtLocal(failure.at)}  ${failure.kind || '-'}  attempts=${failure.attempts ?? '-'}  ${where}${truncate(failure.reason, 100)}${why}`)
       }
     }
 

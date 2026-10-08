@@ -273,6 +273,37 @@ describe('historian terminal events (unit)', () => {
     const failed = terminals(calls)[0]!
     expect(failed.data?.kind).toBe('invalid-output')
     expect(failed.data?.attempts).toBe(2)
+    // Diagnosability (2026-10-08 telemetry review): a rejected digest names the
+    // stream's terminal reason and how much output it carried, so a cut stream
+    // can be told apart from a model that simply wrote bad JSON.
+    expect(failed.data?.finishReason).toBe('stop')
+    expect(failed.data?.outputChars).toBe('not json at all'.length)
+    expect(failed.data?.outputTail).toBe('not json at all')
+    // Both caps, in order: the floor and its doubled retry.
+    expect(failed.data?.attemptCaps).toEqual([HISTORIAN_MIN_OUTPUT_TOKENS, HISTORIAN_MIN_OUTPUT_TOKENS * 2])
+  })
+
+  it('a stream that ends with NO finish chunk is distinguishable from a clean stop', async () => {
+    const calls: Call[] = []
+    // The provider closes mid-JSON without a terminal event — the shape that
+    // produced "invalid JSON at position 3273" in the live journal with no
+    // truncation signal at all.
+    const silentCut: HistorianLlm = {
+      stream: () => (async function* () {
+        yield { type: 'text-delta', index: 0, text: '{"summary":{"p1":"cut off mid-property' }
+      })(),
+    }
+    await callHistorian(baseDeps(silentCut, recordingJournal(calls)), {
+      sessionId: SESSION,
+      session: SESSION_STUB,
+      nodes: NODES,
+    }).catch(() => undefined)
+
+    const failed = terminals(calls)[0]!
+    expect(failed.data?.kind).toBe('invalid-output')
+    expect(failed.data?.finishReason).toBe('none')
+    expect(failed.data?.outputChars).toBe('{"summary":{"p1":"cut off mid-property'.length)
+    expect(String(failed.data?.outputTail)).toContain('cut off mid-property')
   })
 
   it('a below-floor configured cap is raised and the raise is journaled', async () => {

@@ -241,9 +241,14 @@ export const HISTORIAN_INSTRUCTION = [
 async function collectText(
   chunks: AsyncIterable<unknown>,
   maxTokens: number,
-): Promise<{ text: string; usage?: Record<string, number> }> {
+): Promise<{ text: string; usage?: Record<string, number>; finishReason?: string }> {
   const byIndex = new Map<number, string>()
   let usage: Record<string, number> | undefined
+  // The stream's terminal reason, when one arrived at all. A provider that cuts
+  // the stream without a `finish` chunk leaves this undefined — the shape that
+  // produces invalid JSON with no max-tokens signal (measured live 13:06: JSON
+  // cut at 3.2KB, no truncation classified, four attempts burned).
+  let finishReason: string | undefined
   for await (const raw of chunks) {
     const chunk = raw as
       | { type: 'text-delta'; index: number; text: string }
@@ -268,6 +273,7 @@ async function collectText(
       }
       case 'finish': {
         const reason = (chunk as { reason: { kind: string; failure?: { message?: string } } }).reason
+        finishReason = reason.kind
         if (reason.kind === 'error' || reason.kind === 'aborted') {
           throw new Error(`historian call failed: ${reason.failure?.message ?? reason.kind}`)
         }
@@ -285,7 +291,7 @@ async function collectText(
     }
   }
   const text = [...byIndex.entries()].sort(([a], [b]) => a - b).map(([, value]) => value).join('')
-  return { text, ...usage === undefined ? {} : { usage } }
+  return { text, ...usage === undefined ? {} : { usage }, ...finishReason === undefined ? {} : { finishReason } }
 }
 
 /** In-flight sessions: Magic Context never runs two historians for one session. */
@@ -306,7 +312,7 @@ async function collectAttempt(
   options: HistorianStreamOptions,
   budgetMs: number,
   outerSignal: AbortSignal | undefined,
-): Promise<{ text: string; usage?: Record<string, number> }> {
+): Promise<{ text: string; usage?: Record<string, number>; finishReason?: string }> {
   const controller = new AbortController()
   const relayAbort = (): void => controller.abort(outerSignal?.reason)
   if (outerSignal !== undefined) {
@@ -507,6 +513,14 @@ export async function callHistorian(
   let terminal = false
   let attempts = 0
   let failure: Error | undefined
+  // What the LAST attempt's stream actually did: its terminal reason (undefined
+  // when the provider never sent a finish chunk) and how many characters made
+  // it out. Both land on an invalid-output row so a cut stream is
+  // distinguishable from a model that simply wrote bad JSON.
+  let lastFinish: string | undefined
+  let lastText = ''
+  /** The output cap each attempt carried, in order (did escalation happen?). */
+  const attemptCaps: number[] = []
   // The stage a failure should be attributed to: updated as the run advances
   // ('start' → 'chunk 2/4' → 'merge'), so the failed row says WHERE it died.
   let stage = 'start'
@@ -549,6 +563,7 @@ export async function callHistorian(
         attempts += 1
         const maxTokens = attemptOutputCap(effectiveMaxTokens, attempt, ceiling)
         lastCap = maxTokens
+        attemptCaps.push(maxTokens)
         const truncated = failure instanceof HistorianTruncatedError
         const messages = attempt === 0
           ? baseMessagesForCall
@@ -577,6 +592,8 @@ export async function callHistorian(
             sessionId: input.sessionId,
             purpose: 'compaction',
           }, budgetMs, input.signal)
+          lastFinish = collected.finishReason
+          lastText = collected.text
           const parsed = parseHistorianOutput(collected.text)
           if (isMerge) {
             finalDraft = parsed
@@ -629,6 +646,9 @@ export async function callHistorian(
         events: draft.events.length,
         attempts,
         durationMs: clock() - startedAt,
+        // 'stop' on a healthy run; 'none' would mean the stream ended without a
+        // terminal reason even though the JSON parsed (worth knowing).
+        finishReason: lastFinish ?? 'none',
       },
       input.sessionId,
     )
@@ -652,12 +672,27 @@ export async function callHistorian(
         reason,
         errorName: error instanceof Error ? error.name : typeof error,
         attempts,
+        // Every cap tried, in order: an escalated retry is visible at a glance
+        // (and a run that never escalated is the tell for a model-side cut).
+        attemptCaps,
         durationMs: clock() - startedAt,
         // The measured shape of a truncation: how much of the answer made it
         // out before the cap. 0 chars ⇒ the budget was spent on reasoning;
         // a long partial ⇒ the requested digest itself is too big.
         ...error instanceof HistorianTruncatedError
           ? { maxTokens: error.maxTokens, partialChars: error.partialChars }
+          : {},
+        // A rejected digest says nothing about WHY by itself: the same
+        // "invalid JSON" is produced by a cut stream and by a chatty model.
+        // The last attempt's terminal reason and its output length (plus a
+        // short tail) decide between them — `finishReason: 'none'` means the
+        // provider closed without a `finish` chunk.
+        ...error instanceof HistorianOutputError
+          ? {
+            finishReason: lastFinish ?? 'none',
+            outputChars: lastText.length,
+            outputTail: lastText.slice(-120),
+          }
           : {},
       }, input.sessionId)
     }
