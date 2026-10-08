@@ -1,9 +1,3 @@
-// @ts-nocheck
-/**
- * MIRROR of packages/test-support/mc-dsh-poc/tests/emergency-drop.spec.ts
- * (DSH-checkout harness suite). Keep this file byte-identical to the POC copy
- * below the header — regenerate after editing the POC side.
- */
 /**
  * Emergency reclaim — the P2-C1/C2 protection model.
  *

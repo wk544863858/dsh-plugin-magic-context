@@ -1,15 +1,3 @@
-// @ts-nocheck
-// MIRROR of packages/test-support/mc-dsh-poc/tests/maintenance.spec.ts (DSH checkout).
-// Keep byte-identical to the POC copy below the header; regenerate after POC edits.
-
-/**
- * Maintenance tick — the adapter's slice of MC's dreamer without a hidden
- * agent. Expiry archives through the contract action (mutation log + authority
- * guard stay authoritative); verification applies MC verify's host-side
- * manifest: keep → per-memory `verified_at` (metadata only, no mutation log),
- * stale → `updateMemory`, wrong → `archiveMemory`. MC basis:
- * packages/plugin/src/features/magic-context/dreamer/verify.ts, constants.ts.
- */
 /**
  * Maintenance tick — the adapter's slice of MC's dreamer without a hidden
  * agent. Expiry archives through the contract action (mutation log + authority

@@ -1,9 +1,3 @@
-// @ts-nocheck
-/**
- * MIRROR of packages/test-support/mc-dsh-poc/tests/reduce-guidance.spec.ts
- * (DSH-checkout harness suite). Keep this file byte-identical to the POC copy
- * below the header — regenerate after editing the POC side.
- */
 /**
  * Reduce guidance — the ported MC prompting (magic-context-prompt.ts +
  * ctx-reduce-nudge.ts): desk section, Channel 1/2 bands with their exact

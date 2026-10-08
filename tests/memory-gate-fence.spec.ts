@@ -1,12 +1,27 @@
-// @ts-nocheck
 /**
- * MIRROR of the runnable suite at
- * `packages/test-support/mc-dsh-poc/tests/memory-gate-fence.spec.ts` in the DSH
- * checkout — vitest runs that copy, because this repository has no
- * `node_modules` and therefore cannot resolve the bare `vitest` specifier.
- * Keep the two files identical; `@ts-nocheck` keeps this package’s
- * `tsc --noEmit` green (vitest and the harness packages are not dependencies
- * of this package).
+ * task-9: the memory gate, `retrieval_count` telemetry and the storage-contract
+ * fence.
+ *
+ * Three deliverables, three describes:
+ *
+ *  ① `memory.enabled` — absent configuration turns the whole memory block off
+ *     (no bridge, no writer, no `ctx_memory` registration), explicit `false`
+ *     reports `disabled-by-config`, and the enabled path still registers the
+ *     tool. Asserted through a REAL plugin boot, because the gate lives in
+ *     `src/index.ts` and its failure mode (a half-open adapter that recalls but
+ *     cannot write, or a tool that exists with no store behind it) is only
+ *     observable there.
+ *
+ *  ② `retrieval_count` / `last_retrieved_at` — MC's explicit-retrieval
+ *     telemetry (write contract §9.1) as `MemoryWriter.recordRetrieval`.
+ *
+ *  ③ the contract fence — reading `schema_migrations` at open time and
+ *     DOWNGRADING TO READ-ONLY when the database is newer than the adapter
+ *     (v94). A v95+ store must never be written by this adapter: unknown DDL
+ *     means unknown invariants.
+ *
+ * Every database here is a throwaway under the OS temp dir. The user's real
+ * `context.db` is never opened, let alone written.
  */
 import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'

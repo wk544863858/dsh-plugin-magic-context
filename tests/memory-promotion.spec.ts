@@ -1,9 +1,3 @@
-// @ts-nocheck
-/**
- * MIRROR of packages/test-support/mc-dsh-poc/tests/memory-promotion.spec.ts
- * (DSH-checkout harness suite). Keep this file byte-identical to the POC copy
- * below the header — regenerate after editing the POC side.
- */
 /**
  * Memory write path, end to end through the real agent loop.
  *

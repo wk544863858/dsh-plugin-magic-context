@@ -1,9 +1,3 @@
-// @ts-nocheck
-/**
- * MIRROR of packages/test-support/mc-dsh-poc/tests/memory-delta.spec.ts
- * (DSH-checkout harness suite). Keep this file byte-identical to the POC copy
- * below the header — regenerate after editing the POC side.
- */
 /**
  * The m[1] delta lane: Magic Context's `memory_mutation_log` cursor, the
  * `<memory-updates>` rendering, the `project_memory_epoch` reset rule, and the

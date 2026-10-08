@@ -1,15 +1,11 @@
-// @ts-nocheck
 /**
- * MIRROR of the runnable suite at
- * `packages/test-support/mc-dsh-poc/tests/journal.spec.ts` in the DSH
- * checkout — vitest runs that copy, because this repository has no
- * `node_modules` and therefore cannot resolve the bare `vitest` specifier.
- * Keep the two files identical apart from this header; `@ts-nocheck` keeps
- * this package's `tsc --noEmit` green (vitest is not a dependency of this
- * package).
+ * The activity journal — the validation period's audit trail.
  *
- * The activity journal: redaction bounds, mirror format, store surface, and
- * the remount recovery for orphan historian starts.
+ * Unit: bounded redaction and the mirror line format.
+ * Store: the v4 table and its query/prune/bounds surface.
+ * Integration: a real agent-loop scenario must leave the signals a reviewer
+ * needs (boot, first-seen, pass decisions, tool calls, landed drops) both in
+ * the journal table and in the human-readable mirror file.
  */
 import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'

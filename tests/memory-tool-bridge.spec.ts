@@ -1,8 +1,38 @@
-// @ts-nocheck
 /**
- * MIRROR of the runnable suite at `packages/test-support/mc-dsh-poc/tests/memory-tool-bridge.spec.ts`
- * in the DSH checkout — this repository has no node_modules and cannot resolve bare
- * vitest. Keep the two files identical; this header is the only intended difference.
+ * `ctx_memory` through the REAL host tool constructor and the REAL plugin boot.
+ *
+ * Why this file exists: every other suite in this directory builds tools with
+ * the local builder fallback (or passes an explicit `memory.project`), so it
+ * never exercised the wiring the packaged Desktop runtime uses
+ * (`tools.mode: dynamic-import`, `memory.project` unset).
+ *
+ * The defect this pins, in `packages/dsh-plugin/src/index.ts`:
+ *
+ *   recall: request => memoryRecall.recall({
+ *     ...config.memory?.project === undefined && exec.agent?.session.header.cwd === undefined
+ *       ? {} : { project: config.memory?.project ?? exec.agent?.session.header.cwd },
+ *     ...
+ *   })
+ *
+ * `exec` is not bound in that arrow's scope — it is only the sibling
+ * `resolveIdentity` arrow's parameter. `&&` binds tighter than `?:`, so with
+ * the default config (`memory.project` unset) the left side is `true` and the
+ * right side is evaluated, throwing `ReferenceError: exec is not defined`
+ * before any store access. Every recall-taking action (list, and get without
+ * an id) dies at the tool boundary; when `memory.project` IS configured the
+ * `&&` short-circuits, which is why the promotion suites never saw it.
+ *
+ * Covered here:
+ *  1. the real host constructor compiles the ctx_memory spec into its own JSON
+ *     Schema (not the local builder's);
+ *  2. the shipped broken closure shape reproduces the live ReferenceError;
+ *  3. the corrected wiring contract — the run context and the resolved
+ *     identity reach the host's `recall` callback;
+ *  4. every action (list/get/write/update/archive/merge) executes through the
+ *     real constructor against an isolated v94 database, including dedup, the
+ *     mutation log and the authority guard;
+ *  5. the full plugin, booted with NO `memory.project`, answers `ctx_memory`
+ *     through the real agent loop instead of failing with the ReferenceError.
  */
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'

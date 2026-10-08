@@ -1,15 +1,3 @@
-// @ts-nocheck
-// MIRROR of packages/test-support/mc-dsh-poc/tests/historian-chunking.spec.ts (DSH checkout).
-// Keep byte-identical to the POC copy below the header; regenerate after POC edits.
-
-/**
- * D1/D3 — historian chunking: an oversized span digests in contiguous
- * ~budget-token chunks and a final merge call folds the partial digests into
- * the one CompartmentDraft; the terminal invariant (start + exactly one
- * done/failed) holds across the extra calls, and the run budget scales with
- * the chunk count. A small span (or no chunk budget) keeps the single-call
- * behavior pinned by historian-terminal.spec.ts.
- */
 /**
  * D1/D3 — historian chunking: an oversized span digests in contiguous
  * ~budget-token chunks and a final merge call folds the partial digests into

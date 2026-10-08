@@ -1,17 +1,4 @@
-// @ts-nocheck
 /**
- * MIRROR of the runnable suite at
- * `packages/test-support/mc-dsh-poc/tests/session-notice.spec.ts` in the DSH
- * checkout — vitest runs that copy, because this repository has no
- * `node_modules` and therefore cannot resolve the bare `vitest` specifier.
- * Keep the two files identical apart from this header and the rebased harness
- * import below; `@ts-nocheck` keeps this package's `tsc --noEmit` green
- * (vitest is not a dependency of this package).
- *
- * NOTE 2026-10-07: the notice copy moved to English (Host-side text has no
- * locale service; see the module header). The mirror copy must carry the same
- * assertion change — it was not reachable from this machine.
- *
  * Session-notice (Channel A of the live session stream) — contract tests.
  *
  * The transcript renders every `user/message` whose `source.kind` is a

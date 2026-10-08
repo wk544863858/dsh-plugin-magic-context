@@ -1,10 +1,12 @@
-// @ts-nocheck
 /**
- * MIRROR of the runnable suite at `packages/test-support/mc-dsh-poc/tests/project-drift.spec.ts`
- * in the DSH checkout — this repository has no node_modules and cannot resolve bare
- * vitest. Keep the two files identical; this header is the only intended difference.
+ * Cross-project drift detection: the turn text is the only place DSH shows
+ * WHERE work is happening (there is no per-turn working directory), so the
+ * detector scans it for absolute paths and resolves each one's git root.
+ *
+ * These tests run real `git init` fixtures — the root resolution is the
+ * component under test, stubbing it would prove nothing. Everything fails
+ * open: any uncertainty must read as "no drift", never a throw.
  */
-
 import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'

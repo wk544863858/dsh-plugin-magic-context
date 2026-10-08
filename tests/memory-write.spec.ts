@@ -1,23 +1,3 @@
-// @ts-nocheck
-/**
- * MIRROR of the runnable suite at
- * `packages/test-support/mc-dsh-poc/tests/memory-write.spec.ts` in the DSH
- * checkout — vitest runs that copy, because this repository has no
- * `node_modules` and therefore cannot resolve the bare `vitest` specifier.
- * Keep the two files identical; `@ts-nocheck` keeps this package's
- * `tsc --noEmit` green (vitest is not a dependency of this package).
- *
- * The agent memory WRITE path — `writeMemory` / `updateMemory` /
- * `archiveMemory` / `mergeMemory` / `getMemory` / `listMemories` — plus the
- * promotion invariants from the promotion contract's §9 (A1–A4, A6) and the
- * §8.4 authority guard.
- *
- * Every test runs against a throwaway database built from the v94 DDL in the
- * write contract (§1.1, §5.1, §6.1, §8.4), including the three
- * `memories_authority_guard_*` triggers, the FTS external-content triggers and
- * the embedding/verification child tables. The user's real
- * `context.db` is never opened, let alone written.
- */
 import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'

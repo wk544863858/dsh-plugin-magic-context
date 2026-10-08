@@ -1,9 +1,3 @@
-// @ts-nocheck
-/**
- * MIRROR of packages/test-support/mc-dsh-poc/tests/memory-search.spec.ts
- * (DSH-checkout harness suite). Keep this file byte-identical to the POC copy
- * below the header — regenerate after editing the POC side.
- */
 /**
  * `ctx_memory` action `search` — the hybrid memory lane (MC ctx_search parity).
  *

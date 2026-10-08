@@ -1,33 +1,3 @@
-// @ts-nocheck
-/**
- * MIRROR of the runnable suite at
- * `packages/test-support/mc-dsh-poc/tests/historian-terminal.spec.ts` in the DSH
- * checkout — vitest runs that copy, because this repository has no
- * `node_modules` and therefore cannot resolve the bare `vitest` specifier.
- * Keep the two files identical apart from this header and the rebased harness
- * import below; `@ts-nocheck` keeps this package's `tsc --noEmit` green
- * (vitest is not a dependency of this package).
- *
- * Historian terminal-event discipline — the regression suite for the
- * "127 × `phase: 'start'`, 0 × terminal" production failure.
- *
- * The defect: `callHistorian` journaled `start` and then took the LLM's
- * answer with a bare `await`. Any throw from the seam (`llm.stream()`) or from
- * the chunk walk escaped the function WITHOUT a journal row, the caller
- * (`management-pass`) swallowed it into a `logger.warn` the Desktop does not
- * persist, and `finally` released the session's `inFlight` slot — so the next
- * pass silently started again. The journal could only ever show `start`.
- *
- * These tests pin the invariant that replaces it: after a `start`, EXACTLY ONE
- * terminal event (`done` | `failed`) is written, on every path — success,
- * timeout (a seam that never settles), provider rejection, and two rejected
- * digests — and a timed-out run releases `inFlight` for the next pass.
- *
- * The last block drives the real agent loop with a provider adapter that
- * always throws, which is the production shape: the runtime converts an
- * adapter failure into a terminal `finish` error chunk, `collectText` throws,
- * and the journal must still close the run.
- */
 /**
  * Historian terminal-event discipline — the regression suite for the
  * "127 × `phase: 'start'`, 0 × terminal" production failure.
@@ -66,7 +36,7 @@ import ToolRuntime, { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import { MockAdapter, textResponse, toolCallResponse } from '<path>'
+import { MockAdapter, textResponse, toolCallResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
 import mcDshPlugin, { openStores } from '<path>'
 import {
   callHistorian,
