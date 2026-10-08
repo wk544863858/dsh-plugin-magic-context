@@ -6,6 +6,19 @@
  * (`./core`). See docs/dsh-port-feasibility-2026-10-06.md for the seam map
  * and the upgrade-insulation contract.
  *
+ * The wiring bands live in their own modules (each moved verbatim out of this
+ * file, closure locals become the destructured fields of a deps object):
+ *  - `dsh/config.ts` — the configuration interface;
+ *  - `dsh/volatile.ts` — the volatile-reference readers + `policyOf`;
+ *  - `dsh/memory-lane.ts` — the memory gate/bridge/writer/search lane and the
+ *    ctx_memory closures;
+ *  - `dsh/pre-step.ts` — the preStep band (tagging, drift, identity, the
+ *    pressure decision and its execute pass) and the reduce-guidance inject;
+ *  - `dsh/maintenance-wiring.ts` — the dreamer-slice sweep and its timers.
+ *
+ * What remains here is the composition itself: probe, open stores/journal,
+ * wire each band, mount the compaction seam, telemetry, and the dispose list.
+ *
  * Phase 1 — the context-management loop without an LLM historian:
  *  - §N§ tags at admission/landing (Phase 0);
  *  - pressure measurement from durable usage + the logged context window;
@@ -31,139 +44,32 @@ import { join } from 'node:path'
 import {
   CONTEXT_WINDOW_EXCEEDED_CODE,
   DSH_EVENTS,
-  type ContentBlock,
-  type PreStepEnterDecision,
-  type PreStepPayload,
-  type SessionEvent,
   enumerateSurfaceToolResults,
   probeDshSeams,
   readUsageFields,
   requestContextOf,
   tagToolResultContent,
-  tagUserMessage,
 } from './dsh/seams.ts'
 import { reclaimForEmergency } from './dsh/emergency.ts'
-import { runManagementPass } from './dsh/management-pass.ts'
 import type { HistorianLlm } from './dsh/historian.ts'
 import { defineCtxExpandTool, defineCtxReduceTool, defineCtxMemoryTool } from './dsh/tool-bridge.ts'
-import {
-  buildChannel1Reminder,
-  buildChannel2Reminder,
-  buildDeskSection,
-  decideReduceNudge,
-  ReduceNudgeTracker,
-} from './dsh/reduce-guidance.ts'
+import { ReduceNudgeTracker } from './dsh/reduce-guidance.ts'
 import { registerCtxStatusCommand } from './dsh/status-command.ts'
 import { registerMagicCompactionEngine } from './dsh/compaction-engine.ts'
 import { createTelemetryService } from './dsh/telemetry.ts'
-import { appendSessionNotice } from './dsh/session-notice.ts'
-import { detectProjectDrift } from './dsh/project-drift.ts'
-import { DEFAULT_POLICY, decidePass, pressurePercent, type PressurePolicy } from './core/policy.ts'
+import { openMemoryLane } from './dsh/memory-lane.ts'
+import { injectReduceGuidance, preStepListener, type PreStepProjects } from './dsh/pre-step.ts'
+import { wireMaintenance } from './dsh/maintenance-wiring.ts'
+import type { MagicContextDshConfig, MagicContextDshConfigDefineTool } from './dsh/config.ts'
+import { DEFAULT_POLICY, type PressurePolicy } from './core/policy.ts'
 import z from '@deepseek-ai/schemastery'
 import { ensureTag, tagPrefix } from './core/tagger.ts'
-import { DEFAULT_SHARE_CATEGORIES, defaultMemoryDbPath, MEMORY_SCHEMA_MAX_VERSION, openMemoryBridge, resolveIdentitySpec } from './core/memory-bridge.ts'
-import { openMemoryWriter, type MemoryWriter } from './core/memory-write.ts'
-import { runMaintenanceTick, type MaintenanceLlm } from './core/maintenance.ts'
-import { openMemorySearch, type MemorySearch } from './core/memory-search.ts'
-import { cosineSimilarity, defaultEmbeddingCacheDir, openLocalEmbedder } from './core/embedding-local.ts'
-import type { MemoryFact } from './core/memory-categories.ts'
 import { openJournal, recoverOrphanHistorianRuns, type Journal, type JournalLevel } from './core/journal.ts'
-import { defaultDataDir, openStores, SCHEMA_VERSION, type AdapterStores } from './core/stores.ts'
+import { defaultDataDir, openStores, SCHEMA_VERSION } from './core/stores.ts'
 import { errText, type UsageRecord } from './core/types.ts'
+import { liveBoolean, liveNumber, liveString, policyOf } from './dsh/volatile.ts'
 
-export interface MagicContextDshConfig {
-  /** Directory for the adapter's SQLite store. Defaults under ~/.local/share. */
-  dataDir?: string
-  /** Master switch; false keeps the plugin loaded but fully inert. */
-  enabled?: boolean
-  /** Register the ctx_reduce / ctx_expand agent tools (default true). */
-  registerTools?: boolean
-  /** Register the /ctx-status command (default true). */
-  registerStatusCommand?: boolean
-  /**
-   * Host-supplied tool constructor. In-tree glue (which resolves
-   * @deepseek-ai/dsh-tools natively) passes it here; when absent the
-   * adapter falls back to a dynamic import, which only works in loading
-   * modes where that specifier is resolvable from this package.
-   */
-  defineTool?: MagicContextDshConfigDefineTool
-  /** Explicit historian route; default is the session's last routed model. */
-  historian?: { provider: string; model: string }
-  /** Turn the historian's out-of-band digests off (default: on). */
-  historianEnabled?: boolean
-  /**
-   * Write one notice entry (`user/message`, producer kind `magic-context`,
-   * form `notice`) into the session stream after each management pass that
-   * actually did something — publish, force-drop, or fact promotion. The
-   * transcript renders it as a collapsed notice row. Default true; the entry
-   * is model-visible, so it costs its own (short) tokens until compaction.
-   */
-  sessionNotices?: boolean
-  /**
-   * Project-memory recall from Magic Context's shared `context.db`. Off when
-   * omitted; reads only (writes stay with Magic Context's own storage layer).
-   */
-  memory?: {
-    /** Explicit path to context.db; defaults to the CortexKit data directory. */
-    dbPath?: string
-    /**
-     * Identity (`git:<root-sha>` / `dir:<hash>`) OR a directory to derive it
-     * from. Unset falls back to the session's cwd, so project memory works
-     * with no configuration at all.
-     */
-    project?: string
-    /** Extra identities to read shared rows from; unset uses the DB's workspace. */
-    workspaceProjects?: readonly string[]
-    /** Category whitelist for shared rows; unset uses the workspace's policy. */
-    shareCategories?: readonly string[]
-    /**
-     * Promote the historian's facts into project memory (Magic Context's
-     * `memory.auto_promote`). Default true when memory is configured: facts
-     * only become durable knowledge through this path.
-     */
-    autoPromote?: boolean
-    /**
-     * Let the agent maintain memories through `ctx_memory` (write/update/
-     * archive/merge). Default true; false keeps the tool read-only while the
-     * bridge still injects existing memories.
-     */
-    write?: boolean
-    /**
-     * Backfill stored-query vectors for rows the shared store has none of
-     * (the B4 lane). Default false: the query side embeds on demand anyway,
-     * and the backfill costs a local model load. Intentionally undocumented
-     * in the settings schema — profile-JSON only.
-     */
-    embedBackfill?: boolean
-  }
-  /**
-   * Host-supplied CompactionEngine base class (in-tree glue injects it; when
-   * absent the adapter resolves `@deepseek-ai/dsh-compaction` dynamically).
-   */
-  compactionBase?: unknown
-  /** Mount the adapter's CompactionEngine on the `compaction` seam (default true when resolvable). */
-  registerCompactionEngine?: boolean
-  /**
-   * Validation-period observability. The Desktop app does not persist the
-   * harness logger, so decisions and outcomes go to the adapter's own journal
-   * table plus (by default) a human-readable mirror file; see
-   * scripts/mc-report.mjs for the review side.
-   */
-  journal?: {
-    /** Turn the journal off entirely (default: on). */
-    enabled?: boolean
-    /** Minimum persisted level (default 'info'; 'warn' drops routine events). */
-    level?: JournalLevel
-    /** Retention in days, pruned when the journal opens (default 30). */
-    retentionDays?: number
-    /** Write the one-line text mirror (default true). */
-    mirror?: boolean
-  }
-  /** Pressure policy overrides; unset fields keep the defaults. */
-  policy?: Partial<PressurePolicy>
-}
-
-type MagicContextDshConfigDefineTool = typeof import('@deepseek-ai/dsh-tools')['defineTool']
+export type { MagicContextDshConfig, MagicContextDshConfigDefineTool }
 
 export const name = 'magic-context-dsh-poc'
 
@@ -174,41 +80,6 @@ export const name = 'magic-context-dsh-poc'
  * plugin visibly instead of half-mounting it.
  */
 export const inject = ['tools', 'llm']
-
-/** Seam-local listener signatures (kept here so upstream renames touch one file). */
-type PreStepListener = (
-  payload: PreStepPayload,
-  next: () => Promise<PreStepEnterDecision | { kind: 'reject' }>,
-) => Promise<PreStepEnterDecision | { kind: 'reject' }>
-
-type ContentBlock0 = import('./dsh/seams.ts').ContentBlock
-
-type PostToolDecision = {
-  kind: 'accept' | 'block'
-  content?: ContentBlock0[]
-  value?: unknown
-  feedback?: ContentBlock0[]
-}
-
-type PostToolExecuteListener = (
-  exec: { readonly callId: string; readonly name: string; readonly agent?: { readonly session: { readonly id: string } } },
-  result: { readonly isError: boolean; readonly content: readonly ContentBlock0[] },
-  next: () => Promise<PostToolDecision>,
-) => Promise<PostToolDecision>
-
-type SessionEventListener = (
-  session: { readonly id: string },
-  event: SessionEvent,
-) => void
-
-type RequestErrorListener = (
-  payload: {
-    readonly agent: { readonly session: Parameters<typeof enumerateSurfaceToolResults>[0] }
-    readonly failure: { readonly code: string }
-    readonly signal: AbortSignal
-  },
-  next: () => Promise<{ kind: 'retry' } | undefined>,
-) => Promise<{ kind: 'retry' } | undefined>
 
 interface Registrar {
   register(definition: unknown): unknown
@@ -256,511 +127,47 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
   // new composition is in flight yet, so every still-open start predates this
   // process and gets one synthetic `adapter-remount` terminal (journal.ts).
   const recoveredHistorianRuns = journal === undefined ? 0 : recoverOrphanHistorianRuns(stores, journal)
-  /** Consecutive defers per session, keyed by reason, to log transitions only. */
-  const deferStreak = new Map<string, { reason: string; count: number }>()
   /** Resolved tool-constructor path, recorded at boot for the review. */
   let toolMode = 'skipped'
   /** The LLM seam (declared inject); the historian's auxiliary call uses it. */
   const llm = (ctx as unknown as { llm?: HistorianLlm }).llm
   /** Reduce-guidance state per session (Channel 1/2 sticky bands, turn counts). */
   const reduceTracker = new ReduceNudgeTracker()
-  // ── The memory.enabled gate (objective: gated memory) ─────────────────────
+
+  // ── The memory lane ────────────────────────────────────────────────────────
   // `memory` is deliberately NOT declared in the exported Config: a schemastery
   // key would be materialized for every profile and would open the bridge
   // everywhere. It therefore arrives as a plain object, and the gate is simply:
   //   absent config        → off   (no bridge, no writer, no recall, no ctx_memory)
   //   enabled: false       → off   (explicit opt-out; reported as disabled-by-config)
   //   anything else        → on
-  // Read once, here, so a disabled adapter can never half-open.
-  const memorySettings = config.memory
-  const memoryEnabled = memorySettings !== undefined && liveBoolean(memorySettings.enabled, true)
-  const memoryRecall = !memoryEnabled
-    ? undefined
-    : openMemoryBridge({
-      ...memorySettings?.dbPath === undefined ? {} : { dbPath: memorySettings.dbPath },
-      logger: ctx.logger,
-    })
-  if (memoryRecall !== undefined) {
-    ctx.logger.info(
-      `magic-context dsh adapter: memory bridge at ${memoryRecall.dbPath} `
-        + `(${memoryRecall.status.ok ? `schema v${String(memoryRecall.status.schemaVersion)}` : `unavailable: ${String(memoryRecall.status.detail)}`})`,
-    )
-  }
-  // The writer opens alongside the reader so facts can become durable
-  // memories. Magic Context's default is auto-promote ON; ours follows it,
-  // and every write still passes the authority guard (module-managed projects
-  // are never written directly).
-  const memoryWriter: MemoryWriter | undefined =
-    memoryRecall === undefined || (memorySettings?.autoPromote === false && memorySettings?.write === false)
-      ? undefined
-      : openMemoryWriter({
-        // The writer has no default of its own (it must never guess a database
-        // to write into), so the caller resolves the shared path here.
-        dbPath: memorySettings?.dbPath ?? memoryRecall.dbPath ?? defaultMemoryDbPath(),
-        logger: ctx.logger,
-      })
-  if (memoryWriter !== undefined) {
-    const status = memoryWriter.status
-    ctx.logger.info(
-      `magic-context dsh adapter: memory writer at ${memoryWriter.dbPath} `
-        + `(${status.ok ? (status.readOnly === true ? 'read-only' : 'read-write') : `unavailable: ${String(status.detail)}`})`,
-    )
-  }
-
-  // ── The memory search lane (ctx_memory action `search`) ───────────────────
-  // A read-only twin of MC ctx_search's memory half: FTS5 + stored-vector
-  // cosine with MC's 0.7/0.3 fusion (memory-search.ts). The embedder loads
-  // lazily on first use; any failure degrades the lane to FTS-only instead of
-  // failing the tool call.
-  const memorySearch: MemorySearch | undefined =
-    memoryEnabled && memoryRecall?.status.ok === true
-      ? openMemorySearch({ dbPath: memorySettings?.dbPath ?? memoryRecall.dbPath, logger: ctx.logger })
-      : undefined
-  if (memorySearch !== undefined) {
-    ctx.logger.info('magic-context dsh adapter: memory search lane open (FTS + local MiniLM)')
-  }
-  // B4 gates only the BACKFILL lane below; the embedder itself stays available
-  // for the query-side embedding that scores the STORED vectors.
-  const embedBackfill = liveBoolean(config.memory?.embedBackfill, false)
-  const embedder = memorySearch === undefined
-    ? undefined
-    : openLocalEmbedder({
-      cacheDir: defaultEmbeddingCacheDir(stores.dbPath),
-      logger: { info: (message) => ctx.logger.info(message), warn: (message) => ctx.logger.warn(message) },
-    })
-
-  /**
-   * Shared-vector-space state, discovered once and memoized: the query-side
-   * embedder must prove cosine parity against a stored vector before the lane
-   * reads shared vectors. Magic Context fences vectors per model identity
-   * (embedding-identity.ts) and the store's dominant identity is whichever
-   * configuration produced most rows — parity is verified, never assumed.
-   */
-  let sharedSpacePromise: Promise<{ modelId: string | null }> | undefined
-  const resolveSharedSpace = (): Promise<{ modelId: string | null }> => {
-    if (memorySearch === undefined || embedder === undefined) return Promise.resolve({ modelId: null })
-    if (sharedSpacePromise === undefined) {
-      sharedSpacePromise = (async () => {
-        const dominant = memorySearch.dominantEmbeddingModel()
-        if (dominant === undefined || dominant.dims !== embedder.dims) return { modelId: null }
-        const sample = memorySearch.paritySample(dominant.modelId)
-        if (sample === undefined) return { modelId: dominant.modelId }
-        try {
-          const [vector] = await embedder.embed([sample.content])
-          if (vector === undefined) return { modelId: null }
-          const parity = cosineSimilarity(vector, sample.embedding)
-          ctx.logger.info(
-            `magic-context memory search: shared-space parity ${parity.toFixed(4)} `
-              + `against ${dominant.modelId.slice(0, 48)}`,
-          )
-          return parity >= 0.99 ? { modelId: dominant.modelId } : { modelId: null }
-        } catch {
-          return { modelId: null }
-        }
-      })()
-    }
-    return sharedSpacePromise
-  }
-
-  /** A2: per-session memory ids the injected block currently renders
-   *  (MC getVisibleMemoryIds, in-memory: absent = don't filter). */
-  const visibleMemoryIdsBySession = new Map<string, Set<number>>()
-
-  /** The ctx_memory `search` closure: bridge space + shared-space gate. */
-  const memorySearchForTool = memorySearch === undefined
-    ? undefined
-    : async (request: { query: string; limit?: number; identity: string; visibleMemoryIds?: ReadonlySet<number> }) => {
-      const bridge = memoryRecall
-      if (bridge === undefined) return { ok: false as const, reason: 'memory search is not available' }
-      const space = bridge.searchSpace(request.identity)
-      if (space === undefined) {
-        return { ok: false as const, reason: 'no project identity could be resolved for this session' }
-      }
-      const { modelId } = await resolveSharedSpace()
-      let queryEmbedding: Float32Array | null = null
-      if (embedder !== undefined && modelId !== null) {
-        try {
-          const [vector] = await embedder.embed([request.query])
-          queryEmbedding = vector ?? null
-        } catch {
-          queryEmbedding = null
-        }
-      }
-      const outcome = await memorySearch.search({
-        query: request.query,
-        ...request.limit === undefined ? {} : { limit: request.limit },
-        now: Date.now(),
-        space: {
-          ownIdentities: space.ownIdentities,
-          foreignIdentities: space.foreignIdentities,
-          shareCategories: space.shareCategories ?? [...DEFAULT_SHARE_CATEGORIES],
-        },
-        queryEmbedding,
-        queryModelId: modelId,
-        ...request.visibleMemoryIds === undefined ? {} : { visibleMemoryIds: request.visibleMemoryIds },
-        // B4: the in-memory fill lane is off unless memory.embedBackfill —
-        // scoring then uses only the store's persisted vectors.
-        ...embedBackfill && embedder !== undefined ? {
-          embedTexts: async (texts: readonly string[]) => {
-            const vectors = await embedder.embed(texts)
-            return vectors.length === texts.length ? vectors : null
-          },
-        } : {},
-      })
-      return outcome.ok
-        ? { ok: true as const, text: outcome.text, hits: outcome.hits.map(hit => ({ id: hit.id })) }
-        : { ok: false as const, reason: outcome.reason }
-    }
-
-  /**
-   * One wording for the writer's state, used by both the boot log and the
-   * `memory_write` meta the GUI (plugin page / telemetry badge) reads.
-   * A contract-version fence keeps `status.ok === true` because reads still
-   * work, so `readOnly` must be checked explicitly — otherwise a fully
-   * read-only writer would advertise itself as `read-write` (measured on a
-   * real-store copy whose schema_migrations was raised to v95).
-   */
-  const describeMemoryWrite = (): string => {
-    const status = memoryWriter?.status
-    if (status === undefined) {
-      return memorySettings === undefined ? 'off' : memoryEnabled ? 'off' : 'disabled-by-config'
-    }
-    if (!status.ok) return `unavailable: ${String(status.detail)}`
-    if (status.readOnly === true) {
-      return `read-only: ${String(status.detail ?? 'contract version is newer than the adapter understands')}`
-    }
-    return `read-write${memorySettings?.autoPromote === false ? ' (promotion off)' : ' auto-promote'}`
-  }
+  // Read once, inside the lane, so a disabled adapter can never half-open.
+  const lane = openMemoryLane(ctx, config, stores)
+  const { memoryRecall, memoryWriter, memorySearch, describeMemoryWrite } = lane
+  const { memorySettings } = lane
 
   const disposers: Array<() => void> = []
   const on = (name: string, listener: unknown): void => {
     disposers.push((ctx.on as unknown as (n: string, l: unknown) => () => void).call(ctx, name, listener))
   }
 
-  // ── §N§ tags on the admitted user batch (Phase 0) ──────────────────────────
-  on(DSH_EVENTS.preStep, async (payload: PreStepPayload, next) => {
-    const decision = await next()
-    if (decision.kind !== 'enter') return decision
-    const sessionId = payload.agent.session.id
-    const messages = decision.messages.map((message) => {
-      const firstText = message.content.find(block => block.type === 'text')
-      if (firstText !== undefined && typeof firstText.text === 'string' && /^§\d+§/.test(firstText.text)) {
-        return message
-      }
-      // Fail-open: this runs BEFORE the guarded section below, and a closed
-      // store (mid-remount) must degrade to an untagged message, never fail
-      // the turn (measured live: `database is not open` here interrupted a
-      // session across a plugin reload).
-      try {
-        const tag = ensureTag(stores, sessionId, { kind: 'user-message', messageId: message.id })
-        return tagUserMessage(message, tagPrefix, tag)
-      } catch (error) {
-        ctx.logger.warn(
-          `magic-context: message tagging skipped (${errText(error)})`,
-        )
-        return message
-      }
-    })
-    // Reduce guidance (desk section + Channel 1/2) is wired through the
-    // SystemPrompt service below — a static section and a dynamic context —
-    // not by rewriting messages here. The only preStep duty is the REAL USER
-    // TURN counter the sticky refire gap needs: observing the newest message
-    // id is idempotent per step, so repeated preSteps on one turn count once.
-    if (liveBoolean(config.reduceGuidance, true)) {
-      try {
-        const newest = messages.at(-1)
-        if (newest !== undefined) reduceTracker.observeUserMessage(sessionId, newest.id)
-      } catch {
-        // counting is advisory; never fail the turn for it
-      }
-    }
+  // Identities the preStep registers, the maintenance sweep serves and the
+  // panel scopes by — one registry, three consumers.
+  const projects: PreStepProjects = { seenIdentities: new Set<string>(), sessionIdentity: new Map<string, string>() }
 
-    // Cross-project drift observation: the turn's own text is the only signal
-    // DSH gives about WHERE work is happening (there is no per-turn working
-    // directory). Foreign git roots in the newest message get one warn-level
-    // journal row per turn — the data that quantifies how often cross-project
-    // sessions actually happen (and whether facts land in the wrong project).
-    try {
-      const newestMessage = messages.at(-1)
-      const driftText = newestMessage === undefined
-        ? ''
-        : newestMessage.content
-          .map(block => (block.type === 'text' && typeof block.text === 'string' ? block.text : ''))
-          .join('\n')
-      if (driftText.length >= 8) {
-        const drift = detectProjectDrift(driftText, payload.agent.session.header.cwd)
-        if (drift !== undefined) {
-          journal?.warn('project-drift', `cross-project work observed (${String(drift.foreignRoots.length)} foreign root(s))`, {
-            sessionRoot: drift.sessionRoot,
-            foreignRoots: drift.foreignRoots,
-          }, sessionId)
-        }
-      }
-    } catch {
-      // observation only; never fail the turn for it
-    }
-
-    // Register the session's project identity for the maintenance sweep HERE,
-    // not only in the pass-execute branch: a quiet conversation never crosses
-    // the compaction threshold, and the sweep then had no identity to serve —
-    // every tick spun empty (measured live 18:24, zero maintenance rows after
-    // a remount despite an active session).
-    try {
-      const projectSpec = config.memory?.project ?? payload.agent.session.header.cwd
-      const memoryIdentity = projectSpec === undefined ? undefined : resolveIdentitySpec(projectSpec)
-      if (memoryIdentity !== undefined) {
-        seenIdentities.add(memoryIdentity)
-        sessionIdentity.set(sessionId, memoryIdentity)
-        if (sessionIdentity.size > 512) {
-          const oldest = sessionIdentity.keys().next().value
-          if (oldest !== undefined) sessionIdentity.delete(oldest)
-        }
-      }
-    } catch {
-      // registration is advisory; never fail the turn for it
-    }
-
-    // ── Pressure decision + the execute-band management pass (Phase 1 + 2) ──
-    // The session surface is only mutated inside the execute band: that is
-    // the one permission under which a priced bust buys reclaim (MC's
-    // "drops land on the next bust cycle", translated to durable surface).
-    try {
-      if (!seenSessions.has(sessionId)) {
-        seenSessions.add(sessionId)
-        journal?.info('session-first-seen', 'session first seen by the adapter', {
-          turn: payload.turn,
-          step: payload.step,
-        }, sessionId)
-      }
-      const latest = stores.latestUsage(sessionId)
-      const context = requestContextOf(payload.agent.session)
-      const pressure = pressurePercent(latest, context.contextWindow)
-      // Live thresholds: a settings-form edit reaches this pass immediately.
-      const policy = activePolicy()
-      const pass = decidePass({ latest, pressure, now: Date.now(), policy })
-      const usage = latest === undefined ? undefined : {
-        input: latest.inputTokens ?? 0,
-        cacheRead: latest.cacheReadTokens ?? 0,
-        cacheWrite: latest.cacheWriteTokens ?? 0,
-      }
-      const basePassData = {
-        reason: pass.reason,
-        pressure: pressure === undefined ? undefined : Number(pressure.toFixed(1)),
-        contextWindow: context.contextWindow,
-        route: context.provider === undefined || context.model === undefined
-          ? undefined
-          : `${context.provider}/${context.model}`,
-        usage,
-      }
-      if (pass.kind === 'execute') {
-        // The project identity is resolved once per pass (the git lookup is
-        // cached for the process). An explicit `git:`/`dir:` value is already
-        // an identity; only a directory has to be resolved.
-        const projectSpec = config.memory?.project ?? payload.agent.session.header.cwd
-        const memoryIdentity = projectSpec === undefined
-          ? undefined
-          : resolveIdentitySpec(projectSpec)
-        // The maintenance sweep maintains every identity this process has
-        // actually served (the configured project is added unconditionally),
-        // and the session→identity map scopes the telemetry panel's stats to
-        // the project the viewed conversation is working on.
-        if (memoryIdentity !== undefined) {
-          seenIdentities.add(memoryIdentity)
-          if (sessionId !== undefined) {
-            sessionIdentity.set(sessionId, memoryIdentity)
-            if (sessionIdentity.size > 512) {
-              const oldest = sessionIdentity.keys().next().value
-              if (oldest !== undefined) sessionIdentity.delete(oldest)
-            }
-          }
-        }
-        const memories = memoryRecall?.recall({
-          ...projectSpec === undefined ? {} : { project: projectSpec },
-          workspaceProjects: config.memory?.workspaceProjects,
-          shareCategories: config.memory?.shareCategories,
-          budgetTokens: policy.memoryBudgetTokens,
-          limit: policy.memoryLimit,
-          // B2 (MC m0_compose.rs:104-116): the frozen prefix evaluates expiry
-          // against the HARD-rebuild clock — a row expiring mid-cycle must not
-          // bust the cache. The next HARD rebuild re-composes with a live clock
-          // and freezes the new time.
-          now: stores.baselineState(sessionId)?.frozenAt ?? Date.now(),
-          // The additive lane: everything above the stored watermark is an
-          // in-session addition and renders in m[1], keeping m[0] byte-stable.
-          ...stores.baselineState(sessionId)?.maxMemoryId === undefined
-            ? {}
-            : { maxMemoryId: stores.baselineState(sessionId)?.maxMemoryId },
-        })
-        // A2 (MC getVisibleMemoryIds): the ids the injected block renders NOW
-        // are what ctx_memory search suppresses as already-visible. Replaced
-        // per pass, process-memory only, fail-open when absent.
-        if (memories !== undefined) {
-          visibleMemoryIdsBySession.delete(sessionId)
-          visibleMemoryIdsBySession.set(sessionId, new Set<number>([
-            ...memories.rows.map(row => row.id),
-            ...memories.newRows.map(row => row.id),
-          ]))
-          if (visibleMemoryIdsBySession.size > 256) {
-            const oldest = visibleMemoryIdsBySession.keys().next().value
-            if (oldest !== undefined) visibleMemoryIdsBySession.delete(oldest)
-          }
-        }
-        // The watermark is read straight from the store, so a HARD rebuild can
-        // freeze it even when this pass recalled no rows at all (the first
-        // pass of a fresh session, which is exactly when it matters).
-        const currentMaxMemoryId = memoryRecall?.maxMemoryId(projectSpec) ?? 0
-        // The NON-additive lane (contract §6): `memory_mutation_log` rows above
-        // the frozen cursor render as `<memory-updates>` in the m[1] region, so
-        // an update/archive/supersede reaches the model without rebuilding m[0].
-        // `afterId` is the cursor frozen by the last HARD rebuild (0 for a
-        // session that never folded), and the epoch fingerprint is passed on
-        // EVERY pass: management-pass only flags an epoch change when both the
-        // previous fingerprint and this one are present.
-        const mutations = memoryRecall?.mutations({
-          ...projectSpec === undefined ? {} : { project: projectSpec },
-          workspaceProjects: config.memory?.workspaceProjects,
-          shareCategories: config.memory?.shareCategories,
-          afterId: stores.baselineState(sessionId)?.maxMemoryMutationId ?? 0,
-          limit: policy.memoryLimit,
-          now: Date.now(),
-        })
-        if (memories !== undefined && (memories.lines.length > 0 || memories.newLines.length > 0)) {          journal?.info(
-            'memory-recall',
-            `recalled ${String(memories.rows.length)} project memories into m[0]`
-              + `${memories.newLines.length > 0 ? `, ${String(memories.newLines.length)} new in m[1]` : ''}`,
-            {
-              rows: memories.rows.length,
-              newRows: memories.newLines.length,
-              digest: memories.digest.slice(0, 12),
-              budgetTokens: policy.memoryBudgetTokens,
-              estTokens: memories.lines.reduce((total, line) => total + Math.ceil(line.length / 4), 0),
-              identity: memories.identity,
-              maxMemoryId: memories.currentMaxMemoryId,
-              workspace: memories.workspace,
-              members: memories.members?.length,
-              projects: [...new Set(memories.rows.map(row => row.projectPath.slice(0, 24)))],
-            },
-            sessionId,
-          )
-        }
-        const outcome = runManagementPass({
-          session: payload.agent.session,
-          sessionId,
-          stores,
-          policy,
-          logger: ctx.logger,
-          pass,
-          pressure,
-          ...journal === undefined ? {} : { journal },
-          ...context.provider === undefined || context.model === undefined
-            ? {}
-            : { route: { provider: context.provider, model: context.model } },
-          ...context.contextWindow === undefined ? {} : { contextWindow: context.contextWindow },
-          ...liveBoolean(config.historianEnabled, true) === false || llm === undefined
-            ? {}
-            : {
-              historian: {
-                llm,
-                ...config.historian === undefined ? {} : { route: config.historian },
-              },
-            },
-          ...memoryRecall === undefined
-            ? {}
-            : {
-              memories: {
-                digest: memories?.digest ?? '',
-                lines: memories?.lines ?? [],
-                newLines: memories?.newLines ?? [],
-                // An `update` on a memory that is still above the watermark
-                // writes a mutation-log row without changing the id, so the row
-                // would otherwise render once in `<new-memories>` (current
-                // content) and again in `<memory-updates>` (same content).
-                // Passing the ids lets the renderer suppress the duplicate.
-                newMemoryIds: memories?.newRows.map(row => row.id) ?? [],
-                // MC only announces a mutation whose target is a row the m[0]
-                // baseline actually rendered (inject-compartments.ts:2843-2848):
-                // mutations for budget-truncated rows would be phantom pointers.
-                baselineIds: memories?.rows.map(row => row.id) ?? [],
-                // A1: the pre-budget visible set — the authority for forced
-                // rows in `<memory-updates>`/`<new-memories>`
-                // (inject-compartments.ts:2822-2869).
-                eligibleIds: memories?.eligibleIds ?? [],
-                eligibleRows: memories?.eligibleRows ?? [],
-                maxMemoryId: currentMaxMemoryId,
-              },
-            },
-          // `cursor` is deliberately the CURRENT max mutation id, not the paged
-          // read cursor: on a HARD rebuild m[0] swallows everything up to now,
-          // so freezing a partial page would re-render rows it already folded.
-          ...mutations === undefined
-            ? {}
-            : {
-              memoryUpdates: {
-                updates: mutations.updates,
-                cursor: mutations.currentCursor,
-                projectEpochFingerprint: mutations.projectEpochFingerprint,
-              },
-            },
-          ...memoryWriter === undefined || memoryIdentity === undefined || config.memory?.autoPromote === false
-            ? {}
-            : { memoryPromote: (promote: { identity: string; facts: readonly MemoryFact[]; sessionId: string }) => memoryWriter.promoteFacts(promote), memoryIdentity },
-        })
-        journal?.info('pass', `execute (${pass.reason}) at ${pressure?.toFixed(1) ?? '?'}%`, {
-          decision: 'execute',
-          ...basePassData,
-          landed: outcome.landedDrops,
-          published: outcome.published,
-          forceDropped: outcome.forceDropped,
-          baseline: outcome.baselineUpdated ? 'refreshed' : 'unchanged',
-          historianStarted: outcome.historianStarted,
-          // Net reclaim proof: surface estimate before/after this pass.
-          tokensBefore: outcome.tokensBefore,
-          tokensAfter: outcome.tokensAfter,
-          tokensDelta: outcome.tokensAfter - outcome.tokensBefore,
-          factsPromoted: outcome.factsPromoted,
-          factsSeenAgain: outcome.factsSeenAgain,
-        }, sessionId)
-        // Channel A of the live session stream: one notice entry per pass
-        // that actually did something (publish / force-drop / promotion).
-        // `appendSessionNotice` is fail-open and quiet on nothing-notable.
-        if (liveBoolean(config.sessionNotices, true)) {
-          const notice = appendSessionNotice({ session: payload.agent.session, result: outcome })
-          if (notice.ok) {
-            journal?.info('session-notice', notice.summary, { seq: notice.seq }, sessionId)
-          } else if (notice.reason === 'append-failed') {
-            journal?.warn('session-notice', `notice append failed: ${notice.detail ?? '?'}`, {
-              detail: notice.detail,
-            }, sessionId)
-          }
-        }
-        deferStreak.delete(sessionId)
-      } else {
-        // Defer passes repeat every step: record the reason TRANSITIONS only,
-        // carrying how many consecutive defers shared the current reason, so
-        // the journal stays reviewable instead of flooding.
-        const streak = deferStreak.get(sessionId)
-        if (streak === undefined || streak.reason !== pass.reason) {
-          deferStreak.set(sessionId, { reason: pass.reason, count: 1 })
-          journal?.info('pass', `defer (${pass.reason}) at ${pressure?.toFixed(1) ?? '?'}%`, {
-            decision: 'defer',
-            ...basePassData,
-            consecutive: 1,
-          }, sessionId)
-        } else {
-          streak.count += 1
-        }
-      }
-    } catch (error) {
-      const detail = errText(error)
-      journal?.error('error', `management pass failed: ${detail}`, { scope: 'pre-step', detail }, sessionId)
-      // A failed management pass must never wedge the turn: log and continue
-      // with the tagged messages (MC per-turn fail-open). The next pass
-      // re-decides from durable state.
-      ctx.logger.warn(`magic-context: management pass failed (continuing): ${detail}`)
-    }
-
-    return { ...decision, messages }
-  })
+  // ── §N§ tags + the pressure decision on the admitted user batch ───────────
+  on(DSH_EVENTS.preStep, preStepListener({
+    ctx,
+    config,
+    stores,
+    journal,
+    llm,
+    reduceTracker,
+    lane,
+    projects,
+    seenSessions,
+    activePolicy,
+  }))
 
   // ── §N§ tags on tool results at landing (Phase 0) ─────────────────────────
   on(DSH_EVENTS.postToolExecute, async (exec, result, next) => {
@@ -774,69 +181,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
   })
 
   // ── Reduce guidance through the SystemPrompt service (MC parity) ──────────
-  // Desk section: a STATIC prompt section (identical bytes every assembly, so
-  // the system prompt stays prefix-cache stable). Channel 1/2: a DYNAMIC
-  // context whose provider re-measures the unstamped tail at every assembly
-  // and renders the MC reminder copy only when a band fires — an empty text
-  // contributes nothing. Both live in the calling scope; dispose on teardown.
-  if (liveBoolean(config.reduceGuidance, true)) {
-    ctx.inject(['systemPrompt'], (scope) => {
-      const systemPrompt = (scope as unknown as {
-        systemPrompt: {
-          section(section: { name: string; text: string; order?: number }): () => void
-          context(context: { name: string; order: number; text: (assembly: unknown) => string }): () => void
-        }
-      }).systemPrompt
-      scope.effect(() => systemPrompt.section({
-        name: 'magic-context-desk',
-        text: buildDeskSection(memoryEnabled),
-        order: 900,
-      }))
-      scope.effect(() => systemPrompt.context({
-        name: 'magic-context-reduce',
-        order: 910,
-        text: (assembly: unknown) => {
-          try {
-            const agent = (assembly as { agent?: { session?: { id: string } } }).agent
-            const sessionId = agent?.session?.id
-            if (sessionId === undefined) return ''
-            const tagged = enumerateSurfaceToolResults(agent!.session, callId =>
-              stores.getTag(sessionId, { kind: 'tool-result', callId }))
-              .filter(node => node.tagNumber !== undefined)
-            if (tagged.length === 0) return ''
-            const tailToolTokens = tagged.reduce((total, node) => total + Math.ceil(node.textLength / 4), 0)
-            const undropped = tagged.filter(node => !node.isPlaceholder)
-            const undroppedTokens = undropped.reduce((total, node) => total + Math.ceil(node.textLength / 4), 0)
-            const state = reduceTracker.state(sessionId)
-            const nudge = decideReduceNudge({
-              tailToolTokens,
-              undroppedTokens,
-              realUserTurnCount: state.realUserTurnCount,
-              ...state.lastBand === undefined ? {} : { lastBand: state.lastBand },
-              lastOrdinal: state.lastOrdinal,
-              ...state.lastOrdinalTurn === undefined ? {} : { lastOrdinalTurn: state.lastOrdinalTurn },
-            })
-            reduceTracker.record(sessionId, nudge, 0)
-            if (!nudge.fire || nudge.level === undefined) return ''
-            const hints = undropped.slice(0, 4).map(node => ({ tagNumber: node.tagNumber as number }))
-            const reminder = nudge.level === 'channel2'
-              ? buildChannel2Reminder(undroppedTokens, undropped.length, hints)
-              : buildChannel1Reminder(nudge.level, undroppedTokens, undropped.length, hints, nudge.sticky)
-            journal?.info('pass', `reduce nudge (${nudge.level})`, {
-              decision: 'reduce-nudge',
-              band: nudge.band,
-              tailToolTokens,
-              undroppedTokens,
-            }, sessionId)
-            return reminder
-          } catch {
-            // A closed store mid-remount must degrade to no reminder.
-            return ''
-          }
-        },
-      }))
-    })
-  }
+  injectReduceGuidance({ ctx, config, stores, journal, llm, reduceTracker, lane, projects, seenSessions, activePolicy })
 
   // ── Usage recording from durable assistant/message events (Phase 0) ───────
   on(DSH_EVENTS.sessionEvent, (session, event) => {
@@ -918,74 +263,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
       registrar.register(defineCtxReduceTool(deps))
       registrar.register(defineCtxExpandTool(deps))
       if (memoryRecall !== undefined) {
-        registrar.register(defineCtxMemoryTool({
-          ...defineTool === undefined ? {} : { defineTool },
-          ...journal === undefined ? {} : { journal },
-          ...memoryWriter === undefined || config.memory?.write === false ? {} : { writer: memoryWriter },
-          ...memorySearchForTool === undefined ? {} : { search: memorySearchForTool },
-          // A2: ctx_memory search suppresses rows this session's injected
-          // block already renders (MC getVisibleMemoryIds).
-          visibleMemoryIdsOf: exec => {
-            const sessionId = exec?.agent?.session?.id
-            return sessionId === undefined ? undefined : visibleMemoryIdsBySession.get(sessionId)
-          },
-          resolveIdentity: exec => {
-            const spec = config.memory?.project ?? exec?.agent?.session.header.cwd
-            return spec === undefined ? undefined : resolveIdentitySpec(spec)
-          },
-          // The `project` argument's resolver: an explicit absolute path (another
-          // project the model is working on) through the same normalizer. DSH has
-          // no per-turn working directory, so the model naming the project is the
-          // only cross-project scoping signal we have.
-          resolveIdentityOf: spec => {
-            try {
-              return resolveIdentitySpec(spec)
-            } catch {
-              return undefined
-            }
-          },
-          recall: (request, exec) => {
-            // The read path must resolve the SAME identity the writes use. The
-            // tool hands us the identity it already resolved (`request.identity`,
-            // set by tool-bridge); otherwise fall back to the configured project
-            // or this run's cwd, resolved through the same normalizer.
-            //
-            // This closure used to reference a free `exec` — and because `&&`
-            // binds tighter than `?:`, `config.memory?.project === undefined &&
-            // exec.agent...` evaluated the right-hand side in the DEFAULT
-            // configuration, throwing `ReferenceError: exec is not defined` on
-            // every ctx_memory call (measured live). Configuring memory.project
-            // short-circuited it, which is why the tests never saw it.
-            const spec = (request as { identity?: string }).identity
-              ?? config.memory?.project
-              ?? (exec === undefined ? undefined : exec.agent?.session.header.cwd)
-            const project = spec === undefined ? undefined : resolveIdentitySpec(spec)
-            // A fenced/unreadable store must say so: `{ empty: true }` would read
-            // as "this project has no memories", which is a different fact.
-            if (!memoryRecall.status.ok) {
-              return { lines: [], digest: 'unavailable', reason: String(memoryRecall.status.detail) }
-            }
-            const recalled = memoryRecall.recall({
-              ...project === undefined ? {} : { project },
-              workspaceProjects: config.memory?.workspaceProjects,
-              shareCategories: config.memory?.shareCategories,
-              budgetTokens: activePolicy().memoryBudgetTokens,
-              limit: request.limit ?? activePolicy().memoryLimit,
-              now: Date.now(),
-              ...request.query === undefined ? {} : { query: request.query },
-            })
-            if (recalled === undefined) return undefined
-            // Explicit-retrieval telemetry (contract §9.1): hand back the ids the
-            // agent actually received so the tool can bump `retrieval_count`.
-            // The automatic m[0]/m[1] injection does NOT pass through here, so it
-            // can never inflate the counter.
-            return {
-              lines: recalled.lines,
-              digest: recalled.digest,
-              ids: [...recalled.rows, ...recalled.newRows].map(row => row.id),
-            }
-          },
-        }))
+        registrar.register(defineCtxMemoryTool(lane.ctxMemoryRegistration({ activePolicy, defineTool, journal })))
       }
       ctx.logger.info(`magic-context dsh adapter: ctx_reduce / ctx_expand registered (${toolMode})`)
     } catch (error) {
@@ -1087,8 +365,8 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
       memoryStats: (sessionId?: string) => {
         if (memoryWriter === undefined) return undefined
         const identity = config.memory?.project
-          ?? (sessionId !== undefined ? sessionIdentity.get(sessionId) : undefined)
-          ?? [...seenIdentities][0]
+          ?? (sessionId !== undefined ? projects.sessionIdentity.get(sessionId) : undefined)
+          ?? [...projects.seenIdentities][0]
         if (identity === undefined) return undefined
         try {
           const stats = memoryWriter.stats(identity)
@@ -1097,7 +375,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
           return undefined
         }
       },
-      maintenanceLast: () => maintenanceLast,
+      maintenanceLast: maintenance.maintenanceLast,
       startedAt,
     })
     const service = telemetry
@@ -1115,70 +393,17 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     })
   })
 
-  // ---- Maintenance tick (the adapter's slice of MC's dreamer) ----------------
-  // TTL expiry always runs when the writer is writable; LLM verification needs
-  // an explicit `maintenance.verifyRoute` because a tick has no session to
-  // inherit a route from. The sweep covers the configured project plus every
-  // identity this process resolved for a session. Fail-open end to end: a
-  // broken tick journals and waits for the next one.
-  const seenIdentities = new Set<string>()
-  /** Session → project identity, so panel stats answer for the viewed project. */
-  const sessionIdentity = new Map<string, string>()
-  /** Newest maintenance tally, surfaced by the telemetry panel (dreamer KPI). */
-  let maintenanceLast: { at: number; expired: number; verified: number; updated: number; archived: number } | undefined
-  let maintenanceBusy = false
-  const runMaintenance = async (): Promise<void> => {
-    if (maintenanceBusy || adapterDisposed || stores.closed || journal === undefined) return
-    if (liveBoolean(config.maintenance?.enabled, true) === false) return
-    maintenanceBusy = true
-    try {
-      const identities = new Set<string>()
-      if (config.memory?.project !== undefined) identities.add(config.memory.project)
-      for (const identity of seenIdentities) identities.add(identity)
-      for (const identity of identities) {
-        const verifyProvider = liveString(config.maintenance?.verifyProvider, '')
-        const verifyModel = liveString(config.maintenance?.verifyModel, '')
-        const routeReady = verifyProvider.length > 0 && verifyModel.length > 0
-        const outcome = await runMaintenanceTick({
-          writer: memoryWriter,
-          identity,
-          sessionId: 'mc-maintenance',
-          journal,
-          ...(llm === undefined || !routeReady ? {} : { llm: llm as unknown as MaintenanceLlm, route: { provider: verifyProvider, model: verifyModel } }),
-        })
-        // A writer-level problem applies to every identity — stop the sweep.
-        if (outcome.reason === 'writer-unavailable' || outcome.reason === 'read-only') break
-        maintenanceLast = {
-          at: Date.now(),
-          expired: outcome.expired,
-          verified: outcome.verified,
-          updated: outcome.updated,
-          archived: outcome.archived,
-        }
-      }
-    } catch (error) {
-      journal.error('maintenance', `maintenance tick failed: ${errText(error)}`)
-    } finally {
-      maintenanceBusy = false
-    }
-  }
-  // The interval starts only AFTER the boot catch-up run: with both timers
-  // armed at mount they fire together at 60s and sweep twice (measured: two
-  // identical maintenance rows per boot, and two llm calls for the same batch).
-  let maintenanceTimer: ReturnType<typeof setInterval> | undefined
-  const maintenanceFirst = setTimeout(() => {
-    void runMaintenance().finally(() => {
-      maintenanceTimer = setInterval(
-        () => { void runMaintenance() },
-        Math.max(60_000, liveNumber(config.maintenance?.intervalMs, 1_800_000)),
-      )
-      ;(maintenanceTimer as unknown as { unref?: () => void }).unref?.()
-    })
-  }, 60_000)
-  ;(maintenanceFirst as unknown as { unref?: () => void }).unref?.()
-  disposers.push(() => {
-    if (maintenanceTimer !== undefined) clearInterval(maintenanceTimer)
-    clearTimeout(maintenanceFirst)
+  // ── Maintenance tick (the adapter's slice of MC's dreamer) ─────────────────
+  const maintenance = wireMaintenance({
+    ctx,
+    config,
+    stores,
+    journal,
+    llm,
+    writer: memoryWriter,
+    projects,
+    disposers,
+    isDisposed: () => adapterDisposed,
   })
 
   // The occupancy gauge the native meter shows, from the SAME source: the
@@ -1284,6 +509,7 @@ export { openStores } from './core/stores.ts'
 export { DEFAULT_POLICY } from './core/policy.ts'
 export { openJournal, redactData, formatJournalLine, recoverOrphanHistorianRuns } from './core/journal.ts'
 export { runManagementPass } from './dsh/management-pass.ts'
+export { policyOf } from './dsh/volatile.ts'
 
 /**
  * The runtime schema the loader (and the plugin page's settings form) reads.
@@ -1353,66 +579,6 @@ export const Config = z.object({
     memoryLimit: z.number().default(40).volatile(),
   }),
 })
-
-/** Same as {@link liveNumber} for strings (volatile enums such as log level). */
-function liveString(value: unknown, fallback: string): string {
-  const resolved = liveValue(value)
-  return typeof resolved === 'string' && resolved.length > 0 ? resolved : fallback
-}
-
-/**
- * Unwrap a schemastery volatile reference chain. Nested config objects wrap
- * each level, so `config.a?.b?.c` can hand back a reference whose `.get()`
- * is itself a reference — one dereference is not always enough (measured:
- * `maintenance.verifyProvider` printed `[object Object]` with single unwrap).
- */
-function liveValue(value: unknown): unknown {
-  if (value !== null && typeof value === 'object' && typeof (value as { get?: unknown }).get === 'function') {
-    return liveValue((value as { get(): unknown }).get())
-  }
-  return value
-}
-
-/** Read a value that may be a plain number or a volatile reference. */
-function liveNumber(value: unknown, fallback: number): number {
-  const resolved = liveValue(value)
-  return typeof resolved === 'number' && Number.isFinite(resolved) ? resolved : fallback
-}
-
-/** Same as {@link liveNumber} for booleans (volatile toggles). */
-function liveBoolean(value: unknown, fallback: boolean): boolean {
-  if (typeof value === 'boolean') return value
-  if (value !== null && typeof value === 'object' && typeof (value as { get?: unknown }).get === 'function') {
-    const current = (value as { get(): unknown }).get()
-    if (typeof current === 'boolean') return current
-  }
-  return fallback
-}
-
-/**
- * The effective pressure policy, evaluated AT THE DECISION POINT.
- *
- * This is what makes a settings-form edit take effect without a restart: the
- * form writes a volatile value, the loader commits it into the reference, and
- * the next pass re-reads it here.
- */
-export function policyOf(configured: Partial<PressurePolicy> | undefined): PressurePolicy {
-  const raw = (configured ?? {}) as Record<string, unknown>
-  const policy: PressurePolicy = { ...DEFAULT_POLICY }
-  for (const key of Object.keys(DEFAULT_POLICY) as Array<keyof PressurePolicy>) {
-    const value = raw[key]
-    if (value === undefined) continue
-    const fallback = DEFAULT_POLICY[key]
-    if (typeof fallback === 'number') {
-      policy[key] = liveNumber(value, fallback) as never
-    } else if (typeof fallback === 'boolean') {
-      policy[key] = liveBoolean(value, fallback) as never
-    } else {
-      policy[key] = value as never
-    }
-  }
-  return policy
-}
 
 /**
  * The plugin as a loadable object. This is what every loading mode mounts:

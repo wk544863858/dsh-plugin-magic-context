@@ -1,0 +1,471 @@
+/**
+ * The preStep band: §N§ tagging of the admitted user batch, the real-user-turn
+ * counter, cross-project drift observation, maintenance identity registration,
+ * and the pressure decision with its execute-band management pass. Moved
+ * verbatim out of index.ts; the closure locals the body used are now the
+ * destructured fields of {@link PreStepDeps} so the moved code keeps its names.
+ *
+ * Also home to the reduce-guidance SystemPrompt injection (the desk section
+ * and the Channel 1/2 dynamic context) — the other half of the guidance band.
+ */
+import type { Context } from '@deepseek-ai/cordis'
+import type { AdapterStores } from '../core/stores.ts'
+import type { Journal } from '../core/journal.ts'
+import { decidePass, pressurePercent, type PressurePolicy } from '../core/policy.ts'
+import { ensureTag, tagPrefix } from '../core/tagger.ts'
+import { resolveIdentitySpec } from '../core/memory-bridge.ts'
+import type { MemoryFact } from '../core/memory-categories.ts'
+import { errText } from '../core/types.ts'
+import {
+  DSH_EVENTS,
+  type PreStepEnterDecision,
+  type PreStepPayload,
+  enumerateSurfaceToolResults,
+  requestContextOf,
+  tagUserMessage,
+} from './seams.ts'
+import { runManagementPass } from './management-pass.ts'
+import type { HistorianLlm } from './historian.ts'
+import {
+  buildChannel1Reminder,
+  buildChannel2Reminder,
+  buildDeskSection,
+  decideReduceNudge,
+  type ReduceNudgeTracker,
+} from './reduce-guidance.ts'
+import { appendSessionNotice } from './session-notice.ts'
+import { detectProjectDrift } from './project-drift.ts'
+import type { MagicContextDshConfig } from './config.ts'
+import type { MemoryLane } from './memory-lane.ts'
+import { liveBoolean } from './volatile.ts'
+
+/** Identities shared by the preStep, the maintenance sweep and the panel. */
+export interface PreStepProjects {
+  /** Every identity this process has actually served (sweep scope). */
+  seenIdentities: Set<string>
+  /** Session → project identity, so panel stats answer for the viewed project. */
+  sessionIdentity: Map<string, string>
+}
+
+export interface PreStepDeps {
+  ctx: Context
+  config: MagicContextDshConfig
+  stores: AdapterStores
+  journal: Journal | undefined
+  /** The LLM seam (declared inject); the historian's auxiliary call uses it. */
+  llm: HistorianLlm | undefined
+  reduceTracker: ReduceNudgeTracker
+  lane: MemoryLane
+  projects: PreStepProjects
+  /** Sessions already announced, so the journal gets exactly one first-seen row. */
+  seenSessions: Set<string>
+  /** Live thresholds: a settings-form edit reaches the next pass immediately. */
+  activePolicy: () => PressurePolicy
+}
+
+/** The seam-local listener shape (kept here so upstream renames touch one file). */
+export type PreStepListener = (
+  payload: PreStepPayload,
+  next: () => Promise<PreStepEnterDecision | { kind: 'reject' }>,
+) => Promise<PreStepEnterDecision | { kind: 'reject' }>
+
+export function preStepListener(deps: PreStepDeps): PreStepListener {
+  const { ctx, config, stores, journal, llm, reduceTracker, lane, projects, seenSessions, activePolicy } = deps
+  const { seenIdentities, sessionIdentity } = projects
+  const { memoryRecall, memoryWriter, visibleMemoryIdsBySession } = lane
+  /** Consecutive defers per session, keyed by reason, to log transitions only. */
+  const deferStreak = new Map<string, { reason: string; count: number }>()
+
+  return async (payload: PreStepPayload, next): Promise<PreStepEnterDecision | { kind: 'reject' }> => {
+    const decision = await next()
+    if (decision.kind !== 'enter') return decision
+    const sessionId = payload.agent.session.id
+    const messages = decision.messages.map((message) => {
+      const firstText = message.content.find(block => block.type === 'text')
+      if (firstText !== undefined && typeof firstText.text === 'string' && /^§\d+§/.test(firstText.text)) {
+        return message
+      }
+      // Fail-open: this runs BEFORE the guarded section below, and a closed
+      // store (mid-remount) must degrade to an untagged message, never fail
+      // the turn (measured live: `database is not open` here interrupted a
+      // session across a plugin reload).
+      try {
+        const tag = ensureTag(stores, sessionId, { kind: 'user-message', messageId: message.id })
+        return tagUserMessage(message, tagPrefix, tag)
+      } catch (error) {
+        ctx.logger.warn(
+          `magic-context: message tagging skipped (${errText(error)})`,
+        )
+        return message
+      }
+    })
+    // Reduce guidance (desk section + Channel 1/2) is wired through the
+    // SystemPrompt service below — a static section and a dynamic context —
+    // not by rewriting messages here. The only preStep duty is the REAL USER
+    // TURN counter the sticky refire gap needs: observing the newest message
+    // id is idempotent per step, so repeated preSteps on one turn count once.
+    if (liveBoolean(config.reduceGuidance, true)) {
+      try {
+        const newest = messages.at(-1)
+        if (newest !== undefined) reduceTracker.observeUserMessage(sessionId, newest.id)
+      } catch {
+        // counting is advisory; never fail the turn for it
+      }
+    }
+
+    // Cross-project drift observation: the turn's own text is the only signal
+    // DSH gives about WHERE work is happening (there is no per-turn working
+    // directory). Foreign git roots in the newest message get one warn-level
+    // journal row per turn — the data that quantifies how often cross-project
+    // sessions actually happen (and whether facts land in the wrong project).
+    try {
+      const newestMessage = messages.at(-1)
+      const driftText = newestMessage === undefined
+        ? ''
+        : newestMessage.content
+          .map(block => (block.type === 'text' && typeof block.text === 'string' ? block.text : ''))
+          .join('\n')
+      if (driftText.length >= 8) {
+        const drift = detectProjectDrift(driftText, payload.agent.session.header.cwd)
+        if (drift !== undefined) {
+          journal?.warn('project-drift', `cross-project work observed (${String(drift.foreignRoots.length)} foreign root(s))`, {
+            sessionRoot: drift.sessionRoot,
+            foreignRoots: drift.foreignRoots,
+          }, sessionId)
+        }
+      }
+    } catch {
+      // observation only; never fail the turn for it
+    }
+
+    // Register the session's project identity for the maintenance sweep HERE,
+    // not only in the pass-execute branch: a quiet conversation never crosses
+    // the compaction threshold, and the sweep then had no identity to serve —
+    // every tick spun empty (measured live 18:24, zero maintenance rows after
+    // a remount despite an active session).
+    try {
+      const projectSpec = config.memory?.project ?? payload.agent.session.header.cwd
+      const memoryIdentity = projectSpec === undefined ? undefined : resolveIdentitySpec(projectSpec)
+      if (memoryIdentity !== undefined) {
+        seenIdentities.add(memoryIdentity)
+        sessionIdentity.set(sessionId, memoryIdentity)
+        if (sessionIdentity.size > 512) {
+          const oldest = sessionIdentity.keys().next().value
+          if (oldest !== undefined) sessionIdentity.delete(oldest)
+        }
+      }
+    } catch {
+      // registration is advisory; never fail the turn for it
+    }
+
+    // ── Pressure decision + the execute-band management pass (Phase 1 + 2) ──
+    // The session surface is only mutated inside the execute band: that is
+    // the one permission under which a priced bust buys reclaim (MC's
+    // "drops land on the next bust cycle", translated to durable surface).
+    try {
+      if (!seenSessions.has(sessionId)) {
+        seenSessions.add(sessionId)
+        journal?.info('session-first-seen', 'session first seen by the adapter', {
+          turn: payload.turn,
+          step: payload.step,
+        }, sessionId)
+      }
+      const latest = stores.latestUsage(sessionId)
+      const context = requestContextOf(payload.agent.session)
+      const pressure = pressurePercent(latest, context.contextWindow)
+      // Live thresholds: a settings-form edit reaches this pass immediately.
+      const policy = activePolicy()
+      const pass = decidePass({ latest, pressure, now: Date.now(), policy })
+      const usage = latest === undefined ? undefined : {
+        input: latest.inputTokens ?? 0,
+        cacheRead: latest.cacheReadTokens ?? 0,
+        cacheWrite: latest.cacheWriteTokens ?? 0,
+      }
+      const basePassData = {
+        reason: pass.reason,
+        pressure: pressure === undefined ? undefined : Number(pressure.toFixed(1)),
+        contextWindow: context.contextWindow,
+        route: context.provider === undefined || context.model === undefined
+          ? undefined
+          : `${context.provider}/${context.model}`,
+        usage,
+      }
+      if (pass.kind === 'execute') {
+        // The project identity is resolved once per pass (the git lookup is
+        // cached for the process). An explicit `git:`/`dir:` value is already
+        // an identity; only a directory has to be resolved.
+        const projectSpec = config.memory?.project ?? payload.agent.session.header.cwd
+        const memoryIdentity = projectSpec === undefined
+          ? undefined
+          : resolveIdentitySpec(projectSpec)
+        // The maintenance sweep maintains every identity this process has
+        // actually served (the configured project is added unconditionally),
+        // and the session→identity map scopes the telemetry panel's stats to
+        // the project the viewed conversation is working on.
+        if (memoryIdentity !== undefined) {
+          seenIdentities.add(memoryIdentity)
+          if (sessionId !== undefined) {
+            sessionIdentity.set(sessionId, memoryIdentity)
+            if (sessionIdentity.size > 512) {
+              const oldest = sessionIdentity.keys().next().value
+              if (oldest !== undefined) sessionIdentity.delete(oldest)
+            }
+          }
+        }
+        const memories = memoryRecall?.recall({
+          ...projectSpec === undefined ? {} : { project: projectSpec },
+          workspaceProjects: config.memory?.workspaceProjects,
+          shareCategories: config.memory?.shareCategories,
+          budgetTokens: policy.memoryBudgetTokens,
+          limit: policy.memoryLimit,
+          // B2 (MC m0_compose.rs:104-116): the frozen prefix evaluates expiry
+          // against the HARD-rebuild clock — a row expiring mid-cycle must not
+          // bust the cache. The next HARD rebuild re-composes with a live clock
+          // and freezes the new time.
+          now: stores.baselineState(sessionId)?.frozenAt ?? Date.now(),
+          // The additive lane: everything above the stored watermark is an
+          // in-session addition and renders in m[1], keeping m[0] byte-stable.
+          ...stores.baselineState(sessionId)?.maxMemoryId === undefined
+            ? {}
+            : { maxMemoryId: stores.baselineState(sessionId)?.maxMemoryId },
+        })
+        // A2 (MC getVisibleMemoryIds): the ids the injected block renders NOW
+        // are what ctx_memory search suppresses as already-visible. Replaced
+        // per pass, process-memory only, fail-open when absent.
+        if (memories !== undefined) {
+          visibleMemoryIdsBySession.delete(sessionId)
+          visibleMemoryIdsBySession.set(sessionId, new Set<number>([
+            ...memories.rows.map(row => row.id),
+            ...memories.newRows.map(row => row.id),
+          ]))
+          if (visibleMemoryIdsBySession.size > 256) {
+            const oldest = visibleMemoryIdsBySession.keys().next().value
+            if (oldest !== undefined) visibleMemoryIdsBySession.delete(oldest)
+          }
+        }
+        // The watermark is read straight from the store, so a HARD rebuild can
+        // freeze it even when this pass recalled no rows at all (the first
+        // pass of a fresh session, which is exactly when it matters).
+        const currentMaxMemoryId = memoryRecall?.maxMemoryId(projectSpec) ?? 0
+        // The NON-additive lane (contract §6): `memory_mutation_log` rows above
+        // the frozen cursor render as `<memory-updates>` in the m[1] region, so
+        // an update/archive/supersede reaches the model without rebuilding m[0].
+        // `afterId` is the cursor frozen by the last HARD rebuild (0 for a
+        // session that never folded), and the epoch fingerprint is passed on
+        // EVERY pass: management-pass only flags an epoch change when both the
+        // previous fingerprint and this one are present.
+        const mutations = memoryRecall?.mutations({
+          ...projectSpec === undefined ? {} : { project: projectSpec },
+          workspaceProjects: config.memory?.workspaceProjects,
+          shareCategories: config.memory?.shareCategories,
+          afterId: stores.baselineState(sessionId)?.maxMemoryMutationId ?? 0,
+          limit: policy.memoryLimit,
+          now: Date.now(),
+        })
+        if (memories !== undefined && (memories.lines.length > 0 || memories.newLines.length > 0)) {          journal?.info(
+            'memory-recall',
+            `recalled ${String(memories.rows.length)} project memories into m[0]`
+              + `${memories.newLines.length > 0 ? `, ${String(memories.newLines.length)} new in m[1]` : ''}`,
+            {
+              rows: memories.rows.length,
+              newRows: memories.newLines.length,
+              digest: memories.digest.slice(0, 12),
+              budgetTokens: policy.memoryBudgetTokens,
+              estTokens: memories.lines.reduce((total, line) => total + Math.ceil(line.length / 4), 0),
+              identity: memories.identity,
+              maxMemoryId: memories.currentMaxMemoryId,
+              workspace: memories.workspace,
+              members: memories.members?.length,
+              projects: [...new Set(memories.rows.map(row => row.projectPath.slice(0, 24)))],
+            },
+            sessionId,
+          )
+        }
+        const outcome = runManagementPass({
+          session: payload.agent.session,
+          sessionId,
+          stores,
+          policy,
+          logger: ctx.logger,
+          pass,
+          pressure,
+          ...journal === undefined ? {} : { journal },
+          ...context.provider === undefined || context.model === undefined
+            ? {}
+            : { route: { provider: context.provider, model: context.model } },
+          ...context.contextWindow === undefined ? {} : { contextWindow: context.contextWindow },
+          ...liveBoolean(config.historianEnabled, true) === false || llm === undefined
+            ? {}
+            : {
+              historian: {
+                llm,
+                ...config.historian === undefined ? {} : { route: config.historian },
+              },
+            },
+          ...memoryRecall === undefined
+            ? {}
+            : {
+              memories: {
+                digest: memories?.digest ?? '',
+                lines: memories?.lines ?? [],
+                newLines: memories?.newLines ?? [],
+                // An `update` on a memory that is still above the watermark
+                // writes a mutation-log row without changing the id, so the row
+                // would otherwise render once in `<new-memories>` (current
+                // content) and again in `<memory-updates>` (same content).
+                // Passing the ids lets the renderer suppress the duplicate.
+                newMemoryIds: memories?.newRows.map(row => row.id) ?? [],
+                // MC only announces a mutation whose target is a row the m[0]
+                // baseline actually rendered (inject-compartments.ts:2843-2848):
+                // mutations for budget-truncated rows would be phantom pointers.
+                baselineIds: memories?.rows.map(row => row.id) ?? [],
+                // A1: the pre-budget visible set — the authority for forced
+                // rows in `<memory-updates>`/`<new-memories>`
+                // (inject-compartments.ts:2822-2869).
+                eligibleIds: memories?.eligibleIds ?? [],
+                eligibleRows: memories?.eligibleRows ?? [],
+                maxMemoryId: currentMaxMemoryId,
+              },
+            },
+          // `cursor` is deliberately the CURRENT max mutation id, not the paged
+          // read cursor: on a HARD rebuild m[0] swallows everything up to now,
+          // so freezing a partial page would re-render rows it already folded.
+          ...mutations === undefined
+            ? {}
+            : {
+              memoryUpdates: {
+                updates: mutations.updates,
+                cursor: mutations.currentCursor,
+                projectEpochFingerprint: mutations.projectEpochFingerprint,
+              },
+            },
+          ...memoryWriter === undefined || memoryIdentity === undefined || config.memory?.autoPromote === false
+            ? {}
+            : { memoryPromote: (promote: { identity: string; facts: readonly MemoryFact[]; sessionId: string }) => memoryWriter.promoteFacts(promote), memoryIdentity },
+        })
+        journal?.info('pass', `execute (${pass.reason}) at ${pressure?.toFixed(1) ?? '?'}%`, {
+          decision: 'execute',
+          ...basePassData,
+          landed: outcome.landedDrops,
+          published: outcome.published,
+          forceDropped: outcome.forceDropped,
+          baseline: outcome.baselineUpdated ? 'refreshed' : 'unchanged',
+          historianStarted: outcome.historianStarted,
+          // Net reclaim proof: surface estimate before/after this pass.
+          tokensBefore: outcome.tokensBefore,
+          tokensAfter: outcome.tokensAfter,
+          tokensDelta: outcome.tokensAfter - outcome.tokensBefore,
+          factsPromoted: outcome.factsPromoted,
+          factsSeenAgain: outcome.factsSeenAgain,
+        }, sessionId)
+        // Channel A of the live session stream: one notice entry per pass
+        // that actually did something (publish / force-drop / promotion).
+        // `appendSessionNotice` is fail-open and quiet on nothing-notable.
+        if (liveBoolean(config.sessionNotices, true)) {
+          const notice = appendSessionNotice({ session: payload.agent.session, result: outcome })
+          if (notice.ok) {
+            journal?.info('session-notice', notice.summary, { seq: notice.seq }, sessionId)
+          } else if (notice.reason === 'append-failed') {
+            journal?.warn('session-notice', `notice append failed: ${notice.detail ?? '?'}`, {
+              detail: notice.detail,
+            }, sessionId)
+          }
+        }
+        deferStreak.delete(sessionId)
+      } else {
+        // Defer passes repeat every step: record the reason TRANSITIONS only,
+        // carrying how many consecutive defers shared the current reason, so
+        // the journal stays reviewable instead of flooding.
+        const streak = deferStreak.get(sessionId)
+        if (streak === undefined || streak.reason !== pass.reason) {
+          deferStreak.set(sessionId, { reason: pass.reason, count: 1 })
+          journal?.info('pass', `defer (${pass.reason}) at ${pressure?.toFixed(1) ?? '?'}%`, {
+            decision: 'defer',
+            ...basePassData,
+            consecutive: 1,
+          }, sessionId)
+        } else {
+          streak.count += 1
+        }
+      }
+    } catch (error) {
+      const detail = errText(error)
+      journal?.error('error', `management pass failed: ${detail}`, { scope: 'pre-step', detail }, sessionId)
+      // A failed management pass must never wedge the turn: log and continue
+      // with the tagged messages (MC per-turn fail-open). The next pass
+      // re-decides from durable state.
+      ctx.logger.warn(`magic-context: management pass failed (continuing): ${detail}`)
+    }
+
+    return { ...decision, messages }
+  }
+}
+
+/**
+ * Reduce guidance through the SystemPrompt service (MC parity): a STATIC desk
+ * section (identical bytes every assembly, so the system prompt stays
+ * prefix-cache stable) plus a DYNAMIC context whose provider re-measures the
+ * unstamped tail at every assembly and renders the MC reminder copy only when
+ * a band fires — an empty text contributes nothing. The listeners dispose with
+ * the inject fiber (a scope reload re-runs the whole inject).
+ */
+export function injectReduceGuidance(deps: PreStepDeps): void {
+  const { ctx, config, stores, journal, reduceTracker, lane } = deps
+  if (liveBoolean(config.reduceGuidance, true) === false) return
+  ctx.inject(['systemPrompt'], (scope) => {
+    const systemPrompt = (scope as unknown as {
+      systemPrompt: {
+        section(section: { name: string; text: string; order?: number }): () => void
+        context(context: { name: string; order: number; text: (assembly: unknown) => string }): () => void
+      }
+    }).systemPrompt
+    scope.effect(() => systemPrompt.section({
+      name: 'magic-context-desk',
+      text: buildDeskSection(lane.memoryEnabled),
+      order: 900,
+    }))
+    scope.effect(() => systemPrompt.context({
+      name: 'magic-context-reduce',
+      order: 910,
+      text: (assembly: unknown) => {
+        try {
+          const agent = (assembly as { agent?: { session?: { id: string } } }).agent
+          const sessionId = agent?.session?.id
+          if (sessionId === undefined) return ''
+          const tagged = enumerateSurfaceToolResults(agent!.session, callId =>
+            stores.getTag(sessionId, { kind: 'tool-result', callId }))
+            .filter(node => node.tagNumber !== undefined)
+          if (tagged.length === 0) return ''
+          const tailToolTokens = tagged.reduce((total, node) => total + Math.ceil(node.textLength / 4), 0)
+          const undropped = tagged.filter(node => !node.isPlaceholder)
+          const undroppedTokens = undropped.reduce((total, node) => total + Math.ceil(node.textLength / 4), 0)
+          const state = reduceTracker.state(sessionId)
+          const nudge = decideReduceNudge({
+            tailToolTokens,
+            undroppedTokens,
+            realUserTurnCount: state.realUserTurnCount,
+            ...state.lastBand === undefined ? {} : { lastBand: state.lastBand },
+            lastOrdinal: state.lastOrdinal,
+            ...state.lastOrdinalTurn === undefined ? {} : { lastOrdinalTurn: state.lastOrdinalTurn },
+          })
+          reduceTracker.record(sessionId, nudge, 0)
+          if (!nudge.fire || nudge.level === undefined) return ''
+          const hints = undropped.slice(0, 4).map(node => ({ tagNumber: node.tagNumber as number }))
+          const reminder = nudge.level === 'channel2'
+            ? buildChannel2Reminder(undroppedTokens, undropped.length, hints)
+            : buildChannel1Reminder(nudge.level, undroppedTokens, undropped.length, hints, nudge.sticky)
+          journal?.info('pass', `reduce nudge (${nudge.level})`, {
+            decision: 'reduce-nudge',
+            band: nudge.band,
+            tailToolTokens,
+            undroppedTokens,
+          }, sessionId)
+          return reminder
+        } catch {
+          // A closed store mid-remount must degrade to no reminder.
+          return ''
+        }
+      },
+    }))
+  })
+}
