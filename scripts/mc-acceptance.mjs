@@ -299,17 +299,20 @@ if (dsh) {
         `提升行的变更日志: ${mutationRows.length ? mutationRows.map((m) => `${m.mutation_type}=${m.n}`).join(' ') : '无'}；显式 update 调用 ${explicitUpdates}；update 日志 ${updateRows}`);
     }
 
-    // 检索计数（契约 §9.1）：只有 agent 的显式 list / 不带 id 的 get 才 +1，
-    // 自动注入的 m[0]/m[1] 永不虚增。因此「被检索行数」与「单行最大值」都必须落在
-    // 窗口内显式检索调用的次数之内 —— 自动注入若灌水，这两个数字会是几百。
-    const explicitRetrievals = dsh.prepare(`SELECT COUNT(*) AS n FROM journal WHERE kind='tool-call' AND at > ?
-      AND (data LIKE '%"action":"list"%' OR data LIKE '%"action":"get"%')`).get(SINCE).n;
+    // 检索计数（契约 §9.1）：只有 agent 的显式检索才 +1 —— 不带 id 的 get、list、
+    // 以及 search（search 是本适配器 §9.1 的计数点之一），而自动注入的 m[0]/m[1]
+    // 永不虚增。retrieval_count 是**累计**列，所以比较基准也必须是累计的显式调用数：
+    // 拿窗口内调用数去比累计计数会误报（自动注入若灌水，这个数字会是几百）。
+    // 注意：journal 的修剪会让累计调用数变小，此时该检查会偏保守。
+    const retrievalCallFilter = `kind='tool-call' AND (data LIKE '%"action":"list"%' OR data LIKE '%"action":"get"%' OR data LIKE '%"action":"search"%')`;
+    const explicitRetrievalsAll = dsh.prepare(`SELECT COUNT(*) AS n FROM journal WHERE ${retrievalCallFilter}`).get().n;
+    const explicitRetrievalsWindow = dsh.prepare(`SELECT COUNT(*) AS n FROM journal WHERE ${retrievalCallFilter} AND at > ?`).get(SINCE).n;
     const retrieved = mc.prepare(`SELECT COUNT(*) AS n, COALESCE(MAX(retrieval_count), 0) AS maxCount
       FROM memories WHERE project_path IN (SELECT DISTINCT project_path FROM memories WHERE source_type='historian' AND created_at > ?)
       AND retrieval_count > 0`).get(SINCE);
     const nullStamp = mc.prepare(`SELECT COUNT(*) AS n FROM memories WHERE retrieval_count > 0 AND last_retrieved_at IS NULL`).get().n;
-    add(Number(retrieved.maxCount) <= explicitRetrievals && nullStamp === 0 ? 'PASS' : 'FAIL', 'retrieval.telemetry',
-      `被检索行 ${retrieved.n} 行（单行最多 ${retrieved.maxCount} 次）；窗口内显式检索调用 ${explicitRetrievals} 次；计数>0 但时间戳为空 ${nullStamp} 行`);
+    add(Number(retrieved.maxCount) <= explicitRetrievalsAll && nullStamp === 0 ? 'PASS' : 'FAIL', 'retrieval.telemetry',
+      `被检索行 ${retrieved.n} 行（单行最多 ${retrieved.maxCount} 次）；显式检索调用 累计 ${explicitRetrievalsAll}（窗口内 ${explicitRetrievalsWindow}）；计数>0 但时间戳为空 ${nullStamp} 行`);
 
     // ───────────────────────────────────────────────────── 8. epoch 稳定 + 权威守卫
     if (bstate.length) {
