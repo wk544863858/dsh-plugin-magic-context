@@ -170,7 +170,7 @@ export function defineCtxReduceTool(deps: ToolBridgeDeps): unknown {
     name: 'ctx_reduce',
     description:
       'Mark conversation items you no longer need so their tokens are reclaimed. '
-        + 'Pass tag IDs you saw on messages and tool outputs: drop: "3-5, 1, 9". '
+        + 'Pass tag IDs you saw on tool outputs: drop: "3-5, 1, 9". '
         + 'Marks are queued and land when the context manager opens its reclaim band; '
         + 'dropped tool outputs become `[dropped §N§]` placeholders. Nothing is lost: '
         + 'ctx_expand restores any original.',

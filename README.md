@@ -1,6 +1,6 @@
 # @cortexkit/dsh-magic-context — Magic Context 的 DeepSeek Harness 适配层
 
-状态：**已在真实 DeepSeek Harness Desktop 中安装并热生效**（2026-10-06）。插件以 DSH **bundle** 形态注册进 desktop profile，出现在 GUI 的"插件"页面，并在运行中的应用里即时开始工作（消息打 §N§ 标签、记录用量、压力管理、historian/基线）。
+状态：**已在真实 DeepSeek Harness Desktop 中安装并热生效**（2026-10-06）。插件以 DSH **bundle** 形态注册进 desktop profile，出现在 GUI 的"插件"页面，并在运行中的应用里即时开始工作（工具结果打 §N§ 标签、记录用量、压力管理、historian/基线）。
 
 状态：**阶段 2 完成，记忆读写闭环**（2026-10-06/07）——historian/compartments、m[0]/m[1] 基线注入、项目记忆**读+写**（提升、agent 写、mutation log、权威守卫、`maxMemoryId` 水位）、CompactionEngine 接缝，全部经真实 agent loop 集成测试 + 真实 Node 运行时冒烟 + 真实 `dsh` profile 进程验证；记忆读路径另在**真实生产库与应用内**实测（注入 40 行真实项目记忆）。设计与可行性分析见
 `docs/dsh-port-feasibility-2026-10-06.md`；存储契约见
@@ -189,7 +189,7 @@ epoch 指纹稳定、权威守卫（authority 表空 + privilege 未启用）、
 
 | 功能 | 机制 | 验证 |
 |---|---|---|
-| §N§ 标签（用户消息/工具结果） | `agent/pre-step` enter 改写 + `tools/post-execute` content 替换；随消息自然落地，零额外 bust | ✅ 集成测试 |
+| §N§ 标签（仅工具结果） | `tools/post-execute` content 替换，随结果落地自然写入；admission 不打标（用户消息与宿主注入的 runtime-context 保持原样，无回收通道的句柄不再污染记录与标题） | ✅ 集成测试 |
 | 用量记录 | 持久 `assistant/message` usage（含 cache 读写）→ node:sqlite，按事件 seq 锚定 | ✅ 集成测试 |
 | 压力测量 | 最近 usage 三项和（未缓存输入+cache 读+cache 写）÷ `requestContext.contextWindow` | ✅ 集成测试 |
 | execute/defer 决策 | 阈值（默认 65%）或 cache TTL（5m）过期 → execute；否则 defer | ✅ 集成测试 |
@@ -272,9 +272,11 @@ profile 安装（`dsh plugin add`），属阶段 1 交付。且当前 PoC 是**�
 把 Magic Context 的上下文管理能力移植到 DeepSeek Harness（DSH）的适配插件。
 Phase 0 范围（刻意保持增量式，无压力策略）：
 
-- **§N§ 标签**：用户消息在 admission 时打标（`agent/pre-step` 的 enter 决策改写，
-  随消息的首次自然派生落地，**零额外缓存成本**）；工具结果在落地时打标
-  （`tools/post-execute` 的 accept content 替换）。
+- **§N§ 标签**：只给工具结果打标（`tools/post-execute` 的 accept content 替换）。
+  admission 刻意不打标：本适配器的回收通道只解析工具结果标签，用户消息/宿主注入
+  上下文上的句柄永远无法兑现，而 DSH 的模型面与 UI 面是同一份 surface——标签会进
+  会话记录，并经 `session-title` 的 fallback 变成会话标题（2026-10-08 撤销，
+  见 `docs/dsh-port-feasibility-2026-10-06.md` §7.4）。
 - **用量记录**：从持久的 `assistant/message` 事件（内嵌 provider usage，
   含 cacheRead/WriteTokens）写入自有 `node:sqlite` 库，按事件 seq 锚定。
 - **持久丢弃实验**：surface `replace` 把工具结果替换为 `[dropped §N§]` 占位符，

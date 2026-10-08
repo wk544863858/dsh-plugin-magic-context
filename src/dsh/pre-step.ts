@@ -1,9 +1,14 @@
 /**
- * The preStep band: §N§ tagging of the admitted user batch, the real-user-turn
- * counter, cross-project drift observation, maintenance identity registration,
- * and the pressure decision with its execute-band management pass. Moved
- * verbatim out of index.ts; the closure locals the body used are now the
- * destructured fields of {@link PreStepDeps} so the moved code keeps its names.
+ * The preStep band: the real-user-turn counter, cross-project drift
+ * observation, maintenance identity registration, and the pressure decision
+ * with its execute-band management pass. Moved verbatim out of index.ts; the
+ * closure locals the body used are now the destructured fields of
+ * {@link PreStepDeps} so the moved code keeps its names.
+ *
+ * Admission stamps nothing. §N§ handles belong to tool results (index.ts, on
+ * `tools/post-execute`), the only content the reclaim lanes can resolve — a
+ * handle on a user message or on a host-injected context node is dead weight
+ * that also leaks into the record and the derived title (see preStepListener).
  *
  * Also home to the reduce-guidance SystemPrompt injection (the desk section
  * and the Channel 1/2 dynamic context) — the other half of the guidance band.
@@ -12,7 +17,6 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { AdapterStores } from '../core/stores.ts'
 import type { Journal } from '../core/journal.ts'
 import { decidePass, pressurePercent, type PressurePolicy } from '../core/policy.ts'
-import { ensureTag, tagPrefix } from '../core/tagger.ts'
 import { resolveIdentitySpec } from '../core/memory-bridge.ts'
 import type { MemoryFact } from '../core/memory-categories.ts'
 import { errText } from '../core/types.ts'
@@ -22,7 +26,6 @@ import {
   type PreStepPayload,
   enumerateSurfaceToolResults,
   requestContextOf,
-  tagUserMessage,
 } from './seams.ts'
 import { runManagementPass } from './management-pass.ts'
 import type { HistorianLlm } from './historian.ts'
@@ -80,25 +83,20 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
     const decision = await next()
     if (decision.kind !== 'enter') return decision
     const sessionId = payload.agent.session.id
-    const messages = decision.messages.map((message) => {
-      const firstText = message.content.find(block => block.type === 'text')
-      if (firstText !== undefined && typeof firstText.text === 'string' && /^§\d+§/.test(firstText.text)) {
-        return message
-      }
-      // Fail-open: this runs BEFORE the guarded section below, and a closed
-      // store (mid-remount) must degrade to an untagged message, never fail
-      // the turn (measured live: `database is not open` here interrupted a
-      // session across a plugin reload).
-      try {
-        const tag = ensureTag(stores, sessionId, { kind: 'user-message', messageId: message.id })
-        return tagUserMessage(message, tagPrefix, tag)
-      } catch (error) {
-        ctx.logger.warn(
-          `magic-context: message tagging skipped (${errText(error)})`,
-        )
-        return message
-      }
-    })
+    // Admission stamps NOTHING — deliberately. The reclaim lanes (ctx_reduce /
+    // ctx_expand, drop landing, emergency reclaim) resolve tags against surface
+    // TOOL RESULTS only, so a handle on a user message or on a host-injected
+    // context node (runtime-context, skill-catalog, time-context) could never be
+    // acted on: ctx_reduce would answer "no such tool-output tag on the current
+    // surface". Unlike opencode/pi — which stamp a throwaway per-call array, so
+    // the stamp never reaches the record — DSH has ONE surface shared by the
+    // model and the UI, and no wire-only seam. A dead handle is therefore not
+    // free: it shows up in the conversation transcript, and `session-title`
+    // derives its deterministic fallback from the first `source: 'user'`
+    // message, so it becomes the session title too (measured live: seq 9
+    // `§1§ …` -> seq 15 `title: "§1§ 一个新的问题：现在会话"`). Only tool
+    // results carry handles; the stream is untouched.
+    const messages = decision.messages
     // Reduce guidance (desk section + Channel 1/2) is wired through the
     // SystemPrompt service below — a static section and a dynamic context —
     // not by rewriting messages here. The only preStep duty is the REAL USER

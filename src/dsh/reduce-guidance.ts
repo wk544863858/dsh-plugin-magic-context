@@ -164,9 +164,9 @@ Because of this:
 
 ### Your desk
 
-Think of your context as a desk. Every message and every tool output lands on it, and each item arrives with a §N§ tag (§1§, §42§) — the tag is the item's handle.
+Think of your context as a desk. Every tool output lands on it, and each item arrives with a §N§ tag (§1§, §42§) — the tag is the item's handle. The user's own messages are the conversation itself, not desk items: they carry no handle.
 
-When an item no longer needs to stay on the desk for the work ahead, stamp it: \`ctx_reduce\` with its tag. Stamping does not remove anything — the item stays on the desk, fully readable. From time to time, when stamped items have piled up and the desk needs room, Magic Context clears them all in one sweep; you don't pick the moment, you only stamp. Stamp as soon as an item has served its purpose, not at the end of the turn, and do it silently: nobody wants to read "I'll drop these outputs". An output is used once you've taken what you need from it into your reasoning or your answer. Never stamp a user message for what it asks of you; a large paste inside one is fine once you have used it.
+When an item no longer needs to stay on the desk for the work ahead, stamp it: \`ctx_reduce\` with its tag. Stamping does not remove anything — the item stays on the desk, fully readable. From time to time, when stamped items have piled up and the desk needs room, Magic Context clears them all in one sweep; you don't pick the moment, you only stamp. Stamp as soon as an item has served its purpose, not at the end of the turn, and do it silently: nobody wants to read "I'll drop these outputs". An output is used once you've taken what you need from it into your reasoning or your answer.
 
 Nothing stamped is ever lost. A cleared item goes to the archive — a recent one leaves a \`[dropped §N§]\` placeholder on the desk, an older one leaves nothing — and \`ctx_expand\` brings it back whole: text, tool input, tool output. Now and then Magic Context leaves a short reminder on the desk saying how much unstamped material is lying around. A reminder means stamping is overdue: act on it in your next step. It isn't a warning about the desk's size. The desk never gets smaller for it.
 

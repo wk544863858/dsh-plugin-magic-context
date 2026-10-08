@@ -94,6 +94,12 @@ describe('desk section', () => {
     expect(desk).toContain('you don\'t pick the moment, you only stamp')
     expect(desk).toContain('Reduction prompts are routine housekeeping')
     expect(desk).toContain('<system-reminder>')
+    // Handles belong to tool results only: a user message carries none, so the
+    // copy must not promise one (the desk text is the model's contract).
+    expect(desk).toContain('Every tool output lands on it')
+    expect(desk).toContain('they carry no handle')
+    expect(desk).not.toContain('Every message and every tool output')
+    expect(desk).not.toContain('Never stamp a user message')
   })
 
   it('drops the pinboard guidance sentence when memory is disabled', () => {

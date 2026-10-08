@@ -5,7 +5,8 @@
  * the magic-context adapter plugin loaded, and verifies the four Phase-0
  * claims from docs/dsh-port-feasibility-2026-10-06.md:
  *
- *  1. §N§ tags land on user messages at admission (durable, zero extra bust);
+ *  1. admission stamps nothing: the durable user message stays byte-identical,
+ *     so the record and the title derived from it stay tag-free;
  *  2. §N§ tags land on tool results at landing (tools/post-execute);
  *  3. usage is recorded from durable assistant/message events into
  *     the adapter's node:sqlite store;
@@ -24,6 +25,7 @@ import ToolRuntime, { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
+import { fallbackSessionTitle } from '@deepseek-ai/dsh-session-title'
 import { MockAdapter, textResponse, toolCallResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
 import mcDshPlugin, {
   openStores,
@@ -69,7 +71,7 @@ function send(agent: Agent, text: string): void {
 }
 
 describe('magic-context dsh adapter (phase 0 PoC)', () => {
-  it('tags admission-time user messages and landing-time tool results durably, records usage, and drops via surface replace', async () => {
+  it('stamps tool results only — the user message and the derived title stay clean — records usage, and drops via surface replace', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'mc-dsh-poc-'))
     const adapter = new MockAdapter([
       toolCallResponse('call-1', 'echo', { text: 'hello tool' }),
@@ -92,19 +94,29 @@ describe('magic-context dsh adapter (phase 0 PoC)', () => {
       send(agent, 'hello world')
       await waitForIdle(ctx, agent)
 
-      // 1. Tags rode the natural derivations: no extra requests were issued.
+      // 1. No extra requests were issued: the tool result is the only stamped
+      // item, and the user's own message went out byte-identical.
       expect(adapter.requests.length).toBe(2)
       const firstUser = adapter.requests[0]?.messages.find(m => m.role === 'user') as AnyMessage
-      expect(textOf(firstUser)).toBe('§1§ hello world')
+      expect(textOf(firstUser)).toBe('hello world')
       const toolMessage = adapter.requests[1]?.messages.find(m => m.role === 'tool') as AnyMessage
-      expect(textOf(toolMessage)).toBe('§2§ echo:hello tool')
+      expect(textOf(toolMessage)).toBe('§1§ echo:hello tool')
 
-      // 2. The tags are durable surface content, not wire-only rewrites.
+      // 2. The tool-result tag is durable surface content, not a wire-only
+      // rewrite; admission stamped nothing, so the record stays clean.
       const events = agent.session.snapshotEvents()
       const userEvent = events.find(event => event.type === 'user/message')
-      expect(userEvent?.type === 'user/message' ? textOf({ role: 'user', content: [...userEvent.data.content] }) : '').toBe('§1§ hello world')
+      expect(userEvent?.type === 'user/message' ? textOf({ role: 'user', content: [...userEvent.data.content] }) : '').toBe('hello world')
       const toolResultEvent = events.find(event => event.type === 'tool/result')
-      expect(toolResultEvent?.type === 'tool/result' ? textOf({ role: 'tool', content: [...toolResultEvent.data.message.content] }) : '').toBe('§2§ echo:hello tool')
+      expect(toolResultEvent?.type === 'tool/result' ? textOf({ role: 'tool', content: [...toolResultEvent.data.message.content] }) : '').toBe('§1§ echo:hello tool')
+      // 2b. The record-derived title is clean too: `session-title` derives its
+      // deterministic fallback from the first `source: 'user'` message, so a
+      // durable stamp there used to become the sidebar title verbatim
+      // (measured live: `§1§ 一个新的问题：现在会话`).
+      const firstUserText = userEvent?.type === 'user/message'
+        ? textOf({ role: 'user', content: [...userEvent.data.content] })
+        : ''
+      expect(fallbackSessionTitle(firstUserText, 5, 40)).toBe('hello world')
 
       // 3. Usage rows anchored to durable assistant/message seqs.
       const reader = openStores(dataDir)
@@ -113,20 +125,21 @@ describe('magic-context dsh adapter (phase 0 PoC)', () => {
         expect(usage.length).toBe(2)
         expect(usage.map(row => row.inputTokens)).toEqual([10, 10])
         expect(usage.every(row => row.provider === 'mock' && row.model === 'mock')).toBe(true)
+        // Exactly one handle exists: the tool result. A user-message tag row
+        // would be a dead handle — no reclaim lane resolves it.
         const tags = reader.listTags(sessionId)
-        expect(tags.map(tag => tag.tagNumber)).toEqual([1, 2])
-        expect(tags[0]?.target).toEqual({ kind: 'user-message', messageId: expect.any(String) })
-        expect(tags[1]?.target).toEqual({ kind: 'tool-result', callId: expect.stringContaining('call-1') as string })
+        expect(tags.map(tag => tag.tagNumber)).toEqual([1])
+        expect(tags[0]?.target).toEqual({ kind: 'tool-result', callId: expect.stringContaining('call-1') as string })
       } finally {
         reader.close()
       }
 
-      // 4. Durable drop: replace the tagged tool result with a placeholder.
+      // 4. Durable drop: replace the stamped tool result with a placeholder.
       expect(toolResultEvent !== undefined).toBe(true)
       if (toolResultEvent?.type !== 'tool/result') return
-      const replacementSeq = replaceToolResultWithPlaceholder(agent.session, toolResultEvent.seq, '[dropped §2§]')
+      const replacementSeq = replaceToolResultWithPlaceholder(agent.session, toolResultEvent.seq, '[dropped §1§]')
       const derivedTool = agent.session.deriveMessages().find(m => m.role === 'tool') as AnyMessage
-      expect(textOf(derivedTool)).toBe('[dropped §2§]')
+      expect(textOf(derivedTool)).toBe('[dropped §1§]')
       const replacement = agent.session.snapshotEvents().find(event => event.seq === replacementSeq)
       expect(replacement?.surfaceOp).toEqual({ op: 'replace', startSeq: toolResultEvent.seq, endSeq: toolResultEvent.seq })
       expect(replacement?.sourceEventSeqs).toEqual([toolResultEvent.seq])
@@ -138,7 +151,7 @@ describe('magic-context dsh adapter (phase 0 PoC)', () => {
       await waitForIdle(ctx, agent)
       const lastRequest = adapter.requests.at(-1)
       const lastTool = lastRequest?.messages.find(m => m.role === 'tool') as AnyMessage
-      expect(textOf(lastTool)).toBe('[dropped §2§]')
+      expect(textOf(lastTool)).toBe('[dropped §1§]')
     } finally {
       // Dispose the Cordis tree so the plugin's SQLite connection closes
       // before the temp directory is removed (Windows file locks).

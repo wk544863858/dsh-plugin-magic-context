@@ -102,10 +102,10 @@ describe('magic-context dsh adapter (phase 1: management loop)', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'mc-dsh-p1-'))
     const adapter = new WindowedAdapter([
       toolCallResponse('call-1', 'echo', { text: 'tool one' }),
-      toolCallResponse('call-2', 'ctx_reduce', { drop: '2' }),
+      toolCallResponse('call-2', 'ctx_reduce', { drop: '1' }),
       textResponse('queued'),
       textResponse('done more'),
-      toolCallResponse('call-3', 'ctx_expand', { tags: '2' }),
+      toolCallResponse('call-3', 'ctx_expand', { tags: '1' }),
       textResponse('all done'),
     ], 12)
     const ctx = await boot(adapter, dataDir)
@@ -121,7 +121,7 @@ describe('magic-context dsh adapter (phase 1: management loop)', () => {
     const sessionId = agent.session.id
 
     try {
-      // Turn 1: model calls echo, then ctx_reduce('2'). Usage from the first
+      // Turn 1: model calls echo, then ctx_reduce('1'). Usage from the first
       // response (10 tokens of a 12-token window) puts every later pass in
       // the execute band, so the queued mark lands on the very next pre-step.
       send(agent, 'hello world')
@@ -129,14 +129,14 @@ describe('magic-context dsh adapter (phase 1: management loop)', () => {
 
       // The pass that queued the mark still carried the full content
       // (queue discipline: no landing outside the band).
-      expect(toolTexts(adapter.requests[1])).toContain('§2§ echo:tool one')
+      expect(toolTexts(adapter.requests[1])).toContain('§1§ echo:tool one')
       // The next pre-step landed the queued mark before deriving its request.
-      expect(toolTexts(adapter.requests[2])).toContain('[dropped §2§]')
+      expect(toolTexts(adapter.requests[2])).toContain('[dropped §1§]')
       expect(toolTexts(adapter.requests[2])).not.toContain('echo:tool one')
       // The drop is durable surface content with the original cited.
       const events = agent.session.snapshotEvents()
       const placeholder = events.findLast(event => event.type === 'tool/result'
-        && (event.data.message.content[0] as { text?: string } | undefined)?.text === '[dropped §2§]')
+        && (event.data.message.content[0] as { text?: string } | undefined)?.text === '[dropped §1§]')
       expect(placeholder?.sourceEventSeqs?.length).toBe(1)
 
       const reader = openStores(dataDir)
@@ -150,14 +150,14 @@ describe('magic-context dsh adapter (phase 1: management loop)', () => {
       // Turn 2 rides the band with nothing queued: no-op execute pass.
       send(agent, 'more')
       await waitForIdle(ctx, agent)
-      expect(toolTexts(adapter.requests.at(-1))).toContain('[dropped §2§]')
+      expect(toolTexts(adapter.requests.at(-1))).toContain('[dropped §1§]')
 
       // Turn 3: ctx_expand restores the original content from the cited event.
       send(agent, 'expand please')
       await waitForIdle(ctx, agent)
-      // The restored original is the tagged one (tags are durable content).
-      expect(toolTexts(adapter.requests.at(-1))).toContain('§2§ echo:tool one')
-      expect(toolTexts(adapter.requests.at(-1))).not.toContain('[dropped §2§]')
+      // The restored original is the tagged one (tool-result tags are durable).
+      expect(toolTexts(adapter.requests.at(-1))).toContain('§1§ echo:tool one')
+      expect(toolTexts(adapter.requests.at(-1))).not.toContain('[dropped §1§]')
     } finally {
       try {
         await ctx.fiber.dispose()
@@ -210,7 +210,7 @@ describe('magic-context dsh adapter (phase 1: management loop)', () => {
       const derivedTools = agent.session.deriveMessages().filter(m => m.role === 'tool') as AnyMessage[]
       const texts = derivedTools.map(message => textOf(message))
       // The protected newest node keeps its full content — tag prefix included.
-      expect(texts).toEqual(['[dropped §2§]', '[dropped §3§]', '§4§ echo:third output'])
+      expect(texts).toEqual(['[dropped §1§]', '[dropped §2§]', '§3§ echo:third output'])
     } finally {
       try {
         await ctx.fiber.dispose()

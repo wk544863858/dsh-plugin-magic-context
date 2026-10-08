@@ -57,24 +57,22 @@ export type PreStepEnterDecision = { kind: 'enter'; messages: UserMessage[]; sta
 
 export type { ContentBlock, Session, SessionEvent, SessionSeq, UserMessage }
 
-/** A tagged copy of a user message; same reference when nothing changes. */
-export function tagUserMessage(message: UserMessage, prefix: (tag: number) => string, tag: number): UserMessage {
-  let changed = false
-  const content = message.content.map((block) => {
-    if (block.type === 'text' && typeof block.text === 'string' && block.text.length > 0) {
-      changed = true
-      return { ...block, text: `${prefix(tag)}${block.text}` } as ContentBlock
-    }
-    return block
-  })
-  if (!changed) {
-    return {
-      ...message,
-      content: [...message.content, { type: 'text', text: prefix(tag) } as ContentBlock],
-    }
-  }
-  return { ...message, content }
-}
+/**
+ * Admission-time message stamping is deliberately ABSENT (removed 2026-10-08).
+ *
+ * `tagUserMessage` used to prefix `§N§ ` onto the admitted user batch. Those
+ * handles were dead: every reclaim lane in this adapter resolves tags against
+ * surface tool results only, so `ctx_reduce` refused them ("no such tool-output
+ * tag on the current surface"). The prefix, however, is durable, so it reached
+ * the conversation transcript and — through `session-title`'s deterministic
+ * first-prompt fallback, which reads the first `source: 'user'` message — the
+ * session title. opencode/pi never had this problem because they stamp a
+ * per-call array the host throws away; DSH derives every request from the log,
+ * so nothing stamped here can stay invisible. Tool results still carry their
+ * handle: they are stamped at landing (`tools/post-execute`, index.ts), the one
+ * lane with reclaim consumers. Ruling: `docs/dsh-port-feasibility-2026-10-06.md`
+ * §7.4.
+ */
 
 /** A tagged copy of a tool-result content projection. */
 export function tagToolResultContent(content: readonly ContentBlock[], prefix: (tag: number) => string, tag: number): ContentBlock[] {
