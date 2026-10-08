@@ -13,6 +13,7 @@ import { openMemoryWriter } from '<path>'
 import { runMaintenanceTick } from '<path>'
 import type { Journal, JournalEntry, JournalKind, JournalLevel } from '<path>'
 import { makeMemoryDb } from './helpers/memory-db'
+import { scriptLlm } from './helpers/llm-fake'
 
 const T0 = 1_700_000_000_000
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -114,23 +115,10 @@ function fakeJournal(): Journal & { readonly entries: JournalEntry[] } {
   } as Journal & { readonly entries: JournalEntry[] }
 }
 
-/** A one-shot LLM that replies with the given text (or throws). It enforces the
- * shape the real host requires: message content must be a BLOCK ARRAY, because
- * the host calls content.some(...) — a bare string threw "content.some is not
- * a function" and failed every live tick before this assertion existed. */
-function fakeLlm(reply: string | Error): { stream(options: { messages: readonly { content: unknown }[] }): AsyncGenerator<unknown> } {
-  return {
-    async *stream(options) {
-      const content = options.messages[0]?.content
-      if (!Array.isArray(content) || typeof (content as { some?: unknown }).some !== 'function') {
-        throw new TypeError('content.some is not a function')
-      }
-      if (reply instanceof Error) throw reply
-      yield { type: 'text-delta', index: 0, text: reply }
-      yield { type: 'finish', reason: { kind: 'stop' } }
-    },
-  }
-}
+/** One scripted answer for every call (or a thrown Error from the first
+ * `next()`). The strict request-shape enforcement lives in helpers/llm-fake. */
+const fakeLlm = (reply: string | Error): { stream(options: { messages: readonly { content: unknown }[] }): AsyncIterable<unknown> } =>
+  scriptLlm([reply]).llm as { stream(options: { messages: readonly { content: unknown }[] }): AsyncIterable<unknown> }
 
 const verdictReply = (verdicts: unknown): string => JSON.stringify({ verdicts })
 

@@ -16,6 +16,7 @@ import {
 } from '<path>'
 import type { Journal, JournalKind, JournalLevel } from '<path>'
 import { DEFAULT_POLICY } from '<path>'
+import { scriptLlm } from './helpers/llm-fake'
 
 const SESSION = 'mc-historian-chunking-session'
 
@@ -83,31 +84,6 @@ function digest(marker: string): string {
   })
 }
 
-/** A seam scripted per call: the n-th request gets the n-th answer. */
-function scriptedLlm(entries: Array<() => AsyncIterable<unknown>>): {
-  llm: HistorianLlm
-  prompts: string[]
-} {
-  let calls = 0
-  const prompts: string[] = []
-  const llm: HistorianLlm = {
-    stream: (options) => {
-      // Enforce the host's contract: a string content silently degraded to ''
-      // here, which is how a wrong message shape could pass unnoticed.
-      const content = (options.messages as Array<{ content?: unknown }>).at(-1)?.content
-      if (!Array.isArray(content) || typeof (content as { some?: unknown }).some !== 'function') {
-        throw new TypeError('content.some is not a function')
-      }
-      const text = (options.messages as Array<{ content: Array<{ text?: string }> }>)
-        .at(-1)?.content?.at(-1)?.text ?? ''
-      prompts.push(text.slice(0, 60))
-      const entry = entries[Math.min(calls, entries.length - 1)]!
-      calls += 1
-      return entry()
-    },
-  }
-  return { llm, prompts }
-}
 
 function frame(text: string): () => AsyncIterable<unknown> {
   return async function* () {
@@ -155,13 +131,13 @@ describe('planChunkSpans', () => {
 describe('the chunked run (D1/D3)', () => {
   it('digests chunks then merges: start + chunk events + one done, merged draft', async () => {
     const calls: Call[] = []
-    const { llm, prompts } = scriptedLlm([
+    const fake = scriptLlm([
       frame(digest('chunk-1')),
       frame(digest('chunk-2')),
       frame(digest('merged')),
     ])
     const nodes = Array.from({ length: 8 }, (_unused, index) => node(index + 1, 'x'.repeat(4_000)))
-    const draft = await callHistorian(deps(llm, calls) as never, {
+    const draft = await callHistorian(deps(fake.llm as HistorianLlm, calls) as never, {
       sessionId: SESSION,
       session: SESSION_STUB,
       nodes,
@@ -179,15 +155,16 @@ describe('the chunked run (D1/D3)', () => {
     const done = historianFirst(calls, 'done')!
     expect(done.data?.attempts).toBe(3)
     // the merge call carried the partial digests as JSON
+    const prompts = fake.texts.map(text => text.slice(0, 60))
     expect(prompts.some(prompt => prompt.includes('Partial digest 1') || prompt.startsWith('You are the HISTORIAN merging'))).toBe(true)
     expect(prompts.some(prompt => prompt.includes('HISTORIAN merging'))).toBe(true)
   })
 
   it('fails closed when a chunk cannot produce a valid digest', async () => {
     const calls: Call[] = []
-    const { llm } = scriptedLlm([invalidFrame(), invalidFrame()])
+    const fake = scriptLlm([invalidFrame(), invalidFrame()])
     const nodes = Array.from({ length: 8 }, (_unused, index) => node(index + 1, 'x'.repeat(4_000)))
-    const error = await callHistorian(deps(llm, calls) as never, {
+    const error = await callHistorian(deps(fake.llm as HistorianLlm, calls) as never, {
       sessionId: SESSION,
       session: SESSION_STUB,
       nodes,

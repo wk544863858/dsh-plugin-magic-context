@@ -27,6 +27,7 @@ import {
 import type { AdapterStores } from '../core/stores.ts'
 import type { Journal } from '../core/journal.ts'
 import type { PressurePolicy } from '../core/policy.ts'
+import type { LlmSeamMessage } from '../core/types.ts'
 import { spanRequestMessages, type SurfaceNode } from './seams.ts'
 
 /** The narrow LLM seam the historian needs (satisfied by `ctx.llm`). */
@@ -37,7 +38,7 @@ export interface HistorianLlm {
 export interface HistorianStreamOptions {
   readonly provider: string
   readonly model: string
-  readonly messages: readonly unknown[]
+  readonly messages: readonly LlmSeamMessage[]
   readonly toolHistory?: unknown
   readonly maxTokens: number
   readonly sessionId: string

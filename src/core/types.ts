@@ -48,3 +48,19 @@ export interface UsageRecord {
   readonly cacheWriteTokens?: number
   readonly recordedAt: number
 }
+
+/** One content block on an llm-seam message. */
+export interface LlmSeamBlock {
+  readonly type: string
+  readonly text?: string
+}
+
+/** The message shape the host llm seam accepts: content is a BLOCK ARRAY —
+ * the host calls `content.some(...)`, so a bare string throws there
+ * ("content.some is not a function"). That is exactly how the maintenance
+ * verify lane failed its first six live ticks without any log line; the seam
+ * types now refuse that shape at the source. */
+export interface LlmSeamMessage {
+  readonly role?: unknown
+  readonly content: readonly LlmSeamBlock[]
+}

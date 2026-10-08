@@ -22,13 +22,14 @@
  */
 import type { Journal } from './journal.ts'
 import type { MemoryRecord, MemoryWriter } from './memory-write.ts'
+import type { LlmSeamMessage } from './types.ts'
 
 /** The narrow LLM seam maintenance needs (structurally `ctx.llm`). */
 export interface MaintenanceLlm {
   stream(options: {
     readonly provider: string
     readonly model: string
-    readonly messages: readonly unknown[]
+    readonly messages: readonly LlmSeamMessage[]
     readonly maxTokens: number
     readonly sessionId: string
     readonly purpose: 'compaction'

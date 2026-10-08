@@ -51,6 +51,7 @@ import {
 import { spanRequestMessages, type SurfaceNode } from '<path>'
 import type { Journal, JournalKind, JournalLevel } from '<path>'
 import { DEFAULT_POLICY } from '<path>'
+import { answerLlm, hangingLlm, scriptLlm } from './helpers/llm-fake'
 
 const SESSION = 'mc-historian-terminal-session'
 
@@ -118,42 +119,7 @@ function digest(options: { facts?: unknown; importance?: number } = {}): string 
   })
 }
 
-/** A seam that streams one text answer as the real chunk protocol does. */
-function answeringLlm(text: string): { llm: HistorianLlm; options: () => GenerateOptions | undefined } {
-  let seen: GenerateOptions | undefined
-  return {
-    options: () => seen,
-    llm: {
-      stream: (options) => {
-        seen = options as unknown as GenerateOptions
-        return (async function* () {
-          yield { type: 'block-start', index: 0, blockType: 'text' }
-          for (const char of text) yield { type: 'text-delta', index: 0, text: char }
-          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
-          yield { type: 'usage', usage: { inputTokens: 10, outputTokens: text.length } }
-          yield { type: 'finish', reason: { kind: 'stop' } }
-        })()
-      },
-    },
-  }
-}
 
-/** A seam scripted per call: each entry answers the n-th historian request. */
-function scriptedLlm(
-  entries: Array<() => AsyncIterable<unknown>>,
-): { llm: HistorianLlm; caps: number[]; calls: number } {
-  let calls = 0
-  const caps: number[] = []
-  const llm: HistorianLlm = {
-    stream: (options) => {
-      caps.push(options.maxTokens)
-      const entry = entries[Math.min(calls, entries.length - 1)]!
-      calls += 1
-      return entry()
-    },
-  }
-  return { llm, caps, get calls() { return calls } }
-}
 
 /** Streams a partial answer and then reports the output cap was hit. */
 function truncatedFrame(): AsyncIterable<unknown> {
@@ -164,30 +130,6 @@ function truncatedFrame(): AsyncIterable<unknown> {
   })()
 }
 
-/** A seam that records the cap it carried and answers with `text`. */
-function cappedAnswer(text: string, caps: number[]): HistorianLlm['stream'] {
-  return (options) => {
-    caps.push(options.maxTokens)
-    return (async function* () {
-      for (const char of text) yield { type: 'text-delta', index: 0, text: char }
-      yield { type: 'finish', reason: { kind: 'stop' } }
-    })()
-  }
-}
-
-/** A seam that NEVER settles — neither the iterator nor the abort handler. */
-function hangingLlm(seen: AbortSignal[]): HistorianLlm {
-  return {
-    stream: (options) => {
-      if (options.signal !== undefined) seen.push(options.signal)
-      return {
-        [Symbol.asyncIterator]() {
-          return { next: () => new Promise<IteratorResult<unknown>>(() => {}) }
-        },
-      } as AsyncIterable<unknown>
-    },
-  }
-}
 
 interface UnitDeps {
   policy: typeof DEFAULT_POLICY
@@ -221,8 +163,9 @@ describe('historian terminal events (unit)', () => {
 
   it('success: writes exactly one start + one done, with the facts contract intact', async () => {
     const calls: Call[] = []
-    const { llm, options } = answeringLlm(digest())
-    const draft = await callHistorian(baseDeps(llm, recordingJournal(calls)), {
+    const fake = answerLlm(digest())
+    const options = (): GenerateOptions | undefined => fake.calls[0]?.request as GenerateOptions | undefined
+    const draft = await callHistorian(baseDeps(fake.llm as HistorianLlm, recordingJournal(calls)), {
       sessionId: SESSION,
       session: SESSION_STUB,
       nodes: NODES,
@@ -252,10 +195,10 @@ describe('historian terminal events (unit)', () => {
 
   it('timeout: a seam that never settles still lands one failed row and aborts the seam', async () => {
     const calls: Call[] = []
-    const signals: AbortSignal[] = []
+    const fake = hangingLlm()
     const started = Date.now()
     const error = await callHistorian(
-      baseDeps(hangingLlm(signals), recordingJournal(calls), { timeoutMs: 40 }),
+      baseDeps(fake.llm as HistorianLlm, recordingJournal(calls), { timeoutMs: 40 }),
       { sessionId: SESSION, session: SESSION_STUB, nodes: NODES },
     ).catch((cause: unknown) => cause)
 
@@ -263,8 +206,8 @@ describe('historian terminal events (unit)', () => {
     expect((error as HistorianTimeoutError).timeoutMs).toBeGreaterThan(0)
     expect(Date.now() - started).toBeGreaterThanOrEqual(30)
     // The seam was told to stop (a compliant provider releases its socket).
-    expect(signals.length).toBe(1)
-    expect(signals[0]!.aborted).toBe(true)
+    expect(fake.signals.length).toBe(1)
+    expect(fake.signals[0]!.aborted).toBe(true)
 
     expect(phases(calls)).toEqual(['start', 'failed'])
     const failed = terminals(calls)[0]!
@@ -318,7 +261,7 @@ describe('historian terminal events (unit)', () => {
 
   it('invalid digest twice: retries once, then lands a single failed row with attempts=2', async () => {
     const calls: Call[] = []
-    const { llm } = answeringLlm('not json at all')
+    const llm = answerLlm('not json at all').llm as HistorianLlm
     const error = await callHistorian(baseDeps(llm, recordingJournal(calls)), {
       sessionId: SESSION,
       session: SESSION_STUB,
@@ -334,9 +277,9 @@ describe('historian terminal events (unit)', () => {
 
   it('a below-floor configured cap is raised and the raise is journaled', async () => {
     const calls: Call[] = []
-    const seenCaps: number[] = []
+    const seen = scriptLlm([digest()])
     const deps = baseDeps(
-      { stream: cappedAnswer(digest(), seenCaps) },
+      seen.llm as HistorianLlm,
       recordingJournal(calls),
     )
     // 2048 is the production value that truncated every run.
@@ -345,16 +288,16 @@ describe('historian terminal events (unit)', () => {
       { sessionId: SESSION, session: SESSION_STUB, nodes: NODES },
     )
     expect(draft.tiers.p1).toBe('P1 detail')
-    expect(seenCaps).toEqual([HISTORIAN_MIN_OUTPUT_TOKENS])
+    expect(seen.maxTokens).toEqual([HISTORIAN_MIN_OUTPUT_TOKENS])
     expect(starts(calls)[0]!.data?.maxTokens).toBe(HISTORIAN_MIN_OUTPUT_TOKENS)
     expect(starts(calls)[0]!.data?.configuredMaxTokens).toBe(2_048)
   })
 
   it('truncation is retried with an escalated cap and can still succeed', async () => {
     const calls: Call[] = []
-    // `scriptedLlm` records the cap each request carried.
-    const { llm, caps } = scriptedLlm([truncatedFrame, () => cappedAnswer(digest(), [])({ maxTokens: 0 } as never)])
-    const draft = await callHistorian(baseDeps(llm, recordingJournal(calls)), {
+    // The fake records the cap each request carried.
+    const fake = scriptLlm([truncatedFrame, digest()])
+    const draft = await callHistorian(baseDeps(fake.llm as HistorianLlm, recordingJournal(calls)), {
       sessionId: SESSION,
       session: SESSION_STUB,
       nodes: NODES,
@@ -366,14 +309,13 @@ describe('historian terminal events (unit)', () => {
     expect(done.data?.attempts).toBe(2)
     expect(done.data?.maxTokens).toBe(HISTORIAN_MIN_OUTPUT_TOKENS * 2)
     // The floor cap on attempt 1, the escalated cap on attempt 2.
-    expect(caps).toEqual([HISTORIAN_MIN_OUTPUT_TOKENS, HISTORIAN_MIN_OUTPUT_TOKENS * 2])
+    expect(fake.maxTokens).toEqual([HISTORIAN_MIN_OUTPUT_TOKENS, HISTORIAN_MIN_OUTPUT_TOKENS * 2])
   })
 
   it('an optional policy ceiling caps the escalated retry', async () => {
     const calls: Call[] = []
-    const queued = digest()
-    const { llm, caps } = scriptedLlm([truncatedFrame, () => cappedAnswer(queued, [])({ maxTokens: 0 } as never)])
-    const deps = baseDeps(llm, recordingJournal(calls))
+    const fake = scriptLlm([truncatedFrame, digest()])
+    const deps = baseDeps(fake.llm as HistorianLlm, recordingJournal(calls))
     const policy = { ...deps.policy, historianMaxTokens: 2_048, historianMaxTokensCeiling: 12_000 }
     await callHistorian({ ...deps, policy: policy as typeof deps.policy }, {
       sessionId: SESSION,
@@ -381,7 +323,7 @@ describe('historian terminal events (unit)', () => {
       nodes: NODES,
     })
     // Floor cap first, then the doubled cap clamped to the configured ceiling.
-    expect(caps).toEqual([HISTORIAN_MIN_OUTPUT_TOKENS, 12_000])
+    expect(fake.maxTokens).toEqual([HISTORIAN_MIN_OUTPUT_TOKENS, 12_000])
   })
 
   it('truncation twice: one failed row, kind max-tokens, with the measured partial size', async () => {
@@ -407,7 +349,7 @@ describe('historian terminal events (unit)', () => {
 
   it('a session store that throws before the call leaves no start row at all', async () => {
     const calls: Call[] = []
-    const { llm } = answeringLlm(digest())
+    const llm = answerLlm(digest()).llm as HistorianLlm
     const brokenSession = {
       snapshotEvents: () => { throw new Error('session store is unavailable') },
     } as unknown as typeof SESSION_STUB
@@ -425,7 +367,7 @@ describe('historian terminal events (unit)', () => {
   it('start with no route fails before the start event, leaving nothing dangling', async () => {
     const calls: Call[] = []
     const error = await callHistorian(
-      { ...baseDeps(answeringLlm('x').llm, recordingJournal(calls)), route: undefined },
+      { ...baseDeps(answerLlm('x').llm as HistorianLlm, recordingJournal(calls)), route: undefined },
       { sessionId: SESSION, session: SESSION_STUB, nodes: NODES },
     ).catch((cause: unknown) => cause)
     expect(String((error as Error).message)).toContain('no routed provider/model')
@@ -437,8 +379,7 @@ describe('historian terminal events (unit)', () => {
     expect(DEFAULT_POLICY.historianTimeoutMs).toBe(120_000)
 
     const calls: Call[] = []
-    const signals: AbortSignal[] = []
-    const deps = baseDeps(hangingLlm(signals), recordingJournal(calls))
+    const deps = baseDeps(hangingLlm().llm as HistorianLlm, recordingJournal(calls))
     await callHistorian({ ...deps, policy: { ...deps.policy, historianTimeoutMs: 30 } }, {
       sessionId: SESSION,
       session: SESSION_STUB,
@@ -542,7 +483,7 @@ describe('historian terminal events (runHistorian, real stores)', () => {
       const policy = { ...DEFAULT_POLICY, historianTimeoutMs: 30 }
 
       const timedOut = await runHistorian(
-        { stores, policy, llm: hangingLlm([]), logger: { info: () => {}, warn: () => {} }, journal, route: { provider: 'mock-historian', model: 'mock' } },
+        { stores, policy, llm: hangingLlm().llm as HistorianLlm, logger: { info: () => {}, warn: () => {} }, journal, route: { provider: 'mock-historian', model: 'mock' } },
         { sessionId: SESSION, session: SESSION_STUB, nodes: NODES, forcedRange: NODES },
       ).catch((cause: unknown) => cause)
       expect(timedOut).toBeInstanceOf(HistorianTimeoutError)
@@ -551,7 +492,7 @@ describe('historian terminal events (runHistorian, real stores)', () => {
       // Same session, same module: a leaked `inFlight` entry would return
       // undefined here and never store a compartment.
       const compartment = await runHistorian(
-        { stores, policy, llm: answeringLlm(digest({ importance: 91 })).llm, logger: { info: () => {}, warn: () => {} }, journal, route: { provider: 'mock-historian', model: 'mock' } },
+        { stores, policy, llm: answerLlm(digest({ importance: 91 })).llm as HistorianLlm, logger: { info: () => {}, warn: () => {} }, journal, route: { provider: 'mock-historian', model: 'mock' } },
         { sessionId: SESSION, session: SESSION_STUB, nodes: NODES, forcedRange: NODES },
       )
       expect(compartment).toBeDefined()
