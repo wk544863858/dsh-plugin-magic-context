@@ -6,7 +6,7 @@
  * `memory-bridge.ts` as the tripwire): `packages/plugin/src/features/
  * magic-context/memory/constants.ts` + `normalize-hash.ts`.
  *
- * Contract version: MC storage schema v94 (see MEMORY_SCHEMA_MAX_VERSION).
+ * Contract version: MC storage schema v95 (see MEMORY_SCHEMA_MAX_VERSION).
  */
 
 /** The v2 taxonomy — the only categories new writes may use. */

@@ -7,8 +7,8 @@ This document records the **effective-behavior contract** between the DSH adapte
 
 | Item | Value |
 |---|---|
-| Magic Context | **v0.45.0** (upstream base `v0.45.0-247-gbd545e9d2`) |
-| MC store contract | **schema v94** (`src/core/memory-bridge.ts:42`) |
+| Magic Context | **v0.46.0** (`v0.46.0-0-g651c105a9`, released 2026-10-08; the `dsh-base` ref) |
+| MC store contract | **schema v95** (`src/core/memory-bridge.ts:42`) |
 | DeepSeek Harness | **Desktop 0.2.0-rc.2** (host paths below are relative to the DSH checkout) |
 | Adapter | `@cortexkit/dsh-magic-context` 0.2.0, own store **schema v6** (`src/core/stores.ts:21`) |
 
@@ -141,11 +141,13 @@ by the loader (upgrade guide §3.3).
 
 ### B8. Storage boundary
 
-One shared MC database (schema v94) read through a read-only connection plus
-contract-shaped writes; `MEMORY_SCHEMA_MAX_VERSION = 94`
+One shared MC database (schema v95) read through a read-only connection plus
+contract-shaped writes; `MEMORY_SCHEMA_MAX_VERSION = 95`
 (`src/core/memory-bridge.ts:42`) makes the write path degrade to read-only when
 the store is newer, and the adapter's own store carries its own
-`SCHEMA_VERSION = 6` (`src/core/stores.ts:21`).
+`SCHEMA_VERSION = 6` (`src/core/stores.ts:21`). v95 is additive DDL
+(`temporal_decisions`, `git_commit_fts_rowid_map`, covering indexes) with no
+`ALTER TABLE` on `memories`, so the 29-column contract is untouched.
 
 ### B9. Historian budget shape
 

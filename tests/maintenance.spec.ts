@@ -23,7 +23,7 @@ const silentLogger = { info: () => {}, warn: () => {} }
 
 const tempDirs: string[] = []
 
-function createDb(schemaVersion = 94): string {
+function createDb(schemaVersion = 95): string {
   const { path, dir } = makeMemoryDb({
     prefix: 'mc-maintenance-', schemaVersion, mutationLog: true, projectState: true, authority: true,
   })
@@ -177,8 +177,10 @@ describe('maintenance tick — TTL expiry (dreamer expire slice)', () => {
   })
 
   it('a read-only (fenced) writer short-circuits before any sweep', async () => {
-    const path = createDb(95)
-    seedRow(path, { category: 'KNOWN_ISSUES', content: 'expired under v95', expiresAt: T0 - DAY_MS })
+    // One past the contract ceiling (`MEMORY_SCHEMA_MAX_VERSION`): bump both when
+    // the adapter accepts a new MC schema, or this stops fencing anything.
+    const path = createDb(96)
+    seedRow(path, { category: 'KNOWN_ISSUES', content: 'expired under a fenced store', expiresAt: T0 - DAY_MS })
     const writer = openMemoryWriter({ dbPath: path, logger: silentLogger, now: () => T0 })
     try {
       expect(writer.status.readOnly).toBe(true)

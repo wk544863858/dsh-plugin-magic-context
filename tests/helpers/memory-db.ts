@@ -189,7 +189,7 @@ export function makeMemoryDb(input: {
     }
     db.exec(ddl)
     if (input.schemaVersion !== null) {
-      db.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES(?, 0)').run(input.schemaVersion ?? 94)
+      db.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES(?, 0)').run(input.schemaVersion ?? 95)
     }
   } finally {
     db.close()

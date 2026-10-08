@@ -35,8 +35,10 @@ import { makeMemoryDb } from './helpers/memory-db'
 
 const OWN = 'git:1111111111111111111111111111111111111111'
 const OTHER = 'git:2222222222222222222222222222222222222222'
-const SUPPORTED = 94
-const NEWER = 95
+// MC's storage contract, and one published revision past it: bump with
+// `MEMORY_SCHEMA_MAX_VERSION` so the fenced case keeps fencing something.
+const SUPPORTED = 95
+const NEWER = 96
 const T0 = 1_700_000_000_000
 
 const silentLogger = { info: () => {}, warn: () => {} }

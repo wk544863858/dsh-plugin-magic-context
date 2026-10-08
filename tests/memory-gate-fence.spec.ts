@@ -17,7 +17,7 @@
  *
  *  ③ the contract fence — reading `schema_migrations` at open time and
  *     DOWNGRADING TO READ-ONLY when the database is newer than the adapter
- *     (v94). A v95+ store must never be written by this adapter: unknown DDL
+ *     (v95). A v96+ store must never be written by this adapter: unknown DDL
  *     means unknown invariants.
  *
  * Every database here is a throwaway under the OS temp dir. The user's real
@@ -46,9 +46,11 @@ import { makeMemoryDb } from './helpers/memory-db'
 
 const OWN = 'git:1111111111111111111111111111111111111111'
 const OTHER = 'git:2222222222222222222222222222222222222222'
-/** MC's own schema version, and one published revision past it. */
-const SUPPORTED = 94
-const NEWER = 95
+/** MC's own schema version, and one published revision past it. Keep these
+ * literals: a bump of `MEMORY_SCHEMA_MAX_VERSION` without a re-read of the new
+ * migration must fail here, which derived constants could not catch. */
+const SUPPORTED = 95
+const NEWER = 96
 
 const T0 = 1_700_000_000_000
 
@@ -78,7 +80,8 @@ function createDb(version: number | null = SUPPORTED): string {
   return path
 }
 
-/** Push the store past v94 (the migration a future MC release would apply). */
+/** Push the store past the supported version (the migration a future MC release
+ * would apply). */
 function withSchemaVersion(path: string, version: number): void {
   const db = new DatabaseSync(path)
   try {
@@ -185,7 +188,7 @@ afterEach(async () => {
 })
 
 describe('the storage-contract fence (task-9 ③)', () => {
-  it('opens a v95 store READ-ONLY: reads survive, every mutation is refused', () => {
+  it(`opens a v${String(NEWER)} store READ-ONLY: reads survive, every mutation is refused`, () => {
     const path = createDb(SUPPORTED)
     const id = seedMemory(path, { project: OWN, content: 'the fence keeps this row readable' })
     withSchemaVersion(path, NEWER)
@@ -238,7 +241,7 @@ describe('the storage-contract fence (task-9 ③)', () => {
     }
   })
 
-  it('keeps a v94 store writable and reports the version it read', () => {
+  it(`keeps a v${String(SUPPORTED)} store writable and reports the version it read`, () => {
     const path = createDb()
     const writer = openMemoryWriter({ dbPath: path, logger: silentLogger, now: () => T0 })
     try {
@@ -246,7 +249,22 @@ describe('the storage-contract fence (task-9 ③)', () => {
       expect(writer.status.contractVersion).toBe(SUPPORTED)
       expect(writer.status.readOnly).toBeUndefined()
 
-      const result = writer.writeMemory({ identity: OWN, category: 'NAMING', content: 'v94 still writes' })
+      const result = writer.writeMemory({ identity: OWN, category: 'NAMING', content: 'the supported contract writes' })
+      expect(result.ok).toBe(true)
+      expect(count(path, 'SELECT COUNT(*) AS c FROM memories')).toBe(1)
+    } finally {
+      writer.close()
+    }
+  })
+
+  it('keeps an older store writable until it migrates (one version behind the ceiling)', () => {
+    const path = createDb(SUPPORTED - 1)
+    const writer = openMemoryWriter({ dbPath: path, logger: silentLogger, now: () => T0 })
+    try {
+      expect(writer.status.contractVersion).toBe(SUPPORTED - 1)
+      expect(writer.status.readOnly).toBeUndefined()
+
+      const result = writer.writeMemory({ identity: OWN, category: 'NAMING', content: 'a lagging store still writes' })
       expect(result.ok).toBe(true)
       expect(count(path, 'SELECT COUNT(*) AS c FROM memories')).toBe(1)
     } finally {

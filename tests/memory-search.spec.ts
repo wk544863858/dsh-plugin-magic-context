@@ -39,7 +39,7 @@ import { makeMemoryDb } from './helpers/memory-db'
 
 const OWN = 'git:1111111111111111111111111111111111111111'
 const PEER = 'git:2222222222222222222222222222222222222222'
-const SUPPORTED = 94
+const SUPPORTED = 95
 const T0 = 1_700_000_000_000
 const silentLogger = { info: () => {}, warn: () => {} }
 

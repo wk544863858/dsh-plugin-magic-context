@@ -38,8 +38,11 @@ import { errText } from './types.ts'
 
 const VALID_SHARE_CATEGORIES = new Set<string>(V2_MEMORY_CATEGORIES)
 
-/** Magic Context's LATEST_SUPPORTED_VERSION (storage-db.ts). */
-export const MEMORY_SCHEMA_MAX_VERSION = 94
+/** Magic Context's LATEST_SUPPORTED_VERSION (storage-db.ts). v95 (MC v0.46.0)
+ * adds `temporal_decisions` and `git_commit_fts_rowid_map` plus covering indexes
+ * (`migration-v95-perf-indexes.ts`) — additive DDL only, no `ALTER TABLE` on
+ * `memories`, so the 29-column write contract this ceiling guards is unchanged. */
+export const MEMORY_SCHEMA_MAX_VERSION = 95
 
 /** MC's terminal mutation types (`storage-memory-mutation-log.ts:9-15`): an
  * `update` queued after one of these must not resurrect the memory. */
