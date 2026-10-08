@@ -359,7 +359,12 @@ function refreshBaseline(
   })
   if (block.length === 0) return false
 
-  const target = nodes.find(node => node.role === 'user')
+  // The baseline rides the first ordinary user node — never a compaction
+  // checkpoint (host or engine). Attaching it to a checkpoint let that
+  // checkpoint's own text ride inside m[0] forever: every later refresh
+  // re-emitted the foreign summary and rewrote the node, and the GUI lost the
+  // card it correlates by `source.kind === 'compact-checkpoint'` + compactionId.
+  const target = nodes.find(node => node.role === 'user' && node.sourceKind !== 'compact-checkpoint')
   if (target === undefined) return false
   if (baselineBlockOf(target.text) === block) {
     // Byte-identical: no durable mutation, no priced bust (MC's defer pass).

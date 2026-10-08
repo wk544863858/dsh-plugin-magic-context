@@ -284,6 +284,15 @@ export interface SurfaceNode {
   readonly isPlaceholder: boolean
   /** Whether an assistant node carries tool calls (tool-pairing boundary logic). */
   readonly hasToolCalls: boolean
+  /**
+   * `data.source.kind` of the event, when it carries one. The baseline must
+   * never attach to a `compact-checkpoint` node: a checkpoint is the host's (or
+   * the engine's) compaction artifact, and folding a baseline into it makes the
+   * checkpoint's own text ride inside m[0] forever — every later refresh then
+   * re-emits and rewrites that foreign text (the GUI also correlates its
+   * compaction card by source kind + compactionId, which the rewrite destroyed).
+   */
+  readonly sourceKind?: string
 }
 
 const ROLE_BY_TYPE: Record<string, SurfaceRole> = {
@@ -331,6 +340,17 @@ export function textOfSurfaceEvent(event: SessionEvent): string {
 }
 
 /**
+ * `data.source.kind` of a message-bearing surface event. `user/message` carries
+ * the message itself as its data, so the source sits on `data.source`; other
+ * message types wrap it (`data.message.source`).
+ */
+function sourceKindOf(event: SessionEvent): string | undefined {
+  const data = (event as unknown as { data?: { source?: { kind?: unknown }; message?: { source?: { kind?: unknown } } } }).data
+  const kind = data?.source?.kind ?? data?.message?.source?.kind
+  return typeof kind === 'string' ? kind : undefined
+}
+
+/**
  * Enumerate the CURRENT surface in provider-visible order. `session.surface.nodes`
  * excludes shadowed events, which is exactly the live window the historian may
  * digest and the publish lane may replace.
@@ -345,6 +365,7 @@ export function enumerateSurfaceNodes(session: Session): SurfaceNode[] {
     const role = ROLE_BY_TYPE[event.type]
     if (role === undefined) continue
     const text = textOfSurfaceEvent(event)
+    const sourceKind = sourceKindOf(event)
     nodes.push({
       seq,
       type: event.type,
@@ -353,6 +374,7 @@ export function enumerateSurfaceNodes(session: Session): SurfaceNode[] {
       hasText: text.trim().length > 0,
       isPlaceholder: PLACEHOLDER_PATTERN.test(text.trim()),
       hasToolCalls: contentOf(event).some(block => block.type === 'tool-call'),
+      ...sourceKind === undefined ? {} : { sourceKind },
     })
   }
   return nodes

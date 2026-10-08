@@ -836,7 +836,13 @@ interface SurfaceEvent {
 }
 
 /** A minimal durable surface: one node per event, ordered, replaceable. */
-function makeSession(): { session: Session; text: () => string; generation: () => number } {
+function makeSession(first?: { type: string; data: unknown }): {
+  session: Session
+  text: () => string
+  generation: () => number
+  nodes: () => readonly number[]
+  textOfSeq: (seq: number) => string
+} {
   let nextSeq = 1
   let replaceGeneration = 0
   const events: SurfaceEvent[] = []
@@ -860,7 +866,8 @@ function makeSession(): { session: Session; text: () => string; generation: () =
     nodes.push(seq)
     return { seq }
   }
-  append('user/message', { id: 'seed-user', role: 'user', content: [{ type: 'text', text: '§1§ go' }] })
+  if (first === undefined) append('user/message', { id: 'seed-user', role: 'user', content: [{ type: 'text', text: '§1§ go' }] })
+  else append(first.type, first.data)
   const session = {
     get surface() {
       return { nodes, replaceGeneration }
@@ -868,13 +875,20 @@ function makeSession(): { session: Session; text: () => string; generation: () =
     snapshotEvents: () => events,
     append,
   }
-  const text = (): string => nodes.flatMap((seq) => {
+  const textOfSeq = (seq: number): string => {
     const event = events.find(candidate => candidate.seq === seq)
     return event === undefined
-      ? []
-      : event.data.content.filter(block => block.type === 'text').map(block => block.text ?? '')
-  }).join('\n')
-  return { session: session as unknown as Session, text, generation: () => replaceGeneration }
+      ? ''
+      : event.data.content.filter(block => block.type === 'text').map(block => block.text ?? '').join('\n')
+  }
+  const text = (): string => nodes.map(textOfSeq).filter(part => part !== '').join('\n')
+  return {
+    session: session as unknown as Session,
+    text,
+    generation: () => replaceGeneration,
+    nodes: () => nodes,
+    textOfSeq,
+  }
 }
 
 interface PassHarness {
@@ -882,6 +896,10 @@ interface PassHarness {
   readonly sessionId: string
   readonly text: () => string
   readonly generation: () => number
+  readonly nodes: () => readonly number[]
+  readonly textOfSeq: (seq: number) => string
+  /** Append one surface node (e.g. a checkpoint or a later user turn). */
+  readonly append: (type: string, data: unknown) => number
   pass(input: { updates: MemoryUpdateLine[]; cursor?: number; fingerprint?: string }): boolean
   setNow(value: number): void
 }
@@ -893,13 +911,16 @@ function blockOf(text: string): string {
   return start === -1 || end === -1 ? '' : text.slice(start, end + BASELINE_CLOSE.length)
 }
 
-function makePassHarness(memoryOverride: {
-  newLines?: readonly string[]
-  newMemoryIds?: readonly number[]
-} = {}): PassHarness {
+function makePassHarness(
+  memoryOverride: {
+    newLines?: readonly string[]
+    newMemoryIds?: readonly number[]
+  } = {},
+  seed?: { type: string; data: unknown },
+): PassHarness {
   const dataDir = tempDir('mc-delta-pass-')
   const stores = openStores(dataDir)
-  const fake = makeSession()
+  const fake = makeSession(seed)
   const sessionId = 's-delta'
   let clock = 1_000_000
   const memories = {
@@ -930,6 +951,12 @@ function makePassHarness(memoryOverride: {
     sessionId,
     text: fake.text,
     generation: fake.generation,
+    nodes: fake.nodes,
+    textOfSeq: fake.textOfSeq,
+    append: (type, data) => {
+      const appended = (fake.session as unknown as { append: (t: string, d: unknown) => { seq: number } }).append(type, data)
+      return appended.seq
+    },
     pass,
     setNow: (value: number) => {
       clock = value
@@ -974,6 +1001,69 @@ describe('management pass: the m[1] delta lane', () => {
       expect(h.stores.baselineState(h.sessionId)?.maxMemoryMutationId).toBe(12)
       expect(h.stores.baselineState(h.sessionId)?.epoch).toBe(1)
       expect(h.text()).toContain('  <updated id="8">another change</updated>')
+    } finally {
+      h.stores.close()
+    }
+  })
+
+  it('never attaches the baseline to a compaction checkpoint node', () => {
+    // A checkpoint sits at the head of the surface after the host (or the
+    // engine) compacts the opening span. Attaching m[0] there used to make the
+    // checkpoint's own text ride inside the baseline forever — every refresh
+    // re-emitted it and rewrote the node, and the GUI lost the card it
+    // correlates by `source.kind === 'compact-checkpoint'`.
+    const h = makePassHarness({}, {
+      type: 'user/message',
+      data: {
+        id: 'cp-1',
+        role: 'user',
+        source: { kind: 'compact-checkpoint', compactionId: 'compaction-1' },
+        content: [{ type: 'text', text: 'This is an automatically generated checkpoint.\n<compacted-summary>old work</compacted-summary>' }],
+      },
+    })
+    try {
+      const checkpointSeq = h.nodes()[0] as number
+      const userSeq = h.append('user/message', {
+        id: 'u-2',
+        role: 'user',
+        source: { kind: 'user' },
+        content: [{ type: 'text', text: '§1§ the real request' }],
+      })
+
+      expect(h.pass({ updates: [], cursor: 12, fingerprint: 'fp-a' })).toBe(true)
+
+      // The checkpoint keeps its own identity and bytes — no baseline inside it.
+      expect(h.nodes()).toContain(checkpointSeq)
+      expect(h.textOfSeq(checkpointSeq)).toContain('<compacted-summary>')
+      expect(h.textOfSeq(checkpointSeq)).not.toContain('<magic-context>')
+
+      // The baseline landed on the ordinary user node instead.
+      const landed = h.nodes()[h.nodes().length - 1] as number
+      expect(landed).not.toBe(checkpointSeq)
+      expect(h.textOfSeq(landed)).toContain('<magic-context>')
+      expect(h.textOfSeq(landed)).toContain('§1§ the real request')
+      expect(h.stores.baselineState(h.sessionId)?.nodeSeq).toBe(landed)
+      expect(userSeq).toBeLessThan(landed)
+    } finally {
+      h.stores.close()
+    }
+  })
+
+  it('writes nothing when a checkpoint is the only user node on the surface', () => {
+    const h = makePassHarness({}, {
+      type: 'user/message',
+      data: {
+        id: 'cp-only',
+        role: 'user',
+        source: { kind: 'compact-checkpoint', compactionId: 'compaction-2' },
+        content: [{ type: 'text', text: 'checkpoint only' }],
+      },
+    })
+    try {
+      const before = [...h.nodes()]
+      expect(h.pass({ updates: [], cursor: 12, fingerprint: 'fp-a' })).toBe(false)
+      expect([...h.nodes()]).toEqual(before)
+      expect(h.stores.baselineState(h.sessionId)).toBeUndefined()
     } finally {
       h.stores.close()
     }
