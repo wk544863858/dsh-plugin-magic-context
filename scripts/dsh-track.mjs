@@ -22,7 +22,7 @@
  * It aborts and restores `dsh-base` if the replay conflicts.
  */
 import { spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { PKG, REPO, SCRIPTS } from './test-host.mjs'
@@ -162,6 +162,15 @@ if (apply) {
 
   console.log(`dsh-track: applying ${tag} — ${advance} upstream commits onto ${BASE_REF} (${baseOld.slice(0, 9)})`)
   if (!reportBoundary(BASE_REF, LOCAL_BRANCH)) fail('boundary assertion failed; refusing to replay', 1)
+
+  // A replay rewrites every local commit. Keep a patch series that `git am` can
+  // restore from, so the work survives even if the reflog is gone.
+  const backupDir = join(REPO, '<tmp>', `${tag}-pre-replay`)
+  mkdirSync(backupDir, { recursive: true })
+  git(['format-patch', `${BASE_REF}..${LOCAL_BRANCH}`, '-o', backupDir])
+  const patchCount = readdirSync(backupDir).filter((name) => name.endsWith('.patch')).length
+  console.log(`dsh-track: offline backup = ${patchCount} patches in ${backupDir}`)
+  console.log(`  restore with: git am ${join(backupDir, '*.patch')}`)
 
   const before = git(['rev-parse', LOCAL_BRANCH]).out
   const replay = spawnSync('git', ['rebase', '--onto', tag, BASE_REF, LOCAL_BRANCH], { cwd: REPO, stdio: 'inherit' })
