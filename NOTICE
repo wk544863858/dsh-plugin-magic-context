@@ -43,6 +43,18 @@ Taken verbatim from DSH (`packages/core/agent-loop/tests/mock-adapter.ts`,
 MIT) so that this repository's suite runs without a DSH checkout. The body is
 byte-identical to upstream; only a provenance header was added.
 
+## Vendored files: `vendor/onnx/` — onnxruntime-web (WASM backend subset)
+
+MIT License, Copyright (c) Microsoft Corporation.
+
+Three files taken verbatim from `onnxruntime-web`
+**1.31.0-dev.20260914-8d85527a0** (`dist/ort.node.min.mjs`,
+`dist/ort-wasm-simd-threaded.jsep.mjs`, `dist/ort-wasm-simd-threaded.jsep.wasm`)
+so the local embedding lane runs on WebAssembly without the ~287 MB native
+`onnxruntime-node` package. Verified against the native fp32 pipeline at
+cosine 1.0000000 (2026-10-09). The tokenizers binding (`@huggingface/tokenizers`,
+Apache-2.0) is consumed as a normal npm dependency, not vendored.
+
 ## Everything else
 
 No other third-party code is bundled. The build output (`lib/`) is compiled

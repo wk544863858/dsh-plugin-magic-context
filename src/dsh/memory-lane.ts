@@ -108,7 +108,11 @@ export function openMemoryLane(
   }
   // B4 gates only the BACKFILL lane below; the embedder itself stays available
   // for the query-side embedding that scores the STORED vectors.
-  const embedBackfill = liveBoolean(config.memory?.embedBackfill, false)
+  // The fill lane is on by default since the WASM embedding stack ships with
+  // the package (0.3.0): the runtime cost is bounded by memory-search's
+  // MAX_IN_MEMORY_EMBEDDINGS cap, and persistence is untouched (the lane fills
+  // in-memory scores only — the store's rows are never written).
+  const embedBackfill = liveBoolean(config.memory?.embedBackfill, true)
   const embedder = memorySearch === undefined
     ? undefined
     : openLocalEmbedder({
@@ -185,8 +189,10 @@ export function openMemoryLane(
         queryEmbedding,
         queryModelId: modelId,
         ...request.visibleMemoryIds === undefined ? {} : { visibleMemoryIds: request.visibleMemoryIds },
-        // B4: the in-memory fill lane is off unless memory.embedBackfill —
-        // scoring then uses only the store's persisted vectors.
+        // The in-memory fill lane scores candidates lacking stored vectors;
+        // default on (the WASM stack ships in-package), bounded by the
+        // search lane's MAX_IN_MEMORY_EMBEDDINGS cap. `memory.embedBackfill:
+        // false` turns it off for latency-sensitive setups.
         ...embedBackfill && embedder !== undefined ? {
           embedTexts: async (texts: readonly string[]) => {
             const vectors = await embedder.embed(texts)

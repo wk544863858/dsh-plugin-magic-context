@@ -43,17 +43,15 @@ dsh plugin --profile desktop add <git-url 或 本仓库路径>
 运行时真正 import 的五个宿主包同时列为**精确版本 dependencies**（打包安装
 时随包解析；link: 开发安装则由本仓自己的 node_modules 提供）。
 
-**本地 embedding 是可选能力**：`@huggingface/transformers` +
-`onnxruntime-node`（合计约 200-400 MB）声明为 **optional peers**，默认安装
-不下载。缺失时检索自动降级为 FTS 车道（journal 有一条可读的 warn，doctor
-会报"尚未加载过本地模型"）。想要向量召回的接收方显式安装：
-
-```powershell
-pnpm --profile desktop add @huggingface/transformers@4.3.0 onnxruntime-node@1.30.0
-```
-
-（或在 profile `package.json` 手动加这两个包再 `pnpm install`；首次 embed
-会从 huggingface.co 下载 MiniLM 模型约 90 MB，缓存在插件数据目录 `models/`。）
+**本地 embedding 默认启用（0.3.0 起，WASM）**：运行时从原生
+`onnxruntime-node`（~287 MB 平台二进制）换成 **onnxruntime-web 的 WASM 后端**
+（`vendor/onnx/` 内置 27 MB，MIT，Microsoft）。安装即有向量车道，无额外依赖、
+无原生编译；与 native fp32 管线逐位同空间（spike 实测 cosine 1.0000000，
+中英文 6 文本探针，2026-10-09）。首次 `embed()` 从 huggingface.co 下载
+MiniLM 模型（~90 MB，失败自动切 hf-mirror.com），缓存在插件数据目录
+`models/`。检索的候选内嵌补分默认开启（受 MAX_IN_MEMORY_EMBEDDINGS 上限
+约束）；`memory.embedBackfill: false` 可关。任何失败（断网/资产缺失）都
+fail-open 降级 FTS 车道，journal 有可读 warn，doctor 有裁决。
 
 卸载 / 停用：
 - GUI 插件页停用该 bundle（写 profile patch 的 `disabled`），或
