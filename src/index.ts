@@ -1162,12 +1162,22 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
       maintenanceBusy = false
     }
   }
-  const maintenanceTimer = setInterval(() => { void runMaintenance() }, Math.max(60_000, liveNumber(config.maintenance?.intervalMs, 1_800_000)))
-  const maintenanceFirst = setTimeout(() => { void runMaintenance() }, 60_000)
-  ;(maintenanceTimer as unknown as { unref?: () => void }).unref?.()
+  // The interval starts only AFTER the boot catch-up run: with both timers
+  // armed at mount they fire together at 60s and sweep twice (measured: two
+  // identical maintenance rows per boot, and two llm calls for the same batch).
+  let maintenanceTimer: ReturnType<typeof setInterval> | undefined
+  const maintenanceFirst = setTimeout(() => {
+    void runMaintenance().finally(() => {
+      maintenanceTimer = setInterval(
+        () => { void runMaintenance() },
+        Math.max(60_000, liveNumber(config.maintenance?.intervalMs, 1_800_000)),
+      )
+      ;(maintenanceTimer as unknown as { unref?: () => void }).unref?.()
+    })
+  }, 60_000)
   ;(maintenanceFirst as unknown as { unref?: () => void }).unref?.()
   disposers.push(() => {
-    clearInterval(maintenanceTimer)
+    if (maintenanceTimer !== undefined) clearInterval(maintenanceTimer)
     clearTimeout(maintenanceFirst)
   })
 
