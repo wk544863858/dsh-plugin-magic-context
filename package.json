@@ -35,6 +35,7 @@
     "sync:specs": "node scripts/sync-specs.mjs",
     "test": "node scripts/mc-test.mjs --quick",
     "test:full": "node scripts/mc-test.mjs --full",
+    "track": "node scripts/dsh-track.mjs --check",
     "bootstrap:testhost": "node scripts/bootstrap-testhost.mjs"
   },
   "peerDependencies": {
