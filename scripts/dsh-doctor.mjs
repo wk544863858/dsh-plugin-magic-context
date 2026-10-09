@@ -30,6 +30,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
+import { doctorDomainFindings } from './domain-checks.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PKG = join(HERE, '..')
@@ -219,34 +220,10 @@ if (!existsSync(ADAPTER_DB)) {
 } else {
   try {
     const db = readOnly(ADAPTER_DB)
-    const hasDomains = db
-      .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='domains'")
-      .get() !== undefined
-    if (!hasDomains) {
-      say('⚠', '自有库没有 domains 表（schema < v8）：全局域车道尚未接管')
-    } else {
-      const domains = db.prepare(
-        `SELECT d.domain_id AS id, d.kind AS kind, d.enabled AS enabled, d.budget_tokens AS budget,
-                d.cap AS cap, (SELECT COUNT(*) FROM domain_members m WHERE m.domain_id = d.domain_id) AS members
-           FROM domains d ORDER BY d.kind, d.domain_id`,
-      ).all()
-      if (domains.length === 0) {
-        say('⚠', '没有任何全局域：跨项目共享仍在走契约回落（node scripts/mc-import-workspace.mjs 幂等导入）')
-      }
-      for (const domain of domains) {
-        const on = Number(domain.enabled) === 1
-        say(on ? '✓' : ' ', `${domain.id} [${domain.kind}] ${on ? '启用' : '停用'} · budget ${domain.budget} · cap ${domain.cap} · ${domain.members} 成员`)
-      }
-      if (domains.length > 0 && domains.every(domain => Number(domain.enabled) === 0)) {
-        say('⚠', '全部域停用：路由已就绪但未接管（确认成员后用 /ctx-global enable <domain>）')
-      }
-      const pendingConfirmations = db
-        .prepare("SELECT COUNT(*) AS n FROM profile_confirmations WHERE state='pending'").get()?.n ?? 0
-      const pendingCandidates = db
-        .prepare("SELECT COUNT(*) AS n FROM global_candidates WHERE state='pending'").get()?.n ?? 0
-      say(pendingConfirmations > 0 ? '⚠' : ' ', `画像确认队列待确认 ${pendingConfirmations} 条${pendingConfirmations > 0 ? '（/ctx-profile list）' : ''}`)
-      say(pendingCandidates > 0 ? '⚠' : ' ', `全局候选待定 ${pendingCandidates} 条${pendingCandidates > 0 ? '（/ctx-global candidates）' : ''}`)
-    }
+    // 判定逻辑住 scripts/domain-checks.mjs（纯函数），这里只打印：这样每个 WARN
+    // 都能在 tests/domain-checks.spec.ts 里用合成库做"人为破坏必须报警"的对照。
+    const glyph = { ok: '✓', info: ' ', warn: '⚠' }
+    for (const finding of doctorDomainFindings(db)) say(glyph[finding.level] ?? ' ', finding.text)
     db.close()
   } catch (error) {
     say('⚠', `域状态读取失败：${error.message}`)

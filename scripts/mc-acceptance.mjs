@@ -19,6 +19,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { acceptanceDomainItems } from './domain-checks.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG = resolve(HERE, '..');
@@ -229,6 +230,13 @@ if (dsh) {
   for (const p of promotes) for (const ins of p.d.inserted ?? []) if (ins?.id !== undefined) promotedIds.add(Number(ins.id));
 
   const mc = openReadOnly(MC_DB, 'mc');
+
+  // ─────────────────────────────────────────────────── 6b. 全局域车道（WP13）
+  // 判定逻辑在 scripts/domain-checks.mjs（纯函数），每一条都在
+  // tests/domain-checks.spec.ts 里配了"人为破坏必须报警"的负向样本；这里只汇总。
+  // 两个库各司其职：域与队列在适配器库，画像池在契约库（mc 可能是 null）。
+  for (const item of acceptanceDomainItems(dsh, mc)) add(item.level, item.id, item.detail, item.evidence);
+
   if (mc) {
     const mcVersion = mc.prepare('SELECT MAX(version) AS v FROM schema_migrations WHERE version < 10000').get()?.v ?? 0;
     const maxSupported = Number((readFileSync(join(PKG, 'src', 'core', 'memory-bridge.ts'), 'utf8').match(/MEMORY_SCHEMA_MAX_VERSION\s*=\s*(\d+)/) ?? [])[1] ?? 0);

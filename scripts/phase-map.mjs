@@ -98,6 +98,7 @@ const PHASE_D = [
   'tests/vector-lane.spec.ts',
   'tests/vector-backfill.spec.ts',
   'tests/report-classify.spec.ts',
+  'tests/domain-checks.spec.ts',
   'tests/strip-drill.spec.ts',
 ]
 
@@ -145,12 +146,12 @@ export const PHASES = [
     checks: [],
     blind: [
       'D-5 剥离演练已做（tests/strip-drill.spec.ts + docs/strip-drill-report-2026-10-10.md）；'
-      + '其白名单=org 域闭环（建域→候选→批准→注入→退役）+ user 域采集→评审→注入',
-      'user 域的"退役画像行"没有命令路径 ⇒ 演练在 user 域停在注入（报告盲区 1）',
-      '发布是"复制"而非"镜像"：源行后续改写不传播到域行（报告盲区 2）',
+      + '白名单=两条闭环都走完 5 步：org 域（建域→候选→批准→注入→退役）+ user 域（采集→评审→注入→退役）',
+      '发布是"复制"而非"镜像"：源行后续改写不传播到域行（报告盲区 2，尚无对账 verify）',
       '四个写开关默认全 off ⇒ 演练证明的是能力闭环，不是线上已开启',
       'WP11 向量回填的真写未执行（开关默认 off）；真库 dry-run 已做（parity 1.000000 PASS）',
-      'doctor / mc-report 的域检查是真库实测，无 hermetic 用例',
+      'doctor / mc-acceptance 的域判定已有 hermetic 正负样本（tests/domain-checks.spec.ts），'
+      + '但真库采样仍是各一次：阈值与采样量的长期漂移只能靠趋势，不能靠这两条判据',
     ],
   },
 ]
