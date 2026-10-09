@@ -2,7 +2,9 @@
 node_modules/
 
 # Build output (tsc -p tsconfig.build.json + copy-client). Rebuild with `npm run build`.
-lib/
+# Anchored: a bare `lib/` matches at ANY depth, and silently swallowed
+# scripts/lib/ (a hand-written module that must be committed) on 2026-10-10.
+/lib/
 
 # Test/coverage residue
 coverage/

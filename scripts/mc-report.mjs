@@ -24,6 +24,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { existsSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { homedir } from 'node:os'
+import { classifyHistorianFailure, describeCauses, extractQuotaReset, splitByClass } from './report-classify.mjs'
 
 // ─────────────────────────── 常量 ───────────────────────────
 
@@ -725,6 +726,10 @@ function computeMetrics(rows) {
       // number about MY rebuilds, not about the historian.
       recovered: 0,
       other: 0,
+      // 失败按"该采取什么行动"分类：配额/网络/超时是环境问题，输出非法才是代码问题。
+      // 混在一起报一个 53.4% 会让人以为流水线坏了（实测 47 条里 32 条是账号配额耗尽）。
+      byCause: {},
+      quotaResetAt: null,
       durations: [],
       tokens: 0,
       importance: {},
@@ -893,10 +898,18 @@ switch (row.kind) {
           const partial = toNum(d.partialChars)
           const output = toNum(d.outputChars)
           const caps = Array.isArray(d.attemptCaps) ? d.attemptCaps.map((c) => String(c)).join('/') : ''
+          const kindText = toText(d.kind) || toText(d.error)
+          const reasonText = toText(d.reason) || toText(d.error)
+          const cause = classifyHistorianFailure(kindText, reasonText)
+          bump(m.historian.byCause, cause)
+          if (cause === 'environment:quota' && m.historian.quotaResetAt === null) {
+            m.historian.quotaResetAt = extractQuotaReset(reasonText)
+          }
           m.historian.failures.push({
             at: row.at,
-            kind: toText(d.kind) || toText(d.error),
-            reason: toText(d.reason) || toText(d.error),
+            kind: kindText,
+            reason: reasonText,
+            cause,
             stage: toText(d.stage),
             attempts: toNum(d.attempts),
             detail: [
@@ -1177,10 +1190,25 @@ function buildHealth(ctx) {  const { db, opened, dbExists, openError, valid, sch
         push('historian-never-ran', 'historian 从未运行（窗口内没有 phase=start/done/failed 事件）。')
       }
       if (hist.failureRate !== null && hist.failureRate > 0.2) {
+        const causes = describeCauses(hist.byCause)
+        const split = splitByClass(hist.byCause)
         push(
           'historian-failure-rate',
           `historian 失败率 ${(hist.failureRate * 100).toFixed(1)}% > 20%（done=${hist.done}, failed=${hist.failed}`
-          + `${hist.recovered > 0 ? `, 另有重建补记 ${hist.recovered} 不计入` : ''}）。`,
+          + `${hist.recovered > 0 ? `, 另有重建补记 ${hist.recovered} 不计入` : ''}）`
+          + `${causes === '' ? '' : `；按成因：${causes}`}`
+          + `——pipeline（截断/请求形状/输出）${fmtInt(split.pipeline)} 条要改代码或容量，`
+          + `environment（配额/超时/服务端/网络）${fmtInt(split.environment)} 条等待或重试即可。`,
+        )
+      }
+      // 配额耗尽单独一条：它不是"historian 坏了"，而是**记忆摄取停摆**，而且消息里
+      // 通常带着恢复时间——这是整份报告里最可行动的一个事实。
+      if (Number(hist.byCause['environment:quota'] ?? 0) > 0) {
+        push(
+          'historian-quota-exhausted',
+          `historian 有 ${fmtInt(Number(hist.byCause['environment:quota']))} 次因配额耗尽失败`
+          + `${hist.quotaResetAt === null ? '' : `，provider 声明的恢复时间 ${hist.quotaResetAt}`}`
+          + '：在此期间**新记忆不会被产出**。这不是插件缺陷，但意味着记忆摄取停着。',
         )
       }
       // 记忆车道扳机线（staging 启用条件的三项观测锚点，命中才提示）。
@@ -1544,7 +1572,8 @@ function renderText(payload) {
       + `${h.recovered > 0 ? ` / 重挂载补记 ${fmtInt(h.recovered)}` : ''}`
       + `${h.other > 0 ? ` / 其他 ${fmtInt(h.other)}` : ''}`
       + `；失败率 ${h.failureRate === null ? '-' : `${(h.failureRate * 100).toFixed(1)}%`}`
-      + `${h.recovered > 0 ? '（实时失败率，已排除重建补记）' : ''}`,
+      + `${h.recovered > 0 ? '（实时失败率，已排除重建补记）' : ''}`
+      + `${Object.keys(h.byCause).length === 0 ? '' : `；成因 ${describeCauses(h.byCause)}`}`,
     )
     lines.push(
       `    耗时        : 平均 ${fmtDuration(h.avgDurationMs)}，最大 ${fmtDuration(h.maxDurationMs)}（样本 ${h.durations.length}）`
