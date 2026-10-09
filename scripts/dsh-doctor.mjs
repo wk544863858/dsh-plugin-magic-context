@@ -210,8 +210,51 @@ if (existsSync(ADAPTER_DB)) {
   }
 }
 
-// ── 6. embedding 车道 ──
-blocks.push({ title: '6. 本地 embedding 车道', lines: [] })
+// ── 6. 全局域与画像（schema v8 的接管状态） ──
+// 这一节回答"接管做完了没有"，而不是"有没有坏"：域已导入却全停用、确认队列
+// 积压、候选满足复现门却没人复核——都不是故障，但都需要人看一眼。
+blocks.push({ title: '6. 全局域与画像', lines: [] })
+if (!existsSync(ADAPTER_DB)) {
+  say(' ', '（自有库不存在，跳过）')
+} else {
+  try {
+    const db = readOnly(ADAPTER_DB)
+    const hasDomains = db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='domains'")
+      .get() !== undefined
+    if (!hasDomains) {
+      say('⚠', '自有库没有 domains 表（schema < v8）：全局域车道尚未接管')
+    } else {
+      const domains = db.prepare(
+        `SELECT d.domain_id AS id, d.kind AS kind, d.enabled AS enabled, d.budget_tokens AS budget,
+                d.cap AS cap, (SELECT COUNT(*) FROM domain_members m WHERE m.domain_id = d.domain_id) AS members
+           FROM domains d ORDER BY d.kind, d.domain_id`,
+      ).all()
+      if (domains.length === 0) {
+        say('⚠', '没有任何全局域：跨项目共享仍在走契约回落（node scripts/mc-import-workspace.mjs 幂等导入）')
+      }
+      for (const domain of domains) {
+        const on = Number(domain.enabled) === 1
+        say(on ? '✓' : ' ', `${domain.id} [${domain.kind}] ${on ? '启用' : '停用'} · budget ${domain.budget} · cap ${domain.cap} · ${domain.members} 成员`)
+      }
+      if (domains.length > 0 && domains.every(domain => Number(domain.enabled) === 0)) {
+        say('⚠', '全部域停用：路由已就绪但未接管（确认成员后用 /ctx-global enable <domain>）')
+      }
+      const pendingConfirmations = db
+        .prepare("SELECT COUNT(*) AS n FROM profile_confirmations WHERE state='pending'").get()?.n ?? 0
+      const pendingCandidates = db
+        .prepare("SELECT COUNT(*) AS n FROM global_candidates WHERE state='pending'").get()?.n ?? 0
+      say(pendingConfirmations > 0 ? '⚠' : ' ', `画像确认队列待确认 ${pendingConfirmations} 条${pendingConfirmations > 0 ? '（/ctx-profile list）' : ''}`)
+      say(pendingCandidates > 0 ? '⚠' : ' ', `全局候选待定 ${pendingCandidates} 条${pendingCandidates > 0 ? '（/ctx-global candidates）' : ''}`)
+    }
+    db.close()
+  } catch (error) {
+    say('⚠', `域状态读取失败：${error.message}`)
+  }
+}
+
+// ── 7. embedding 车道 ──
+blocks.push({ title: '7. 本地 embedding 车道', lines: [] })
 say(' ', `memory.embedBackfill 缺省 = ${BACKFILL_DEFAULT ? 'true' : 'false'}（后置回填车道）`)
 say(' ', '查询侧向量车道始终可用；共享向量读取前需要余弦 ≥0.99 的一致性证明')
 if (existsSync(ACTIVITY_LOG)) {
