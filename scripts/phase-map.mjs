@@ -1,0 +1,149 @@
+/**
+ * The phase map — which specs gate which phase, and what each phase still
+ * cannot see.
+ *
+ * The execution plan requires a stage gate: work may only move to the next
+ * phase when the current phase's suite is green. A suite is only a gate if
+ * nothing can fall out of it, so this table is asserted against the filesystem
+ * (tests/phase-map.spec.ts): every spec in the repository must belong to at
+ * least one phase, every path listed here must exist, and every phase must name
+ * its blind spots.
+ *
+ * `blind` is not decoration. A green phase suite that quietly covers nothing is
+ * the failure mode this file exists to prevent, so the runner prints the blind
+ * list on every run — pass or fail.
+ *
+ * Phase 0 is the plugin's existing regression suite: everything that shipped
+ * before the takeover work. It gates every later phase, because new lanes must
+ * not break the old ones.
+ */
+
+/** Phase 0: the behaviour that already shipped, before any of the takeover work. */
+const PHASE_BASE = [
+  'tests/phase-map.spec.ts',
+  'tests/client-pure.spec.ts',
+  'tests/compaction-engine.spec.ts',
+  'tests/compartments.spec.ts',
+  'tests/config-schema.spec.ts',
+  'tests/context-pressure.spec.ts',
+  'tests/embedding-wasm.spec.ts',
+  'tests/emergency-drop.spec.ts',
+  'tests/historian-chunking.spec.ts',
+  'tests/historian-terminal.spec.ts',
+  'tests/host-drift-tolerance.spec.ts',
+  'tests/journal.spec.ts',
+  'tests/maintenance-wiring.spec.ts',
+  'tests/maintenance.spec.ts',
+  'tests/management-pass-fail.spec.ts',
+  'tests/memory-bridge.spec.ts',
+  'tests/memory-gate-fence.spec.ts',
+  'tests/memory-promotion.spec.ts',
+  'tests/memory-retrieval-wiring.spec.ts',
+  'tests/memory-scoring.spec.ts',
+  'tests/memory-search.spec.ts',
+  'tests/memory-tool-bridge.spec.ts',
+  'tests/memory-write.spec.ts',
+  'tests/phase1.spec.ts',
+  'tests/phase2.spec.ts',
+  'tests/poc.spec.ts',
+  'tests/probe.spec.ts',
+  'tests/project-drift.spec.ts',
+  'tests/publish-guard.spec.ts',
+  'tests/publish-pairing.spec.ts',
+  'tests/recomp.spec.ts',
+  'tests/reduce-guidance.spec.ts',
+  'tests/search-hint-carrier.spec.ts',
+  'tests/search-hint.spec.ts',
+  'tests/session-notice.spec.ts',
+  'tests/store-fusion.spec.ts',
+  'tests/tags-retention.spec.ts',
+  'tests/telemetry.spec.ts',
+  'tests/wire-repair.spec.ts',
+]
+
+/** Phase A: the substrate. Contract frozen, adapter schema v8, domains activate. */
+const PHASE_A = [
+  'tests/contract-freeze.spec.ts',
+  'tests/store-schema-v8.spec.ts',
+  'tests/domain-import.spec.ts',
+  'tests/domain-visibility.spec.ts',
+  'tests/memory-delta.spec.ts',
+]
+
+/**
+ * Phase B: the `user` domain. Collection and review WRITE the frozen contract
+ * and are still gated on an explicit human go-ahead, so they have no specs yet
+ * and are listed as blind.
+ */
+const PHASE_B = [
+  'tests/directive-detect.spec.ts',
+  'tests/profile-confirmation.spec.ts',
+  'tests/profile-render.spec.ts',
+]
+
+/** Phase C: org/machine domains. Publishing writes the contract — not started. */
+const PHASE_C = []
+
+/** Phase D: the operating loop — commands, telemetry, backfill, drill. */
+const PHASE_D = [
+  'tests/command-surface.spec.ts',
+]
+
+export const PHASES = [
+  {
+    id: '0',
+    title: '0 基线回归（接管前已发布的行为）',
+    specs: PHASE_BASE,
+    checks: [],
+    blind: ['不含接管新增的域/画像/命令车道——那四条见 A–D'],
+  },
+  {
+    id: 'a',
+    title: 'A 地基（契约冻结 / schema v8 / 域激活）',
+    specs: PHASE_A,
+    /** Extra commands that must pass for the gate, run after the specs. */
+    checks: [{ label: 'contract freeze', script: 'scripts/mc-contract-freeze.mjs', args: ['verify', '--allow-missing'] }],
+    blind: ['真库写入路径（WP4 共享属性维护尚未开工）'],
+  },
+  {
+    id: 'b',
+    title: 'B user 域（画像）',
+    specs: PHASE_B,
+    checks: [],
+    blind: [
+      'WP5 采集：写 user_memory_candidates，等用户放行',
+      'WP7 评审：写 user_memories，等用户放行',
+      '因此本阶段的候选池与评审收敛没有端到端用例',
+    ],
+  },
+  {
+    id: 'c',
+    title: 'C org / machine 域',
+    specs: PHASE_C,
+    checks: [],
+    blind: [
+      'WP9/WP10 全部未开工：发布共享 memories 是契约写入，等用户放行',
+      '故本阶段没有任何用例——运行器必须报「空阶段」而不是绿',
+    ],
+  },
+  {
+    id: 'd',
+    title: 'D 运维面（命令 / 观测 / 回填 / 剥离演练）',
+    specs: PHASE_D,
+    checks: [],
+    blind: [
+      'WP11 向量回填：写 memory_embeddings，等用户放行',
+      'D-5 剥离演练需要真机多会话，尚未执行',
+      'doctor / mc-report 的域检查是真库实测，无 hermetic 用例',
+    ],
+  },
+]
+
+/** Every spec path the map refers to. */
+export function mappedSpecs() {
+  return [...new Set(PHASES.flatMap(phase => phase.specs))]
+}
+
+export function phaseById(id) {
+  return PHASES.find(phase => phase.id === id)
+}
