@@ -149,12 +149,26 @@ export interface MagicContextDshConfig {
      */
     evidenceRoot?: string
     /**
-     * Backfill stored-query vectors for rows the shared store has none of
-     * (the B4 lane). Default false: the query side embeds on demand anyway,
-     * and the backfill costs a local model load. Intentionally undocumented
-     * in the settings schema — profile-JSON only.
+     * Embed query-side candidates in memory instead of reading stored vectors
+     * (the B4 lane, `memory-lane.ts`). Default TRUE — this is what lets a search
+     * work at all on rows the store has no vector for. It writes nothing.
+     * (The old comment here claimed a false default while the code read true;
+     * the flag was never the backfill switch, and WP11 added the real one below.)
      */
     embedBackfill?: boolean
+    /**
+     * WP11: fill `memory_embeddings` for active rows the dominant space is
+     * missing. Default FALSE — this is the switch that WRITES vectors into the
+     * shared store, so it is opt-in, and it only ever writes after the
+     * shared-space parity gate has passed (see `vector-backfill.ts`).
+     */
+    vectorBackfill?: boolean
+    /**
+     * Rows per maintenance tick for the vector backfill (default 24). Bounds how
+     * much of the shared store one pass touches; the remaining gap is picked up
+     * by the next tick.
+     */
+    vectorBackfillLimit?: number
   }
   /**
    * Turn the reduce-guidance band (desk section + Channel 1/2) off entirely

@@ -96,6 +96,7 @@ const PHASE_C = [
 const PHASE_D = [
   'tests/command-surface.spec.ts',
   'tests/vector-lane.spec.ts',
+  'tests/vector-backfill.spec.ts',
   'tests/report-classify.spec.ts',
 ]
 

@@ -139,15 +139,28 @@ export const FTS_DDL = `
   END;
 `
 
-/** The classify/verify artefact tables the §4.5 clears target. */
+/**
+ * The classify/verify artefact tables the §4.5 clears target.
+ *
+ * Shapes verified against the live contract on 2026-10-10. The earlier version
+ * of this fixture had drifted: `memory_embeddings` was declared with `model` and
+ * a `created_at` column, neither of which exists upstream (the real key is
+ * `(memory_id, model_id)` with a NOT NULL blob), and `memory_verifications` was
+ * missing two NOT NULL columns. A fixture that does not match the store makes
+ * every test that touches it prove nothing.
+ */
 export const ARTEFACT_DDL = `
   CREATE TABLE memory_embeddings (
-    memory_id INTEGER NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
-    model TEXT NOT NULL, embedding BLOB, created_at INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY(memory_id, model));
+    memory_id INTEGER NOT NULL,
+    embedding BLOB NOT NULL,
+    model_id TEXT NOT NULL,
+    PRIMARY KEY(memory_id, model_id));
   CREATE TABLE memory_verifications (
-    memory_id INTEGER NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
-    file_path TEXT NOT NULL, verified_at INTEGER NOT NULL DEFAULT 0,
+    memory_id INTEGER NOT NULL,
+    file_path TEXT NOT NULL,
+    verified_at INTEGER NOT NULL,
+    mapped_at INTEGER NOT NULL,
+    mapping_origin TEXT NOT NULL,
     PRIMARY KEY(memory_id, file_path));
 `
 

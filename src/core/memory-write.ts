@@ -122,6 +122,12 @@ export type MemoryWriteFailureReason =
    * than writing rows a newer storage layer may not accept.
    */
   | 'contract-version-unsupported'
+  /**
+   * The contract lacks the table this write needs (a trimmed or older shape,
+   * e.g. no `memory_embeddings`). Distinct from a version problem: the store is
+   * readable and current, it simply has nothing to write into.
+   */
+  | 'unsupported'
   | 'database-error'
 
 export interface MemoryWriteFailure {
@@ -274,6 +280,11 @@ export type DomainPublishResult =
   | { readonly ok: true; readonly id: number; readonly created: boolean }
   | MemoryWriteFailure
 
+/** WP11 vector write: the memory id, and whether a row was actually added. */
+export type EmbeddingStoreResult =
+  | { readonly ok: true; readonly id: number; readonly created: boolean }
+  | MemoryWriteFailure
+
 export interface MemoryWriter {
   readonly dbPath: string
   readonly status: MemoryWriterStatus
@@ -313,6 +324,23 @@ export interface MemoryWriter {
     readonly content: string
     readonly importance?: number
   }): DomainPublishResult
+  /**
+   * WP11: the content behind a backfill plan's ids, in the order asked.
+   * Unscoped by identity on purpose — a vector is a property of the row, not of
+   * the project that happens to read it.
+   */
+  readContents(ids: readonly number[]): ReadonlyArray<{ readonly id: number; readonly content: string }>
+  /**
+   * WP11: store one vector under `modelId`. This is the ONLY writer of
+   * `memory_embeddings`, and the caller must have proved shared-space parity
+   * first (see `vector-lane.ts` / the lane's shared-space gate): a vector in a
+   * space this adapter cannot reproduce is a poison pill for every read.
+   */
+  storeEmbedding(input: {
+    readonly memoryId: number
+    readonly modelId: string
+    readonly vector: Float32Array
+  }): EmbeddingStoreResult
   /** `archive`: `status = 'archived'` (± reason/supersede) plus an `archive`/`superseded` delta. */
   archiveMemory(input: ArchiveMemoryInput): MemoryWriteResult
   /** `merge`: sources superseded into the aggregated target; `superseded` + `update` deltas. */
@@ -660,6 +688,8 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
       stats: () => ({ rows: 0, mutationLog: 0, epoch: 0, verified: 0, unverified: 0 }),
       writeMemory: () => refused,
       publishDomainMemory: () => refused,
+      readContents: () => [],
+      storeEmbedding: () => refused,
       updateMemory: () => refused,
       archiveMemory: () => refused,
       mergeMemory: () => refused,
@@ -782,6 +812,15 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
     // tables are absent on trimmed databases, hence the table guard.
     const deleteEmbeddings = tables.has('memory_embeddings')
       ? db.prepare('DELETE FROM memory_embeddings WHERE memory_id = ?')
+      : undefined
+    // WP11: the vector backfill is the only writer of this table. Both
+    // statements are prepared together so "can I read the table" and "can I
+    // write it" can never disagree.
+    const selectEmbedding = tables.has('memory_embeddings')
+      ? db.prepare('SELECT 1 AS one FROM memory_embeddings WHERE memory_id = ? AND model_id = ?')
+      : undefined
+    const insertEmbeddingStatement = tables.has('memory_embeddings')
+      ? db.prepare('INSERT INTO memory_embeddings(memory_id, embedding, model_id) VALUES(?, ?, ?)')
       : undefined
     const deleteVerifications = tables.has('memory_verifications')
       ? db.prepare('DELETE FROM memory_verifications WHERE memory_id = ?')
@@ -1104,6 +1143,54 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
           return outcome
         } catch (error) {
           return databaseFailure('publish-domain', error)
+        }
+      },
+      readContents: (ids) => {
+        const out: Array<{ id: number; content: string }> = []
+        for (const id of ids) {
+          try {
+            const row = selectById.get(id) as { id: number; content: string } | undefined
+            if (row !== undefined) out.push({ id: Number(row.id), content: String(row.content) })
+          } catch {
+            // A row that cannot be read is simply not a backfill candidate.
+          }
+        }
+        return out
+      },
+      storeEmbedding: (input) => {
+        if (input.modelId.trim() === '') {
+          return refusal('store-embedding', 'invalid-argument', 'Error: an embedding needs a model id.')
+        }
+        if (input.vector.length === 0) {
+          return refusal('store-embedding', 'invalid-argument', 'Error: an embedding needs at least one dimension.')
+        }
+        if (contractFenced) return fenceRefusal('store-embedding')
+        if (selectEmbedding === undefined || insertEmbeddingStatement === undefined) {
+          return refusal(
+            'store-embedding',
+            'unsupported',
+            'Error: this contract has no memory_embeddings table, so the vector lane cannot be filled.',
+          )
+        }
+        const blocked = authorityYield('store-embedding')
+        if (blocked !== undefined) return blocked
+        try {
+          return runImmediate<EmbeddingStoreResult>(() => {
+            // The contract keys this table `(memory_id, model_id)`; checking
+            // first makes the outcome deterministic and gives an honest
+            // `created`, and the key makes a concurrent second writer harmless.
+            if (selectEmbedding.get(input.memoryId, input.modelId) !== undefined) {
+              return { ok: true, id: input.memoryId, created: false }
+            }
+            insertEmbeddingStatement.run(
+              input.memoryId,
+              Buffer.from(input.vector.buffer, input.vector.byteOffset, input.vector.byteLength),
+              input.modelId,
+            )
+            return { ok: true, id: input.memoryId, created: true }
+          })
+        } catch (error) {
+          return databaseFailure('store-embedding', error)
         }
       },
       updateMemory: (input) => {

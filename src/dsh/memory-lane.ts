@@ -14,6 +14,8 @@ import type { PressurePolicy } from '../core/policy.ts'
 import { openMemoryBridge, DEFAULT_SHARE_CATEGORIES, defaultMemoryDbPath, resolveIdentitySpec, type ActivePeerDomain } from '../core/memory-bridge.ts'
 import { openMemoryWriter, type MemoryWriter } from '../core/memory-write.ts'
 import { openProfileWriter, type ProfileWriter } from '../core/profile-write.ts'
+import { planBackfill } from '../core/vector-lane.ts'
+import { runVectorBackfill, type VectorBackfillOutcome } from '../core/vector-backfill.ts'
 import { openMemorySearch, type MemorySearch, type MemorySearchHit } from '../core/memory-search.ts'
 import { cosineSimilarity, defaultEmbeddingCacheDir, openLocalEmbedder } from '../core/embedding-local.ts'
 import { defineCtxMemoryTool, type LocalDefineTool } from './tool-bridge.ts'
@@ -45,6 +47,11 @@ export interface MemoryLane {
    * collection lane is best-effort by design.
    */
   profileWriter: ProfileWriter | undefined
+  /**
+   * WP11: fill the vector lane (dominant space only). `undefined` result means
+   * the lane is not usable; the caller must not treat it as "nothing to do".
+   */
+  vectorBackfill: (limit: number, journal: Journal) => Promise<VectorBackfillOutcome | undefined>
   memorySearch: MemorySearch | undefined
   /** A2: per-session memory ids the injected block currently renders. */
   visibleMemoryIdsBySession: Map<string, Set<number>>
@@ -252,6 +259,41 @@ export function openMemoryLane(
    *  (MC getVisibleMemoryIds, in-memory: absent = don't filter). */
   const visibleMemoryIdsBySession = new Map<string, Set<number>>()
 
+  /**
+   * WP11: fill the vector lane. `undefined` when the lane cannot be filled at
+   * all (no reader, no embedder, no writable writer) — the caller then does
+   * nothing rather than guessing why.
+   *
+   * The shared-space gate is consulted HERE, through the same memoized
+   * `resolveSharedSpace` the query side uses, so there is exactly one answer to
+   * "can this adapter reproduce the store's vector space" for reading and
+   * writing alike.
+   */
+  const vectorBackfill = async (
+    limit: number,
+    journal: Journal,
+  ): Promise<VectorBackfillOutcome | undefined> => {
+    if (memorySearch === undefined || embedder === undefined || memoryRecall === undefined) return undefined
+    if (memoryWriter === undefined || memoryWriter.status.ok !== true) return undefined
+    laneJournal = journal
+    const space = await resolveSharedSpace()
+    return runVectorBackfill({
+      plan: () => {
+        const plan = planBackfill(memoryRecall.dbPath, { limit })
+        return plan === undefined
+          ? undefined
+          : { modelId: plan.modelId, candidates: plan.candidates, total: plan.total }
+      },
+      contents: (ids) => memoryWriter.readContents(ids),
+      embed: (texts) => embedder.embed(texts),
+      dims: embedder.dims,
+      store: (input) => memoryWriter.storeEmbedding(input),
+      journal,
+      limit,
+      parityModelId: space.modelId,
+    })
+  }
+
   /** The ctx_memory `search` closure: bridge space + shared-space gate. */
   const memorySearchForTool: MemoryToolSearch | undefined = memorySearch === undefined
     ? undefined
@@ -418,6 +460,7 @@ export function openMemoryLane(
     memoryRecall,
     memoryWriter,
     profileWriter,
+    vectorBackfill,
     memorySearch,
     visibleMemoryIdsBySession,
     memorySearchForTool,

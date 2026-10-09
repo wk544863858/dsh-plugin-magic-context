@@ -17,6 +17,10 @@ import type { AdapterStores } from '../core/stores.ts'
 import type { Journal } from '../core/journal.ts'
 import { runMaintenanceTick, type MaintenanceLlm } from '../core/maintenance.ts'
 import { PROFILE_REVIEW_META_KEY, runProfileReview, type ProfileReviewLlm, type ProfileReviewOutcome } from '../core/profile-review.ts'
+import type { VectorBackfillOutcome } from '../core/vector-backfill.ts'
+
+/** WP11 default batch: how many vectors one maintenance tick may add. */
+export const VECTOR_BACKFILL_DEFAULT_LIMIT = 24
 import type { MemoryWriter } from '../core/memory-write.ts'
 import type { ProfileWriter } from '../core/profile-write.ts'
 import { errText } from '../core/types.ts'
@@ -40,6 +44,8 @@ export interface MaintenanceWiring {
   maintenanceLast: () => MaintenanceLast | undefined
   /** The newest profile-review outcome (WP7), for the same panel. */
   profileReviewLast: () => ProfileReviewOutcome | undefined
+  /** The newest vector-backfill outcome (WP11), same panel. */
+  vectorBackfillLast: () => VectorBackfillOutcome | undefined
 }
 
 export function wireMaintenance(input: {
@@ -50,16 +56,19 @@ export function wireMaintenance(input: {
   llm: HistorianLlm | undefined
   writer: MemoryWriter | undefined
   profileWriter: ProfileWriter | undefined
+  /** WP11: the lane's backfill closure; absent when the lane is unusable. */
+  vectorBackfill?: (limit: number, journal: Journal) => Promise<VectorBackfillOutcome | undefined>
   projects: PreStepProjects
   /** The adapter-level disposer list (timers ride it). */
   disposers: Array<() => void>
   /** The compaction engine sets this when the adapter is disposed. */
   isDisposed: () => boolean
 }): MaintenanceWiring {
-  const { ctx, config, stores, journal, llm, writer, profileWriter, projects, disposers, isDisposed } = input
+  const { ctx, config, stores, journal, llm, writer, profileWriter, vectorBackfill, projects, disposers, isDisposed } = input
   const { seenIdentities } = projects
   let maintenanceLast: MaintenanceLast | undefined
   let profileReviewLast: ProfileReviewOutcome | undefined
+  let vectorBackfillLast: VectorBackfillOutcome | undefined
   let maintenanceBusy = false
   const runMaintenance = async (): Promise<void> => {
     if (maintenanceBusy || isDisposed() || stores.closed || journal === undefined) return
@@ -140,6 +149,23 @@ export function wireMaintenance(input: {
         if (review.ran) stores.setMeta(PROFILE_REVIEW_META_KEY, String(Date.now()))
         profileReviewLast = review
       }
+
+      // WP11: fill the vector lane. Also global, also once per tick, and off by
+      // default because it is the switch that writes vectors into the shared
+      // store. `vectorBackfill` returns undefined when the lane is unusable
+      // (no reader/embedder/writer), which is reported as "not run" rather than
+      // silently looking like "nothing missing".
+      if (liveBoolean(config.memory?.vectorBackfill, false) && vectorBackfill !== undefined) {
+        const limit = Math.max(1, Math.floor(config.memory?.vectorBackfillLimit ?? VECTOR_BACKFILL_DEFAULT_LIMIT))
+        const outcome = await vectorBackfill(limit, journal)
+        if (outcome === undefined) {
+          journal.info('vector-lane', 'backfill lane unavailable (no embedder or no writable store)', {
+            outcome: 'backfill-unavailable',
+          })
+        } else {
+          vectorBackfillLast = outcome
+        }
+      }
     } catch (error) {
       journal.error('maintenance', `maintenance tick failed: ${errText(error)}`)
     } finally {
@@ -164,5 +190,6 @@ export function wireMaintenance(input: {
   return {
     maintenanceLast: () => maintenanceLast,
     profileReviewLast: () => profileReviewLast,
+    vectorBackfillLast: () => vectorBackfillLast,
   }
 }

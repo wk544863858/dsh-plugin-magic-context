@@ -408,8 +408,11 @@ describe('agent write path (contract §11)', () => {
       }))
       // Simulate post-classify state so the resets that still fire are observable.
       run(path, "UPDATE memories SET shareable = 1, classified_at = 123, mural_cue = 'cue', mural_cue_hash = 'h', mural_cue_at = 5, mural_cue_rejection_count = 3 WHERE id = ?", id)
-      run(path, 'INSERT INTO memory_embeddings(memory_id, model, created_at) VALUES(?, ?, 0)', id, 'test-model')
-      run(path, 'INSERT INTO memory_verifications(memory_id, file_path, verified_at) VALUES(?, ?, 0)', id, 'src/a.ts')
+      run(path, "INSERT INTO memory_embeddings(memory_id, embedding, model_id) VALUES(?, X'00', 'test-model')", id)
+      // Both artefact tables now mirror the live contract, including the two
+      // NOT NULL columns the fixture used to omit — an insert that only worked
+      // because the fixture was lax proved nothing about the real store.
+      run(path, "INSERT INTO memory_verifications(memory_id, file_path, verified_at, mapped_at, mapping_origin) VALUES(?, ?, 0, 0, 'test')", id, 'src/a.ts')
 
       clock.value = T0 + 60_000
       const updated = writer.updateMemory({

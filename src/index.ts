@@ -563,6 +563,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     llm,
     writer: memoryWriter,
     profileWriter,
+    vectorBackfill: lane.vectorBackfill,
     projects,
     disposers,
     isDisposed: () => adapterDisposed,
