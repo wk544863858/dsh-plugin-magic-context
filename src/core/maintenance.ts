@@ -12,9 +12,12 @@
  *    manifest is applied HOST-side; keep → per-memory `verified_at`
  *    (metadata only, no mutation log), stale → `updateMemory`, wrong →
  *    `archiveMemory` — i.e. the existing contract actions, never a new write
- *    kind. Budget: at most VERIFY_BATCH rows per tick; a failed or unparsable
- *    call is journaled and retried on a later tick (fail-open, like MC's
- *    "a timed-out batch banks what it verified" per-memory watermark).
+ *    kind. Each verdict may also carry an `importance` score, banked through
+ *    the metadata-only `classifyMemories` (MC's classify-memories slice) to
+ *    feed m[0]'s ranking. Budget: at most VERIFY_BATCH rows per tick; a failed
+ *    or unparsable call is journaled and retried on a later tick (fail-open,
+ *    like MC's "a timed-out batch banks what it verified" per-memory
+ *    watermark).
  *
  * Scope deviation (recorded): MC's dreamer sweeps every project in the
  * shared store; the adapter only ever touches rows owned by its own project
@@ -61,8 +64,12 @@ export interface MaintenanceOutcome {
 
 /** TTL rows archived per tick; the list is already capped by `listExpired`. */
 const EXPIRE_BATCH = 200
-/** Unverified rows judged per tick — small on purpose (LLM call per tick). */
-const VERIFY_BATCH = 3
+/** Unverified rows judged per tick — an LLM call per tick. Sized against the
+ * observed promotion inflow (peak ~165 rows/day on 2026-10-09): at the 30-min
+ * cadence the old 3/tick capped the sweep at 144 rows/day — the ceiling
+ * itself. 16 keeps ~6× headroom at a trivial prompt size (16 × 400-char
+ * previews). */
+const VERIFY_BATCH = 16
 /** Per-row content budget in the verification prompt. */
 const CONTENT_PREVIEW = 400
 /** Output cap. Reasoning is billed against it and a heavy thinking pass can
@@ -77,8 +84,9 @@ const VERIFY_INSTRUCTION = [
   '- "stale": outdated or partly wrong; provide the corrected "content" (same style, self-contained).',
   '- "wrong": plain incorrect or harmful; provide a short "reason".',
   '- "skip": cannot judge from the text alone.',
+  'Also score every memory with "importance" (1-100): how load-bearing is it for future sessions? Roughly: 80+ project rules/constraints, 60-79 architecture/config facts, 40-59 routine context, under 40 trivia.',
   'Judge only from general software-engineering plausibility and internal consistency; you have no file access.',
-  'Reply with ONLY a JSON object: {"verdicts":[{"id":<number>,"verdict":"verified"|"stale"|"wrong"|"skip","content"?:string,"reason"?:string}]}',
+  'Reply with ONLY a JSON object: {"verdicts":[{"id":<number>,"verdict":"verified"|"stale"|"wrong"|"skip","importance"?:number,"content"?:string,"reason"?:string}]}',
 ].join('\n')
 
 /** Salvage complete `{...}` objects from a truncated verdict array. A reasoning
@@ -116,7 +124,7 @@ function salvageObjects(inner: string): unknown[] {
 }
 
 /** Extract the first JSON object from a model reply (tolerates prose fences). */
-function parseVerdicts(text: string): Array<{ id: number; verdict: string; content?: string; reason?: string }> {
+function parseVerdicts(text: string): Array<{ id: number; verdict: string; importance?: number; content?: string; reason?: string }> {
   const start = text.indexOf('{')
   const end = text.lastIndexOf('}')
   if (start < 0 || end <= start) return []
@@ -131,13 +139,14 @@ function parseVerdicts(text: string): Array<{ id: number; verdict: string; conte
   }
   const verdicts = (parsed as { verdicts?: unknown }).verdicts
   if (!Array.isArray(verdicts)) return []
-  const out: Array<{ id: number; verdict: string; content?: string; reason?: string }> = []
+  const out: Array<{ id: number; verdict: string; importance?: number; content?: string; reason?: string }> = []
   for (const item of verdicts) {
-    const row = item as { id?: unknown; verdict?: unknown; content?: unknown; reason?: unknown }
+    const row = item as { id?: unknown; verdict?: unknown; importance?: unknown; content?: unknown; reason?: unknown }
     if (typeof row.id !== 'number' || typeof row.verdict !== 'string') continue
     out.push({
       id: row.id,
       verdict: row.verdict,
+      ...(typeof row.importance === 'number' && Number.isFinite(row.importance) ? { importance: row.importance } : {}),
       ...(typeof row.content === 'string' && row.content.trim().length > 0 ? { content: row.content.trim() } : {}),
       ...(typeof row.reason === 'string' && row.reason.trim().length > 0 ? { reason: row.reason.trim() } : {}),
     })
@@ -214,19 +223,25 @@ export async function runMaintenanceTick(deps: MaintenanceDeps): Promise<Mainten
 
   // 2) Verification — configured route or nothing (no session to inherit).
   if (!deps.llm || !deps.route) {
-    deps.journal.info('maintenance', `maintenance: expired ${String(tally.expired)} (verify off: no llm route)`, {
+    const pool = writer.stats(identity).unverified
+    deps.journal.info('maintenance', `maintenance: expired ${String(tally.expired)} (verify off: no llm route; pool ${String(pool)})`, {
       expired: tally.expired,
+      poolUnverified: pool,
+      verify: 'off',
     })
     return { ...tally }
   }
   // The unverified filter runs in SQL (before the limit): filtering a fixed
   // render window instead let the sweep stall once its first rows were
   // verified, because verification deliberately leaves `updated_at` alone and
-  // those rows keep their window slots.
+  // those rows keep their window slots. Recurrence (seen_count ≥ 2) jumps the
+  // queue — see listMemoriesSql.
   const candidates = writer.listMemories(identity, { limit: VERIFY_BATCH, now, unverifiedOnly: true })
   if (candidates.length === 0) {
     deps.journal.info('maintenance', `maintenance: expired ${String(tally.expired)} (nothing to verify)`, {
       expired: tally.expired,
+      poolUnverified: 0,
+      verify: 'idle',
     })
     return { ...tally }
   }
@@ -239,38 +254,76 @@ export async function runMaintenanceTick(deps: MaintenanceDeps): Promise<Mainten
       candidates: candidates.length,
       why: call.why,
       route: `${deps.route!.provider}/${deps.route!.model}`,
+      verify: 'failed',
     })
     return { ...tally, reason: 'llm-failed' }
   }
   const text = call.text
   const verdicts = parseVerdicts(text)
   const verifiedIds: number[] = []
-  const known = new Set(candidates.map(row => row.id))
+  const scored: Array<{ id: number; importance: number }> = []
+  const lagMs: number[] = []
+  const known = new Map(candidates.map(row => [row.id, row] as const))
+  let skipped = 0
   for (const verdict of verdicts) {
-    if (!known.has(verdict.id)) continue
-    if (verdict.verdict === 'verified') verifiedIds.push(verdict.id)
-    else if (verdict.verdict === 'stale' && verdict.content !== undefined) {
+    const row = known.get(verdict.id)
+    if (row === undefined) continue
+    // A score is independent of the verdict's direction — bank it whenever the
+    // model offered one; classifyMemories self-filters archived/foreign rows.
+    if (verdict.importance !== undefined) scored.push({ id: verdict.id, importance: verdict.importance })
+    if (verdict.verdict === 'verified') {
+      verifiedIds.push(verdict.id)
+      lagMs.push(now - row.createdAt)
+    } else if (verdict.verdict === 'stale' && verdict.content !== undefined) {
       const result = writer.updateMemory({ identity, id: verdict.id, content: verdict.content })
-      if (result.ok) tally.updated += 1
+      if (result.ok) {
+        tally.updated += 1
+        lagMs.push(now - row.createdAt)
+      }
     } else if (verdict.verdict === 'wrong') {
       const result = writer.archiveMemory({ identity, id: verdict.id, reason: 'verify-wrong' })
-      if (result.ok) tally.archived += 1
+      if (result.ok) {
+        tally.archived += 1
+        lagMs.push(now - row.createdAt)
+      }
+    } else if (verdict.verdict === 'skip') {
+      skipped += 1
     }
   }
   if (verifiedIds.length > 0) tally.verified = writer.markVerified(identity, verifiedIds, now)
+  // Classify scoring rides the same verdict round trip (MC's classify slice):
+  // metadata-only, applied AFTER the content verdicts so a stale rewrite is
+  // scored on its corrected text and archived rows self-filter through the
+  // status clause. Feed m[0]'s importance ranking (memory-selection order).
+  const scoredApplied = scored.length > 0 ? writer.classifyMemories(identity, scored, now) : 0
   tally.verifyRan = true
+  // Telemetry anchors for the memory lane (mc-report aggregates these):
+  // verification lag and the unverified pool size are the staging trigger
+  // lines, and wrong-rate comes from archived/verdicts.
+  const lagHours = lagMs.map(ms => ms / 3_600_000)
+  const lagMaxH = lagHours.length > 0 ? Math.max(...lagHours) : undefined
+  const lagAvgH = lagHours.length > 0 ? lagHours.reduce((sum, value) => sum + value, 0) / lagHours.length : undefined
+  const round1 = (value: number): number => Math.round(value * 10) / 10
+  const pool = writer.stats(identity).unverified
   deps.journal.info(
     'maintenance',
     `maintenance: expired ${String(tally.expired)} · verified ${String(tally.verified)}`
       + ` · updated ${String(tally.updated)} · archived ${String(tally.archived)}`
+      + ` · scored ${String(scoredApplied)} · pool ${String(pool)}`
       + (call.truncated ? ` (truncated: banked ${String(verdicts.length)}/${String(candidates.length)} verdicts)` : ''),
     {
       expired: tally.expired,
       verified: tally.verified,
       updated: tally.updated,
       archived: tally.archived,
+      scored: scoredApplied,
+      skipped,
       candidates: candidates.length,
       verdicts: verdicts.length,
+      poolUnverified: pool,
+      verify: 'ran',
+      ...(lagMaxH !== undefined ? { lagMaxH: round1(lagMaxH) } : {}),
+      ...(lagAvgH !== undefined ? { lagAvgH: round1(lagAvgH) } : {}),
       ...call.truncated ? { truncated: true } : {},
       route: `${deps.route!.provider}/${deps.route!.model}`,
     },

@@ -74,15 +74,34 @@ interface RowSnapshot {
   readonly content: string
   readonly verifiedAt: number | null
   readonly verificationStatus: string
+  readonly importance: number
+  readonly classifiedAt: number | null
+  readonly updatedAt: number
 }
 
 function rowSnapshot(path: string, id: number): RowSnapshot {
   const db = new DatabaseSync(path)
   try {
     const row = db.prepare(
-      'SELECT status, content, verified_at, verification_status FROM memories WHERE id = ?',
-    ).get(id) as { status: string; content: string; verified_at: number | null; verification_status: string }
-    return { status: row.status, content: row.content, verifiedAt: row.verified_at, verificationStatus: row.verification_status }
+      'SELECT status, content, verified_at, verification_status, importance, classified_at, updated_at FROM memories WHERE id = ?',
+    ).get(id) as {
+      status: string
+      content: string
+      verified_at: number | null
+      verification_status: string
+      importance: number
+      classified_at: number | null
+      updated_at: number
+    }
+    return {
+      status: row.status,
+      content: row.content,
+      verifiedAt: row.verified_at,
+      verificationStatus: row.verification_status,
+      importance: row.importance,
+      classifiedAt: row.classified_at,
+      updatedAt: row.updated_at,
+    }
   } finally {
     db.close()
   }
@@ -209,10 +228,10 @@ describe('maintenance tick — verification (dreamer verify slice)', () => {
         sessionId: 'mc-maintenance',
         journal,
         llm: fakeLlm(verdictReply([
-          { id: keep, verdict: 'verified' },
-          { id: stale, verdict: 'stale', content: 'new value 20' },
-          { id: wrong, verdict: 'wrong', reason: 'contradicts the code' },
-          { id: skip, verdict: 'skip' },
+          { id: keep, verdict: 'verified', importance: 85 },
+          { id: stale, verdict: 'stale', content: 'new value 20', importance: 55 },
+          { id: wrong, verdict: 'wrong', reason: 'contradicts the code', importance: 40 },
+          { id: skip, verdict: 'skip', importance: 10 },
         ])),
         route: ROUTE,
         now: () => T0,
@@ -225,7 +244,22 @@ describe('maintenance tick — verification (dreamer verify slice)', () => {
       expect(mutationCount(path, 'archive')).toBe(1)
       expect(rowSnapshot(path, wrong).status).toBe('archived')
       expect(rowSnapshot(path, skip)).toMatchObject({ status: 'active', verifiedAt: null })
-      expect(journal.entries.at(-1)?.kind).toBe('maintenance')
+      // Classify scoring rides the same round trip: importance + classified_at
+      // banked metadata-only; the stale rewrite is scored on its corrected text
+      // (update clears classified_at, the scoring pass restores it) and the
+      // archived wrong row self-filters out of the scoring UPDATE.
+      expect(rowSnapshot(path, keep)).toMatchObject({ importance: 85, classifiedAt: T0 })
+      expect(rowSnapshot(path, stale)).toMatchObject({ importance: 55, classifiedAt: T0 })
+      expect(rowSnapshot(path, skip)).toMatchObject({ importance: 10, classifiedAt: T0 })
+      const last = journal.entries.at(-1)
+      expect(last?.kind).toBe('maintenance')
+      expect(last?.data?.scored).toBe(3)
+      expect(last?.data?.skipped).toBe(1)
+      expect(last?.data?.verify).toBe('ran')
+      expect(last?.data?.lagMaxH).toBe(0)
+      expect(last?.data?.lagAvgH).toBe(0)
+      // Pool after the tick: stale (still unverified) + skip = 2.
+      expect(last?.data?.poolUnverified).toBe(2)
     } finally {
       writer.close()
     }
@@ -367,6 +401,95 @@ describe('maintenance tick — verification (dreamer verify slice)', () => {
       })
       expect(outcome.verified).toBe(1)
       expect(rowSnapshot(path, fresh).verifiedAt).toBe(T0)
+    } finally {
+      writer.close()
+    }
+  })
+
+  it('recurrence (seen_count ≥ 2) jumps the sweep queue', async () => {
+    const path = createDb()
+    // 16 fillers fill the whole batch; the repeated fact is seeded LAST, so
+    // MC's render order (category ASC, updated_at DESC, id ASC) would leave it
+    // outside a 16-row window — only the recurrence-first sweep order finds it.
+    for (let i = 0; i < 16; i += 1) {
+      seedRow(path, { category: 'ARCHITECTURE', content: `filler ${String(i)}`, verificationStatus: 'unverified' })
+    }
+    const repeat = seedRow(path, { category: 'ARCHITECTURE', content: 'repeated fact', verificationStatus: 'unverified' })
+    const db = new DatabaseSync(path)
+    try {
+      db.prepare('UPDATE memories SET seen_count = 3 WHERE id = ?').run(repeat)
+    } finally {
+      db.close()
+    }
+    const writer = openMemoryWriter({ dbPath: path, logger: silentLogger, now: () => T0 })
+    let prompt = ''
+    const llm = {
+      async *stream(options: { messages: readonly { content: unknown }[] }) {
+        const content = options.messages[0]?.content
+        if (!Array.isArray(content)) throw new TypeError('content.some is not a function')
+        prompt = String((content[0] as { text?: string }).text ?? '')
+        yield { type: 'text-delta', index: 0, text: verdictReply([{ id: repeat, verdict: 'verified', importance: 80 }]) }
+      },
+    }
+    try {
+      const outcome = await runMaintenanceTick({
+        writer,
+        identity: OWN,
+        sessionId: 'mc-maintenance',
+        journal: fakeJournal(),
+        llm,
+        route: ROUTE,
+        now: () => T0,
+      })
+      expect(outcome).toMatchObject({ verifyRan: true, verified: 1 })
+      expect(rowSnapshot(path, repeat).verificationStatus).toBe('verified')
+      // The repeated fact made the batch; the filler that render order would
+      // have preferred did not.
+      expect(prompt).toContain(`id ${String(repeat)} `)
+      expect(prompt).not.toContain('id 16 ')
+    } finally {
+      writer.close()
+    }
+  })
+})
+
+describe('classifyMemories — metadata-only scoring slice', () => {
+  it('banks clamped importance + classified_at without touching updated_at or the mutation log', () => {
+    const path = createDb()
+    const writer = openMemoryWriter({ dbPath: path, logger: silentLogger, now: () => T0 })
+    try {
+      const row = seedRow(path, { category: 'ARCHITECTURE', content: 'scored row' })
+      const before = rowSnapshot(path, row)
+      const applied = writer.classifyMemories(OWN, [
+        { id: row, importance: 500 },
+        { id: 404, importance: 50 }, // absent id — self-filters through ownership
+      ], T0 + 1)
+      expect(applied).toBe(1)
+      const after = rowSnapshot(path, row)
+      expect(after.importance).toBe(100) // clamped to MC's 1..100 band
+      expect(after.classifiedAt).toBe(T0 + 1)
+      expect(after.updatedAt).toBe(before.updatedAt) // metadata only
+      expect(mutationCount(path, 'update')).toBe(0) // no mutation log for a score
+    } finally {
+      writer.close()
+    }
+  })
+
+  it('skips archived rows and yields zero on a fenced writer', async () => {
+    const path = createDb()
+    const dead = seedRow(path, { category: 'ARCHITECTURE', content: 'archived row', status: 'archived' })
+    const writer = openMemoryWriter({ dbPath: path, logger: silentLogger, now: () => T0 })
+    try {
+      expect(writer.classifyMemories(OWN, [{ id: dead, importance: 90 }], T0 + 1)).toBe(0)
+      const fencedPath = createDb(96)
+      const fencedWriter = openMemoryWriter({ dbPath: fencedPath, logger: silentLogger, now: () => T0 })
+      try {
+        const fenced = seedRow(fencedPath, { category: 'ARCHITECTURE', content: 'fenced row' })
+        expect(fencedWriter.status.readOnly).toBe(true)
+        expect(fencedWriter.classifyMemories(OWN, [{ id: fenced, importance: 90 }], T0 + 1)).toBe(0)
+      } finally {
+        fencedWriter.close()
+      }
     } finally {
       writer.close()
     }

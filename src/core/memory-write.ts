@@ -323,6 +323,19 @@ export interface MemoryWriter {
    * watermark; metadata only — no mutation log, no content change).
    */
   markVerified(identity: string, ids: readonly number[], verifiedAt: number): number
+  /**
+   * Maintenance/classify: bank an importance score with `classified_at` (MC's
+   * classify-memories slice). Metadata only — no mutation log, no `updated_at`,
+   * embeddings/verifications untouched: a score is not a content change, so
+   * the §4.5 clears must not fire. Clamped to MC's 1..100 band. Returns the
+   * number of rows actually scored (archived/superseded and foreign rows
+   * self-filter through the WHERE clause).
+   */
+  classifyMemories(
+    identity: string,
+    entries: ReadonlyArray<{ readonly id: number; readonly importance: number }>,
+    classifiedAt: number,
+  ): number
   close(): void
 }
 
@@ -439,6 +452,13 @@ const SUPERSEDE_MEMORY = `
    WHERE id = ?
 `
 
+/** Classify scoring (metadata only — see the interface note): the importance
+ * score plus the `classified_at` stamp, ownership- and status-scoped. */
+const CLASSIFY_MEMORY = `
+  UPDATE memories SET importance = ?, classified_at = ?
+   WHERE project_path = ? AND id = ? AND status IN ('active','permanent')
+`
+
 /** Merge target (canonical) aggregation (§11.4). */
 const MERGE_MEMORY_TARGET = `
   UPDATE memories
@@ -455,18 +475,25 @@ const APPEND_MUTATION = `
 `
 
 /** `list` (§11.6): injectable rows of one project, in MC's render order. */
-const listMemoriesSql = (unverifiedOnly: boolean): string =>
+const listMemoriesSql = (unverifiedOnly: boolean, recurrenceFirst = false): string =>
   `SELECT ${MEMORY_SELECT_COLUMNS} FROM memories
    WHERE project_path = ? AND status IN ('active','permanent') AND (expires_at IS NULL OR expires_at > ?)`
   + (unverifiedOnly ? ` AND verification_status = 'unverified'` : '')
-  + ' ORDER BY category ASC, updated_at DESC, id ASC'
+  + (recurrenceFirst
+    ? // Sweep-internal order, maintenance only — the §11.6 render order above is
+      // untouched. A fact re-derived across sessions (seen_count ≥ 2) is the
+      // strongest keep-evidence short of the verdict itself, so the sweep
+      // adjudicates it first.
+      ' ORDER BY COALESCE(seen_count, 0) >= 2 DESC, category ASC, updated_at DESC, id ASC'
+    : ' ORDER BY category ASC, updated_at DESC, id ASC')
 
 const LIST_MEMORIES = listMemoriesSql(false)
 
 /** Candidates for the maintenance sweep: the ORDER BY window stays the same,
  * but the unverified filter is applied BEFORE the limit, so verification
- * progress always advances through the whole project. */
-const LIST_MEMORIES_UNVERIFIED = listMemoriesSql(true)
+ * progress always advances through the whole project — and recurrence jumps
+ * the queue (see listMemoriesSql). */
+const LIST_MEMORIES_UNVERIFIED = listMemoriesSql(true, true)
 
 /** The trigger's RAISE text (§8.4) — the database-level second gate. */
 const AUTHORITY_ABORT_TEXT = 'context.db memory writes are managed by the Rust module'
@@ -562,6 +589,7 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
       listMemories: () => [],
       listExpired: () => [],
       markVerified: () => 0,
+      classifyMemories: () => 0,
       recordRetrieval: () => noTelemetry,
       close: () => undefined,
     }
@@ -1310,6 +1338,29 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
           return stamp.ok ? stamp.changed : 0
         } catch (error) {
           options.logger.warn(`magic-context memory: markVerified failed: ${errText(error)}`)
+          return 0
+        }
+      },
+      classifyMemories: (identity, entries, classifiedAt) => {
+        if (entries.length === 0) return 0
+        try {
+          if (contractFenced) return 0
+          if (isAuthorityManaged(identity)) return 0
+          const scored = runImmediate<{ ok: true; changed: number }>(() => {
+            const statement = db.prepare(CLASSIFY_MEMORY)
+            let changed = 0
+            for (const entry of entries) {
+              if (!Number.isInteger(entry.id) || entry.id <= 0) continue
+              // Same 1..100 clamp as writeMemory (storage-memory.ts:1132-1135),
+              // so an out-of-range verdict can't skew m[0] ranking either side.
+              const importance = Math.min(100, Math.max(1, Math.round(entry.importance)))
+              changed += Number(statement.run(importance, classifiedAt, identity, entry.id).changes)
+            }
+            return { ok: true, changed }
+          })
+          return scored.ok ? scored.changed : 0
+        } catch (error) {
+          options.logger.warn(`magic-context memory: classifyMemories failed: ${errText(error)}`)
           return 0
         }
       },

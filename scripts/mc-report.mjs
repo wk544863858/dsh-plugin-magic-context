@@ -736,6 +736,17 @@ function computeMetrics(rows) {
     toolCall: { total: 0, byTool: {}, queued: 0, restored: 0, refused: 0, refuseReasons: {}, durations: [] },
     memoryRecall: { total: 0, rows: 0, budgetTokens: 0, usedTokens: 0 },
     engine: { total: 0, byAction: {} },
+    // 记忆车道维护（dreamer 替身）：verify 节奏、wrong 率、lag 与 pool 是
+    // staging 扳机的三个观测锚点（见 buildHealth 的阈值提示）。
+    maintenance: {
+      ticks: 0, ran: 0, failed: 0, idleOrOff: 0,
+      expired: 0, verified: 0, updated: 0, archived: 0, scored: 0, skipped: 0,
+      verdicts: 0,
+      poolLast: null,
+      lagMaxList: [],
+      lagAvgList: [],
+    },
+    memoryLane: { promoteEvents: 0, promotions: 0, seenAgain: 0 },
     errors: [],
     otherKinds: {},
   }
@@ -910,6 +921,37 @@ switch (row.kind) {
         bump(m.engine.byAction, toText(d.action))
         break
       }
+
+      case 'maintenance': {
+        m.maintenance.ticks += 1
+        // 新 payload 带 verify 模式；旧行按 why/verdicts/route 兜底归类，
+        // 这样 7 天窗口里的历史行也能被正确分桶。
+        const mode = toText(d.verify) !== '' ? toText(d.verify)
+          : toText(d.why) !== '' ? 'failed'
+            : toNum(d.verdicts) !== null || toNum(d.verified) !== null || toText(d.route) !== '' ? 'ran' : 'idle-or-off'
+        if (mode === 'ran') m.maintenance.ran += 1
+        else if (mode === 'failed') m.maintenance.failed += 1
+        else m.maintenance.idleOrOff += 1
+        for (const field of ['expired', 'verified', 'updated', 'archived', 'scored', 'skipped', 'verdicts']) {
+          const value = toNum(d[field])
+          if (value !== null) m.maintenance[field] += value
+        }
+        const pool = toNum(d.poolUnverified)
+        if (pool !== null) m.maintenance.poolLast = pool
+        const lagMax = toNum(d.lagMaxH)
+        if (lagMax !== null) m.maintenance.lagMaxList.push(lagMax)
+        const lagAvg = toNum(d.lagAvgH)
+        if (lagAvg !== null) m.maintenance.lagAvgList.push(lagAvg)
+        break
+      }
+
+      case 'memory-promote': {
+        m.memoryLane.promoteEvents += 1
+        if (Array.isArray(d.inserted)) m.memoryLane.promotions += d.inserted.length
+        if (Array.isArray(d.seenAgain)) m.memoryLane.seenAgain += d.seenAgain.length
+        break
+      }
+
       default: {
         // Kinds whose metrics are plain numeric sums are table-driven.
         const summed = SUMMED_KINDS[row.kind]
@@ -940,6 +982,10 @@ switch (row.kind) {
   m.historian.failureRate = concluded > 0 ? m.historian.failed / concluded : null
   m.toolCall.avgMs = avg(m.toolCall.durations)
   m.memoryRecall.avgUsedTokens = m.memoryRecall.total > 0 ? m.memoryRecall.usedTokens / m.memoryRecall.total : null
+  m.maintenance.lagMaxH = max(m.maintenance.lagMaxList)
+  m.maintenance.lagAvgH = avg(m.maintenance.lagAvgList)
+  m.maintenance.judged = m.maintenance.verified + m.maintenance.updated + m.maintenance.archived
+  m.maintenance.wrongRate = m.maintenance.judged > 0 ? m.maintenance.archived / m.maintenance.judged : null
   return m
 }
 
@@ -992,6 +1038,27 @@ function buildHealth(ctx) {
           'historian-failure-rate',
           `historian 失败率 ${(hist.failureRate * 100).toFixed(1)}% > 20%（done=${hist.done}, failed=${hist.failed}`
           + `${hist.recovered > 0 ? `, 另有重建补记 ${hist.recovered} 不计入` : ''}）。`,
+        )
+      }
+      // 记忆车道扳机线（staging 启用条件的三项观测锚点，命中才提示）。
+      const maint = metrics.maintenance
+      if (maint.judged >= 10 && maint.wrongRate !== null && maint.wrongRate > 0.3) {
+        push(
+          'verify-wrong-rate',
+          `verify wrong 率 ${(maint.wrongRate * 100).toFixed(1)}% > 30%（judged ${maint.judged}，wrong ${maint.archived}）`
+            + '——晋升质量或判定器需要复核。',
+        )
+      }
+      if (maint.lagMaxH !== null && maint.lagMaxH > 24) {
+        push(
+          'verify-lag-high',
+          `verify lag 最大 ${maint.lagMaxH.toFixed(1)}h > 24h——清洗跟不上进水（staging 扳机条件之一）。`,
+        )
+      }
+      if (metrics.memoryLane.promotions > opts.days * 300) {
+        push(
+          'promotion-rate-high',
+          `窗口内晋升 ${metrics.memoryLane.promotions} 行 > 300 行/天 × ${opts.days} 天——进水超预期（staging 扳机条件之一）。`,
         )
       }
       if (metrics.errors.length > 0) {
@@ -1294,6 +1361,23 @@ function renderText(payload) {
       `  memory-recall : ${fmtInt(mr.total)} 次，召回行 ${fmtInt(mr.rows)}，`
       + `使用 tokens ${fmtInt(mr.usedTokens)} / 预算 ${fmtInt(mr.budgetTokens)}（平均每次 ${fmtFixed(mr.avgUsedTokens, 1)}）`,
     )
+    const mt = metrics.maintenance
+    if (mt.ticks > 0) {
+      lines.push(
+        `  maintenance   : ${fmtInt(mt.ticks)} 拍（ran ${fmtInt(mt.ran)} / idle-off ${fmtInt(mt.idleOrOff)} / failed ${fmtInt(mt.failed)}），`
+        + `judged ${fmtInt(mt.judged)}（verified ${fmtInt(mt.verified)} / updated ${fmtInt(mt.updated)}`
+        + ` / wrong ${fmtInt(mt.archived)}＝${mt.wrongRate === null ? '-' : `${(mt.wrongRate * 100).toFixed(1)}%`}），`
+        + `scored ${fmtInt(mt.scored)}，lag 最大 ${fmtFixed(mt.lagMaxH, 1)}h / 平均 ${fmtFixed(mt.lagAvgH, 1)}h，`
+        + `pool 最新 ${mt.poolLast === null ? '-' : fmtInt(mt.poolLast)}`,
+      )
+    }
+    const lane = metrics.memoryLane
+    if (lane.promoteEvents > 0) {
+      lines.push(
+        `  记忆进水      : promote ${fmtInt(lane.promoteEvents)} 次，新行 ${fmtInt(lane.promotions)}`
+        + `（seen-again ${fmtInt(lane.seenAgain)}），约 ${fmtFixed(lane.promotions / Math.max(opts.days, 1), 1)} 行/天`,
+      )
+    }
     if (metrics.engine.total > 0) {
       lines.push(`  engine        : ${fmtInt(metrics.engine.total)} 次；action 分布 ${renderDistribution(metrics.engine.byAction)}`)
     }
