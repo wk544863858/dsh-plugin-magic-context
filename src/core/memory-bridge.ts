@@ -33,11 +33,10 @@ import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, normalize, resolve } from 'node:path'
 import { estimateTokens, MEMORY_VISIBILITY_SENTINEL, type MemoryMutationType, type MemoryUpdateLine } from './compartments.ts'
-import { memoryCategoryOrder, V2_MEMORY_CATEGORIES } from './memory-categories.ts'
+import { memoryCategoryOrder } from './memory-categories.ts'
+import { parseShareCategories } from './domains.ts'
 import { scoreMemory, type MemoryRecallScoring } from './memory-scoring.ts'
 import { errText } from './types.ts'
-
-const VALID_SHARE_CATEGORIES = new Set<string>(V2_MEMORY_CATEGORIES)
 
 /** Magic Context's LATEST_SUPPORTED_VERSION (storage-db.ts). v95 (MC v0.46.0)
  * adds `temporal_decisions` and `git_commit_fts_rowid_map` plus covering indexes
@@ -230,6 +229,34 @@ export interface MemoryBridgeLogger {
 interface MemoryBridgeOptions {
   readonly dbPath?: string
   readonly logger: MemoryBridgeLogger
+  /**
+   * WP3 — the ONE activation source for global domains. Supplied by the
+   * composition root from the adapter's own store; when absent (tests, embedded
+   * use) activation falls back to the contract's `workspaces` tables, which have
+   * no writer left once the dashboard is gone.
+   *
+   * Every consumer — recall, the visibility watermark, the search space, the
+   * mutation lane and the epoch fingerprint — resolves peers through the same
+   * call. Two different answers is the phantom-`<new-memories>` failure: rows
+   * the session cannot see still advance its watermark, and later visible rows
+   * land below it and are swallowed silently.
+   *
+   * `undefined` is a distinct answer from `[]`: it means "no adapter domains are
+   * configured yet", and the bridge keeps using the contract's workspace tables
+   * instead of silently dropping cross-project sharing during the migration.
+   * `[]` means "definitively none activated for this identity".
+   */
+  readonly domainResolver?: (identity: string) => readonly ActivePeerDomain[] | undefined
+}
+
+/** One activated global domain, as the bridge needs it. */
+export interface ActivePeerDomain {
+  /** The provider identity (`project_path`) whose rows are shared. */
+  readonly identity: string
+  /** The allowlist those rows are filtered by (contract convention). */
+  readonly shareCategories: readonly string[]
+  /** `user` | `org` | `machine` — for journaling and telemetry. */
+  readonly kind?: string
 }
 
 interface MemoryTableRow {
@@ -458,7 +485,7 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
       )
       memberStatement = db.prepare('SELECT project_path FROM workspace_members WHERE workspace_id = ?')
     }
-    const workspaceFor = (identities: readonly string[]): {
+    const contractWorkspaceFor = (identities: readonly string[]): {
       workspace?: string
       members: string[]
       shareCategories?: string[]
@@ -469,26 +496,13 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
           | { id: number; name: string | null; share_categories: string | null }
           | undefined
         if (row === undefined) continue
-        let categories: string[] | undefined
-        if (typeof row.share_categories === 'string') {
-          // Magic Context normalizeShareCategories (workspaces.ts:69-97): a
-          // malformed payload or any unknown category shares NOTHING — only a
-          // null column falls back to the default allowlist. An explicit []
-          // therefore means "share no foreign categories".
-          const failSafe: string[] = []
-          try {
-            const parsed: unknown = JSON.parse(row.share_categories)
-            if (!Array.isArray(parsed)) {
-              categories = failSafe
-            } else if (parsed.every(item => typeof item === 'string' && VALID_SHARE_CATEGORIES.has(item))) {
-              categories = [...new Set(parsed as string[])].sort((a, b) => a.localeCompare(b))
-            } else {
-              categories = failSafe
-            }
-          } catch {
-            categories = failSafe
-          }
-        }
+        // The fail-closed allowlist convention now lives in ONE place
+        // (core/domains.ts parseShareCategories), shared with the adapter-owned
+        // domains: a malformed payload or any unknown category shares NOTHING,
+        // only a missing column falls back to the default allowlist.
+        const categories: string[] | undefined = typeof row.share_categories === 'string'
+          ? parseShareCategories(row.share_categories)
+          : undefined
         const members = (memberStatement.all(row.id) as Array<{ project_path: string }>)
           .map(member => member.project_path)
           .filter(member => !identities.includes(member))
@@ -499,6 +513,46 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
         }
       }
       return { members: [] }
+    }
+
+    /** WP3: THE activation function (see MemoryBridgeOptions.domainResolver). */
+    const peersFor = (identities: readonly string[]): {
+      workspace?: string
+      members: string[]
+      shareCategories?: string[]
+      domains: readonly ActivePeerDomain[]
+    } => {
+      const resolve = options.domainResolver
+      if (resolve === undefined) {
+        return { ...contractWorkspaceFor(identities), domains: [] }
+      }
+      const domains: ActivePeerDomain[] = []
+      let answered = false
+      for (const identity of identities) {
+        const answer = resolve(identity)
+        if (answer === undefined) continue
+        answered = true
+        for (const domain of answer) {
+          if (!domains.some(existing => existing.identity === domain.identity)) domains.push(domain)
+        }
+      }
+      // Nobody has configured a domain yet: stay on the contract's membership
+      // rather than reporting "no peers" and silently ending sharing.
+      if (!answered) return { ...contractWorkspaceFor(identities), domains: [] }
+      const members = domains.map(domain => domain.identity).filter(identity => !identities.includes(identity))
+      if (members.length === 0) return { members: [], domains: [] }
+      // The SQL filter is a single `category IN (...)`, so the effective
+      // allowlist is the union of the activated domains'. That cannot widen what
+      // a domain is allowed to share because publishing pre-checks the category
+      // against ITS OWN allowlist (core/global-domains).
+      const categories = [...new Set(domains.flatMap(domain => [...domain.shareCategories]))]
+        .sort((left, right) => left.localeCompare(right))
+      return {
+        workspace: members.join('+'),
+        members,
+        shareCategories: categories,
+        domains,
+      }
     }
 
     const toRow = (row: MemoryTableRow): MemoryRow => ({      id: row.id,
@@ -753,7 +807,7 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
     const readMutations = (request: MemoryMutationRequest): MemoryMutationResult | undefined => {
       try {
         const identities = identityCandidates(request.project)
-        const auto = workspaceFor(identities)
+        const auto = peersFor(identities)
         const peers = request.workspaceProjects ?? auto.members
         const peerIdentities = peers.flatMap(candidate => identityCandidates(candidate))
         const allIdentities = [...identities, ...peerIdentities]
@@ -813,7 +867,7 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
         try {
           const identities = identityCandidates(project)
           if (identities.length === 0) return undefined
-          const auto = workspaceFor(identities)
+          const auto = peersFor(identities)
           const foreignIdentities = auto.members.flatMap(candidate => identityCandidates(candidate))
           return {
             identity: identities[0]!,
@@ -830,7 +884,7 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
       maxMemoryId: (project) => {
         try {
           const identities = identityCandidates(project)
-          const auto = workspaceFor(identities)
+          const auto = peersFor(identities)
           const peerIdentities = auto.members.flatMap(candidate => identityCandidates(candidate))
           return maxVisibleId(
             identities,
@@ -845,7 +899,7 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
       maxMemoryMutationId: (project) => {
         try {
           const identities = identityCandidates(project)
-          const peers = workspaceFor(identities).members.flatMap(candidate => identityCandidates(candidate))
+          const peers = peersFor(identities).members.flatMap(candidate => identityCandidates(candidate))
           return maxMutationFor([...identities, ...peers])
         } catch {
           return 0
@@ -854,7 +908,7 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
       projectMemoryEpochFingerprint: (project) => {
         try {
           const identities = identityCandidates(project)
-          const peers = workspaceFor(identities).members.flatMap(candidate => identityCandidates(candidate))
+          const peers = peersFor(identities).members.flatMap(candidate => identityCandidates(candidate))
           return epochFingerprint([...identities, ...peers])
         } catch {
           return ''
@@ -869,7 +923,7 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
           db.exec('BEGIN')
           try {
             const identities = identityCandidates(request.project)
-            const auto = workspaceFor(identities)
+            const auto = peersFor(identities)
             const rows: MemoryRow[] = []
             const seen = new Set<number>()
             for (const identity of identities) {

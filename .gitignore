@@ -10,6 +10,9 @@ coverage/
 # Local scratch: extracted snapshots, keep-out areas, throwaway databases
 .tmp-*/
 
+# Upstream Magic Context source, pulled for read-only analysis (never committed)
+.upstream/
+
 # Logs
 *.log
 npm-debug.log*

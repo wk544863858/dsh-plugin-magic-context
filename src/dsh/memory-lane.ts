@@ -68,11 +68,32 @@ export function openMemoryLane(
 ): MemoryLane {
   const memorySettings = config.memory
   const memoryEnabled = memorySettings !== undefined && liveBoolean(memorySettings.enabled, true)
+  // WP3: ONE activation source for every consumer inside the bridge (recall, the
+  // visibility watermark, the search space, the mutation lane, the epoch
+  // fingerprint). The domain resolver reads the adapter's own table; `contract`
+  // keeps the old workspace lookup reachable as a rollback lever for one
+  // release, since the contract's tables lost their only writer with the
+  // dashboard.
+  const domainSource = memorySettings?.domains?.source === 'contract' ? 'contract' : 'adapter'
   const memoryRecall = !memoryEnabled
     ? undefined
     : openMemoryBridge({
       ...memorySettings?.dbPath === undefined ? {} : { dbPath: memorySettings.dbPath },
       logger: ctx.logger,
+      ...domainSource === 'contract' ? {} : {
+        domainResolver: (identity: string) => {
+          const domains = stores.activeDomainIdentities(identity)
+          // Nothing configured yet (the pre-import state): answer `undefined` so
+          // the bridge keeps reading the contract's workspace membership instead
+          // of concluding "no peers" and silently ending cross-project sharing.
+          if (stores.listDomains().every(domain => !domain.enabled)) return undefined
+          return domains.map(domain => ({
+            identity: domain.identity,
+            shareCategories: stores.getDomain(domain.domainId)?.shareCategories ?? [],
+            kind: domain.kind,
+          }))
+        },
+      },
     })
   if (memoryRecall !== undefined) {
     ctx.logger.info(

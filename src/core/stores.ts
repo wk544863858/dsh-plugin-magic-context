@@ -16,9 +16,11 @@ import { homedir } from 'node:os'
 import type { Compartment, CompartmentDraft } from './compartments.ts'
 import type { JournalEntry, JournalKind, JournalLevel } from './journal.ts'
 import type { MemoryFact } from './memory-categories.ts'
+import type { DomainKind } from './domains.ts'
+import { parseShareCategories, serializeShareCategories } from './domains.ts'
 import type { TagRecord, TagTarget, UsageRecord } from './types.ts'
 
-export const SCHEMA_VERSION = 7
+export const SCHEMA_VERSION = 8
 
 /** The m[0]/m[1] baseline identity for one session. */
 export interface BaselineState {
@@ -55,6 +57,21 @@ export interface BaselineState {
    * cursor are invalid: the pass rebuilds hard and re-freezes both.
    */
   readonly projectEpochFingerprint?: string
+  /**
+   * Schema v8: the highest `user_memories.id` folded into m[0]. Profile rows
+   * above it render in m[1] `<new-user-profile>` instead of forcing a HARD
+   * rebuild — the same additive-watermark shape as `maxMemoryId`, but for the
+   * profile table, which Magic Context versioned globally instead.
+   */
+  readonly profileWatermark?: number
+  /**
+   * Schema v8: the profile's m[0] content digest (ordered `id:updated_at` of
+   * the active rows at or below `profileWatermark`). A change means a profile
+   * row was rewritten or retired — which the adapter DOES treat as HARD,
+   * unlike Magic Context, whose version bump deliberately never folded m[0]
+   * and therefore kept injecting stale `<user-profile>` text indefinitely.
+   */
+  readonly profileM0Digest?: string
   readonly updatedAt: number
 }
 
@@ -73,6 +90,82 @@ export interface MemoryStatRow {
   /** Adapter-local injection retirement; still searchable, just not injected. */
   readonly localArchived: boolean
   readonly updatedAt: number
+}
+
+/**
+ * Schema v8: one global domain. `cap` is DERIVED from a token target (see
+ * core/domains.ts `deriveDomainCap`) rather than picked, so budget pressure and
+ * the admission limit can never disagree.
+ */
+export interface DomainRow {
+  readonly domainId: string
+  readonly kind: DomainKind
+  readonly enabled: boolean
+  readonly budgetTokens: number
+  readonly cap: number
+  /**
+   * The category allowlist for the domain's shared rows, in the contract's
+   * fail-closed convention: a malformed value or an unknown category shares
+   * NOTHING (only a missing column falls back to `["CONSTRAINTS"]`). Empty
+   * array = share no foreign categories at all.
+   */
+  readonly shareCategories: readonly string[]
+  readonly createdAt: number
+  readonly updatedAt: number
+}
+
+/** Schema v8: which project identities activate a domain. */
+export interface DomainMemberRow {
+  readonly domainId: string
+  readonly identity: string
+  readonly addedAt: number
+}
+
+/** Schema v8: a cross-project candidate for `org` / `machine`. */
+export interface GlobalCandidateRow {
+  readonly id: number
+  readonly domainId: string
+  readonly content: string
+  readonly normalizedHash: string
+  readonly firstIdentity: string
+  readonly sessionId?: string
+  readonly compartmentStart?: number
+  readonly compartmentEnd?: number
+  /** Distinct project identities that independently observed this candidate. */
+  readonly distinctIdentities: number
+  readonly observationCount: number
+  readonly state: 'pending' | 'approved' | 'rejected' | 'expired'
+  readonly createdAt: number
+  readonly updatedAt: number
+}
+
+/** Schema v8: one independent observation behind a global candidate. */
+export interface CandidateObservationRow {
+  readonly candidateId: number
+  readonly identity: string
+  readonly sessionId: string
+  readonly compartmentStart?: number
+  readonly compartmentEnd?: number
+  readonly observations: number
+  readonly firstSeenAt: number
+  readonly lastSeenAt: number
+}
+
+/**
+ * Schema v8: the directive-shaped confirmation queue. A candidate that reads
+ * like an instruction ("always do X") may not enter the profile until the human
+ * answers the question — the blast radius of a hallucinated behavioural rule is
+ * every session on the machine, not just a stale note.
+ */
+export interface ProfileConfirmationRow {
+  readonly id: number
+  /** The `user_memory_candidates.id` in the SHARED store (no FK by design). */
+  readonly contractCandidateId: number
+  readonly question: string
+  readonly content: string
+  readonly state: 'pending' | 'approved' | 'rejected'
+  readonly createdAt: number
+  readonly decidedAt?: number
 }
 
 export interface AdapterStores {
@@ -164,6 +257,63 @@ export interface AdapterStores {
   pruneMemoryStats(projectIdentity: string, keepIds: readonly number[]): number
   /** Row count plus the oldest/newest timestamps. */
   journalBounds(): { rows: number; oldest?: number; newest?: number }
+
+  // ---- schema v8: global domains ------------------------------------------
+  /**
+   * Insert or update a domain definition. `cap` is DERIVED by the caller
+   * (core/domains.ts), never passed in from a UI, so the admission limit and
+   * the token budget cannot drift apart.
+   */
+  upsertDomain(domain: { domainId: string; kind: DomainKind; enabled: boolean; budgetTokens: number; cap: number; shareCategories: readonly string[] }, now: number): void
+  listDomains(): DomainRow[]
+  getDomain(domainId: string): DomainRow | undefined
+  setDomainEnabled(domainId: string, enabled: boolean, now: number): void
+  addDomainMember(domainId: string, identity: string, now: number): void
+  removeDomainMember(domainId: string, identity: string): void
+  /** All members, or one domain's members. */
+  listDomainMembers(domainId?: string): DomainMemberRow[]
+  /**
+   * The identities this project activates, resolved from the adapter's own
+   * store. Callers MUST use this result both for the recall predicate AND for
+   * the visibility watermark: a watermark computed over a wider set silently
+   * swallows later visible rows (the phantom `<new-memories>` failure).
+   */
+  activeDomainIdentities(identity: string): Array<{ domainId: string; kind: DomainKind; identity: string }>
+  /** Upsert by (domainId, normalizedHash), refreshing content and weight. */
+  upsertGlobalCandidate(
+    candidate: {
+      domainId: string
+      content: string
+      normalizedHash: string
+      firstIdentity: string
+      sessionId?: string
+      compartmentStart?: number
+      compartmentEnd?: number
+    },
+    now: number,
+  ): GlobalCandidateRow
+  getGlobalCandidate(id: number): GlobalCandidateRow | undefined
+  listGlobalCandidates(filter?: { domainId?: string; state?: GlobalCandidateRow['state'] }): GlobalCandidateRow[]
+  setGlobalCandidateState(id: number, state: GlobalCandidateRow['state'], now: number): void
+  /** One independent observation; the (candidate, identity, session) triple collapses. */
+  recordCandidateObservation(
+    observation: {
+      candidateId: number
+      identity: string
+      sessionId: string
+      compartmentStart?: number
+      compartmentEnd?: number
+    },
+    now: number,
+  ): void
+  listCandidateObservations(candidateId: number): CandidateObservationRow[]
+  /** Queue a directive-shaped candidate until a human answers the question. */
+  enqueueProfileConfirmation(
+    input: { contractCandidateId: number; question: string; content: string },
+    now: number,
+  ): ProfileConfirmationRow
+  listProfileConfirmations(state?: ProfileConfirmationRow['state']): ProfileConfirmationRow[]
+  decideProfileConfirmation(id: number, state: 'approved' | 'rejected', now: number): void
   close(): void
   /**
    * True once `close()` ran. A remounted adapter (hmr reload) closes the old
@@ -364,18 +514,113 @@ const MIGRATIONS: readonly Migration[] = [
       `)
     },
   },
+  {
+    // v8: the global-domain substrate (docs/dsh-plugin-execution-plan-2026-10-09.md,
+    // WP1). Magic Context, its dashboard and every other host are being removed,
+    // so the adapter becomes the sole owner of: which global domains exist, which
+    // project identities activate them, the cross-project candidate pool for
+    // org/machine, and the confirmation queue that directive-shaped profile
+    // candidates must pass through. All of it lives HERE (the adapter's own
+    // store) because the shared `context.db` contract is frozen.
+    //
+    //  - domains: one row per global domain. `cap` is DERIVED from a token
+    //    target by the caller, so the admission limit and the budget cannot
+    //    drift apart.
+    //  - domain_members: the activation rule, replacing the contract's
+    //    workspace tables (which have no writer left once the dashboard goes).
+    //  - global_candidates / global_candidate_observations: the cross-project
+    //    recurrence gate — a fact promoted to a global domain must have been
+    //    observed independently by at least two DIFFERENT project identities.
+    //  - profile_confirmations: the human gate for directive-shaped content.
+    //    Unconfirmed entries never enter the injected pool.
+    //  - baseline_state.profile_watermark / profile_m0_digest: the additive
+    //    watermark and the m[0] content digest for the profile, so a new
+    //    profile row rides the m[1] delta while a rewritten or retired one
+    //    forces a HARD rebuild (deliberately unlike Magic Context, which kept
+    //    serving a stale m[0] profile block).
+    version: 8,
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE domains(
+          domain_id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL CHECK(kind IN ('user','org','machine')),
+          enabled INTEGER NOT NULL DEFAULT 0,
+          budget_tokens INTEGER NOT NULL,
+          cap INTEGER NOT NULL,
+          share_categories TEXT NOT NULL DEFAULT '["CONSTRAINTS"]',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE domain_members(
+          domain_id TEXT NOT NULL REFERENCES domains(domain_id) ON DELETE CASCADE,
+          identity TEXT NOT NULL,
+          added_at INTEGER NOT NULL,
+          PRIMARY KEY(domain_id, identity)
+        );
+        CREATE INDEX domain_members_identity ON domain_members(identity);
+        CREATE TABLE global_candidates(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          domain_id TEXT NOT NULL,
+          content TEXT NOT NULL,
+          normalized_hash TEXT NOT NULL,
+          first_identity TEXT NOT NULL,
+          session_id TEXT,
+          compartment_start INTEGER,
+          compartment_end INTEGER,
+          distinct_identities INTEGER NOT NULL DEFAULT 1,
+          observation_count INTEGER NOT NULL DEFAULT 1,
+          state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','approved','rejected','expired')),
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX global_candidates_domain_hash ON global_candidates(domain_id, normalized_hash);
+        CREATE INDEX global_candidates_state ON global_candidates(domain_id, state);
+        CREATE TABLE global_candidate_observations(
+          candidate_id INTEGER NOT NULL REFERENCES global_candidates(id) ON DELETE CASCADE,
+          identity TEXT NOT NULL,
+          session_id TEXT NOT NULL,
+          compartment_start INTEGER,
+          compartment_end INTEGER,
+          observations INTEGER NOT NULL DEFAULT 1,
+          first_seen_at INTEGER NOT NULL,
+          last_seen_at INTEGER NOT NULL,
+          PRIMARY KEY(candidate_id, identity, session_id)
+        );
+        CREATE INDEX global_observations_identity ON global_candidate_observations(identity);
+        CREATE TABLE profile_confirmations(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          contract_candidate_id INTEGER NOT NULL,
+          question TEXT NOT NULL,
+          content TEXT NOT NULL,
+          state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','approved','rejected')),
+          created_at INTEGER NOT NULL,
+          decided_at INTEGER
+        );
+        CREATE INDEX profile_confirmations_state ON profile_confirmations(state);
+        ALTER TABLE baseline_state ADD COLUMN profile_watermark INTEGER;
+        ALTER TABLE baseline_state ADD COLUMN profile_m0_digest TEXT;
+      `)
+    },
+  },
 ]
 
 export class StoreAheadOfAdapterError extends Error {
-  constructor(
-    public readonly dbVersion: number,
-    public readonly adapterVersion: number,
-  ) {
+  // Declared explicitly rather than as constructor parameter properties: the
+  // scripts in scripts/ load this module with plain Node (type stripping), and
+  // parameter properties are not erasable syntax. Keeping the class erasable
+  // lets migration tooling reuse the real store instead of re-implementing its
+  // SQL — one source of truth for the adapter schema.
+  readonly dbVersion: number
+  readonly adapterVersion: number
+
+  constructor(dbVersion: number, adapterVersion: number) {
     super(
       `magic-context dsh adapter: store schema v${dbVersion} is newer than this build supports (v${adapterVersion}); `
         + 'update the adapter (or roll it back together with its database) before continuing',
     )
     this.name = 'StoreAheadOfAdapterError'
+    this.dbVersion = dbVersion
+    this.adapterVersion = adapterVersion
   }
 }
 
@@ -701,6 +946,7 @@ export function openStores(dataDir: string): AdapterStores {
     provider: string | null; model: string | null; frozen_at: number
     memories_digest: string | null; max_memory_id: number | null
     max_memory_mutation_id: number | null; project_epoch_fingerprint: string | null
+    profile_watermark: number | null; profile_m0_digest: string | null
     updated_at: number
   }
 
@@ -720,6 +966,8 @@ export function openStores(dataDir: string): AdapterStores {
       ...row.max_memory_id === null ? {} : { maxMemoryId: row.max_memory_id },
       ...row.max_memory_mutation_id === null ? {} : { maxMemoryMutationId: row.max_memory_mutation_id },
       ...row.project_epoch_fingerprint === null ? {} : { projectEpochFingerprint: row.project_epoch_fingerprint },
+      ...row.profile_watermark === null ? {} : { profileWatermark: row.profile_watermark },
+      ...row.profile_m0_digest === null ? {} : { profileM0Digest: row.profile_m0_digest },
       updatedAt: row.updated_at,
     }
   }
@@ -727,13 +975,15 @@ export function openStores(dataDir: string): AdapterStores {
   const saveBaselineState = (state: BaselineState): void => {
     db.prepare(
       'INSERT INTO baseline_state(session_id, epoch, node_seq, provider, model, frozen_at, memories_digest, '
-        + 'max_memory_id, max_memory_mutation_id, project_epoch_fingerprint, updated_at) '
-        + 'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) '
+        + 'max_memory_id, max_memory_mutation_id, project_epoch_fingerprint, profile_watermark, profile_m0_digest, updated_at) '
+        + 'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) '
         + 'ON CONFLICT(session_id) DO UPDATE SET epoch = excluded.epoch, node_seq = excluded.node_seq, '
         + 'provider = excluded.provider, model = excluded.model, frozen_at = excluded.frozen_at, '
         + 'memories_digest = excluded.memories_digest, max_memory_id = excluded.max_memory_id, '
         + 'max_memory_mutation_id = excluded.max_memory_mutation_id, '
         + 'project_epoch_fingerprint = excluded.project_epoch_fingerprint, '
+        + 'profile_watermark = excluded.profile_watermark, '
+        + 'profile_m0_digest = excluded.profile_m0_digest, '
         + 'updated_at = excluded.updated_at',
     ).run(
       state.sessionId,
@@ -746,12 +996,323 @@ export function openStores(dataDir: string): AdapterStores {
       state.maxMemoryId ?? null,
       state.maxMemoryMutationId ?? null,
       state.projectEpochFingerprint ?? null,
+      state.profileWatermark ?? null,
+      state.profileM0Digest ?? null,
       state.updatedAt,
     )
   }
 
+  // ---- schema v8: global domains ------------------------------------------
+  //
+  // `domain_id` IS the provider identity used in the shared store (for example
+  // `dir:global:org`), so activation needs no second mapping: the row that says
+  // "this domain exists" carries the exact `project_path` its memories live
+  // under. The `kind` column is the closed three-value label used for
+  // presentation, budgets and policy.
+
+  interface DomainDbRow {
+    domain_id: string; kind: string; enabled: number
+    budget_tokens: number; cap: number; share_categories: string
+    created_at: number; updated_at: number
+  }
+
+  const toDomain = (row: DomainDbRow): DomainRow => ({
+    domainId: row.domain_id,
+    kind: row.kind as DomainKind,
+    enabled: row.enabled !== 0,
+    budgetTokens: row.budget_tokens,
+    cap: row.cap,
+    shareCategories: parseShareCategories(row.share_categories),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
+
+  const upsertDomain = (
+    domain: {
+      domainId: string
+      kind: DomainKind
+      enabled: boolean
+      budgetTokens: number
+      cap: number
+      shareCategories: readonly string[]
+    },
+    now: number,
+  ): void => {
+    // serializeShareCategories rejects an unknown category here, at the write,
+    // rather than letting a row become permanently invisible later.
+    const shareCategories = serializeShareCategories(domain.shareCategories)
+    db.prepare(
+      'INSERT INTO domains(domain_id, kind, enabled, budget_tokens, cap, share_categories, created_at, updated_at) '
+        + 'VALUES(?, ?, ?, ?, ?, ?, ?, ?) '
+        + 'ON CONFLICT(domain_id) DO UPDATE SET kind = excluded.kind, enabled = excluded.enabled, '
+        + 'budget_tokens = excluded.budget_tokens, cap = excluded.cap, '
+        + 'share_categories = excluded.share_categories, updated_at = excluded.updated_at',
+    ).run(domain.domainId, domain.kind, domain.enabled ? 1 : 0, domain.budgetTokens, domain.cap, shareCategories, now, now)
+  }
+
+  const listDomains = (): DomainRow[] =>
+    (db.prepare('SELECT * FROM domains ORDER BY kind, domain_id').all() as unknown as DomainDbRow[]).map(toDomain)
+
+  const getDomain = (domainId: string): DomainRow | undefined => {
+    const row = db.prepare('SELECT * FROM domains WHERE domain_id = ?').get(domainId) as DomainDbRow | undefined
+    return row === undefined ? undefined : toDomain(row)
+  }
+
+  const setDomainEnabled = (domainId: string, enabled: boolean, now: number): void => {
+    db.prepare('UPDATE domains SET enabled = ?, updated_at = ? WHERE domain_id = ?').run(enabled ? 1 : 0, now, domainId)
+  }
+
+  const addDomainMember = (domainId: string, identity: string, now: number): void => {
+    db.prepare(
+      'INSERT INTO domain_members(domain_id, identity, added_at) VALUES(?, ?, ?) '
+        + 'ON CONFLICT(domain_id, identity) DO NOTHING',
+    ).run(domainId, identity, now)
+  }
+
+  const removeDomainMember = (domainId: string, identity: string): void => {
+    db.prepare('DELETE FROM domain_members WHERE domain_id = ? AND identity = ?').run(domainId, identity)
+  }
+
+  const listDomainMembers = (domainId?: string): DomainMemberRow[] => {
+    const rows = (domainId === undefined
+      ? db.prepare('SELECT * FROM domain_members ORDER BY domain_id, identity').all()
+      : db.prepare('SELECT * FROM domain_members WHERE domain_id = ? ORDER BY identity').all(domainId)) as unknown as Array<{
+      domain_id: string; identity: string; added_at: number
+    }>
+    return rows.map(row => ({ domainId: row.domain_id, identity: row.identity, addedAt: row.added_at }))
+  }
+
+  const activeDomainIdentities = (
+    identity: string,
+  ): Array<{ domainId: string; kind: DomainKind; identity: string }> => {
+    const rows = db.prepare(
+      'SELECT d.domain_id AS domain_id, d.kind AS kind FROM domain_members m '
+        + 'JOIN domains d ON d.domain_id = m.domain_id '
+        + 'WHERE m.identity = ? AND d.enabled = 1 ORDER BY d.kind, d.domain_id',
+    ).all(identity) as unknown as Array<{ domain_id: string; kind: string }>
+    return rows.map(row => ({ domainId: row.domain_id, kind: row.kind as DomainKind, identity: row.domain_id }))
+  }
+
+  interface GlobalCandidateDbRow {
+    id: number; domain_id: string; content: string; normalized_hash: string; first_identity: string
+    session_id: string | null; compartment_start: number | null; compartment_end: number | null
+    distinct_identities: number; observation_count: number; state: string
+    created_at: number; updated_at: number
+  }
+
+  const toGlobalCandidate = (row: GlobalCandidateDbRow): GlobalCandidateRow => ({
+    id: row.id,
+    domainId: row.domain_id,
+    content: row.content,
+    normalizedHash: row.normalized_hash,
+    firstIdentity: row.first_identity,
+    ...row.session_id === null ? {} : { sessionId: row.session_id },
+    ...row.compartment_start === null ? {} : { compartmentStart: row.compartment_start },
+    ...row.compartment_end === null ? {} : { compartmentEnd: row.compartment_end },
+    distinctIdentities: row.distinct_identities,
+    observationCount: row.observation_count,
+    state: row.state as GlobalCandidateRow['state'],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  })
+
+  const getGlobalCandidateByHash = (domainId: string, normalizedHash: string): GlobalCandidateRow | undefined => {
+    const row = db
+      .prepare('SELECT * FROM global_candidates WHERE domain_id = ? AND normalized_hash = ?')
+      .get(domainId, normalizedHash) as GlobalCandidateDbRow | undefined
+    return row === undefined ? undefined : toGlobalCandidate(row)
+  }
+
+  /** Recompute the recurrence weight from the observation rows (never from a counter the caller passes). */
+  const refreshCandidateWeight = (candidateId: number, now: number): void => {
+    db.prepare(
+      'UPDATE global_candidates SET '
+        + 'distinct_identities = (SELECT COUNT(*) FROM global_candidate_observations WHERE candidate_id = ?), '
+        + 'observation_count = (SELECT COALESCE(SUM(observations), 0) FROM global_candidate_observations WHERE candidate_id = ?), '
+        + 'updated_at = ? WHERE id = ?',
+    ).run(candidateId, candidateId, now, candidateId)
+  }
+
+  const upsertGlobalCandidate = (
+    candidate: {
+      domainId: string
+      content: string
+      normalizedHash: string
+      firstIdentity: string
+      sessionId?: string
+      compartmentStart?: number
+      compartmentEnd?: number
+    },
+    now: number,
+  ): GlobalCandidateRow => {
+    db.prepare(
+      'INSERT INTO global_candidates(domain_id, content, normalized_hash, first_identity, session_id, '
+        + 'compartment_start, compartment_end, distinct_identities, observation_count, state, created_at, updated_at) '
+        + "VALUES(?, ?, ?, ?, ?, ?, ?, 0, 0, 'pending', ?, ?) "
+        + 'ON CONFLICT(domain_id, normalized_hash) DO UPDATE SET content = excluded.content, '
+        + 'updated_at = excluded.updated_at, '
+        + "state = CASE WHEN global_candidates.state = 'expired' THEN 'pending' ELSE global_candidates.state END",
+    ).run(
+      candidate.domainId,
+      candidate.content,
+      candidate.normalizedHash,
+      candidate.firstIdentity,
+      candidate.sessionId ?? null,
+      candidate.compartmentStart ?? null,
+      candidate.compartmentEnd ?? null,
+      now,
+      now,
+    )
+    const row = getGlobalCandidateByHash(candidate.domainId, candidate.normalizedHash)
+    if (row === undefined) throw new Error('magic-context dsh adapter: global candidate upsert did not land')
+    return row
+  }
+
+  const getGlobalCandidate = (id: number): GlobalCandidateRow | undefined => {
+    const row = db.prepare('SELECT * FROM global_candidates WHERE id = ?').get(id) as
+      | GlobalCandidateDbRow
+      | undefined
+    return row === undefined ? undefined : toGlobalCandidate(row)
+  }
+
+  const listGlobalCandidates = (
+    filter?: { domainId?: string; state?: GlobalCandidateRow['state'] },
+  ): GlobalCandidateRow[] => {
+    const where: string[] = []
+    const params: Array<string | number> = []
+    if (filter?.domainId !== undefined) {
+      where.push('domain_id = ?')
+      params.push(filter.domainId)
+    }
+    if (filter?.state !== undefined) {
+      where.push('state = ?')
+      params.push(filter.state)
+    }
+    const clause = where.length === 0 ? '' : ` WHERE ${where.join(' AND ')}`
+    const rows = db
+      .prepare(`SELECT * FROM global_candidates${clause} ORDER BY updated_at DESC, id DESC`)
+      .all(...params) as unknown as GlobalCandidateDbRow[]
+    return rows.map(toGlobalCandidate)
+  }
+
+  const setGlobalCandidateState = (id: number, state: GlobalCandidateRow['state'], now: number): void => {
+    db.prepare('UPDATE global_candidates SET state = ?, updated_at = ? WHERE id = ?').run(state, now, id)
+  }
+
+  const recordCandidateObservation = (
+    observation: {
+      candidateId: number
+      identity: string
+      sessionId: string
+      compartmentStart?: number
+      compartmentEnd?: number
+    },
+    now: number,
+  ): void => {
+    db.exec('BEGIN')
+    try {
+      db.prepare(
+        'INSERT INTO global_candidate_observations(candidate_id, identity, session_id, compartment_start, '
+          + 'compartment_end, observations, first_seen_at, last_seen_at) VALUES(?, ?, ?, ?, ?, 1, ?, ?) '
+          + 'ON CONFLICT(candidate_id, identity, session_id) DO UPDATE SET observations = observations + 1, '
+          + 'last_seen_at = excluded.last_seen_at',
+      ).run(
+        observation.candidateId,
+        observation.identity,
+        observation.sessionId,
+        observation.compartmentStart ?? null,
+        observation.compartmentEnd ?? null,
+        now,
+        now,
+      )
+      refreshCandidateWeight(observation.candidateId, now)
+      db.exec('COMMIT')
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  const listCandidateObservations = (candidateId: number): CandidateObservationRow[] =>
+    (db.prepare(
+      'SELECT * FROM global_candidate_observations WHERE candidate_id = ? ORDER BY identity, session_id',
+    ).all(candidateId) as unknown as Array<{
+      candidate_id: number; identity: string; session_id: string
+      compartment_start: number | null; compartment_end: number | null
+      observations: number; first_seen_at: number; last_seen_at: number
+    }>).map(row => ({
+      candidateId: row.candidate_id,
+      identity: row.identity,
+      sessionId: row.session_id,
+      ...row.compartment_start === null ? {} : { compartmentStart: row.compartment_start },
+      ...row.compartment_end === null ? {} : { compartmentEnd: row.compartment_end },
+      observations: row.observations,
+      firstSeenAt: row.first_seen_at,
+      lastSeenAt: row.last_seen_at,
+    }))
+
+  interface ProfileConfirmationDbRow {
+    id: number; contract_candidate_id: number; question: string; content: string
+    state: string; created_at: number; decided_at: number | null
+  }
+
+  const toProfileConfirmation = (row: ProfileConfirmationDbRow): ProfileConfirmationRow => ({
+    id: row.id,
+    contractCandidateId: row.contract_candidate_id,
+    question: row.question,
+    content: row.content,
+    state: row.state as ProfileConfirmationRow['state'],
+    createdAt: row.created_at,
+    ...row.decided_at === null ? {} : { decidedAt: row.decided_at },
+  })
+
+  const enqueueProfileConfirmation = (
+    input: { contractCandidateId: number; question: string; content: string },
+    now: number,
+  ): ProfileConfirmationRow => {
+    // Idempotent per pending candidate: a retried historian pass must not
+    // produce a second question for the same observation.
+    const existing = db.prepare(
+      "SELECT * FROM profile_confirmations WHERE contract_candidate_id = ? AND state = 'pending'",
+    ).get(input.contractCandidateId) as ProfileConfirmationDbRow | undefined
+    if (existing !== undefined) return toProfileConfirmation(existing)
+    const inserted = db.prepare(
+      "INSERT INTO profile_confirmations(contract_candidate_id, question, content, state, created_at) "
+        + "VALUES(?, ?, ?, 'pending', ?) RETURNING *",
+    ).get(input.contractCandidateId, input.question, input.content, now) as unknown as ProfileConfirmationDbRow
+    return toProfileConfirmation(inserted)
+  }
+
+  const listProfileConfirmations = (state?: ProfileConfirmationRow['state']): ProfileConfirmationRow[] => {
+    const rows = (state === undefined
+      ? db.prepare('SELECT * FROM profile_confirmations ORDER BY created_at, id').all()
+      : db.prepare('SELECT * FROM profile_confirmations WHERE state = ? ORDER BY created_at, id').all(state)) as unknown as ProfileConfirmationDbRow[]
+    return rows.map(toProfileConfirmation)
+  }
+
+  const decideProfileConfirmation = (id: number, state: 'approved' | 'rejected', now: number): void => {
+    db.prepare('UPDATE profile_confirmations SET state = ?, decided_at = ? WHERE id = ?').run(state, now, id)
+  }
+
   return {
     dbPath,
+    upsertDomain,
+    listDomains,
+    getDomain,
+    setDomainEnabled,
+    addDomainMember,
+    removeDomainMember,
+    listDomainMembers,
+    activeDomainIdentities,
+    upsertGlobalCandidate,
+    getGlobalCandidate,
+    listGlobalCandidates,
+    setGlobalCandidateState,
+    recordCandidateObservation,
+    listCandidateObservations,
+    enqueueProfileConfirmation,
+    listProfileConfirmations,
+    decideProfileConfirmation,
     allocateTag,
     getTag,
     listTags,
