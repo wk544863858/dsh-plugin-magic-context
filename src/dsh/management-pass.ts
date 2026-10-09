@@ -27,7 +27,7 @@ import {
 } from '../core/compartments.ts'
 import type { Journal } from '../core/journal.ts'
 import type { MemoryFact } from '../core/memory-categories.ts'
-import { renderMemoryLine, type MemoryRow } from '../core/memory-bridge.ts'
+import { renderMemoryLine, type MemoryRow, type ProfileRecallResult } from '../core/memory-bridge.ts'
 import type { PassDecision, PressurePolicy } from '../core/policy.ts'
 import type { AdapterStores, BaselineState } from '../core/stores.ts'
 import { errText } from '../core/types.ts'
@@ -110,6 +110,14 @@ export interface ManagementPassInput {
     /** Epoch fingerprint; a change forces the HARD rebuild + cursor reset. */
     readonly projectEpochFingerprint?: string
   }
+  /**
+   * WP8: the user profile (`user_memories`, read through
+   * `MemoryBridge.profileRecall`). It is the one global lane with no activation
+   * rule, so it renders in m[0] above the project memories — and, unlike Magic
+   * Context, a rewrite or a dismissal of a rendered row DOES fold m[0]: serving
+   * a stale profile block forever is worse than one rebuild.
+   */
+  readonly profile?: ProfileRecallResult
   /** Historian fact promotion into the shared memory store (optional). */
   readonly memoryPromote?: (input: {
     readonly identity: string
@@ -418,6 +426,7 @@ function refreshBaseline(
   const now = input.now?.() ?? Date.now()
   const compartments = input.stores.listCompartments(input.sessionId)
   const memories = input.memories
+  const profile = input.profile
   const updates = input.memoryUpdates
   const previous = input.stores.baselineState(input.sessionId)
   const routeChanged = previous !== undefined
@@ -443,7 +452,21 @@ function refreshBaseline(
     && previous.maxMemoryMutationId === undefined
     && updates !== undefined
     && updates.updates.length > 0
-  const hard = previous === undefined || routeChanged || memoriesChanged || epochChanged || cursorUpgrade
+  // WP8: the profile's fold trigger. An entry ABOVE the frozen watermark is an
+  // addition and rides m[1] without touching the prefix. A row AT or below it
+  // being rewritten or dismissed changes the digest — and here, unlike Magic
+  // Context whose version bump deliberately never folded m[0], the stale block
+  // is rebuilt: a profile the agent keeps reading after it was retracted is
+  // worse than one cache bust. The `''` sentinel recorded by an emptying fold
+  // keeps a switched-off profile from rebuilding on every later pass.
+  const profileChanged = previous !== undefined && (
+    profile === undefined
+      ? previous.profileM0Digest !== undefined && previous.profileM0Digest !== ''
+      : previous.profileM0Digest === undefined
+        ? true
+        : previous.profileM0Digest !== profile.digest
+  )
+  const hard = previous === undefined || routeChanged || memoriesChanged || epochChanged || cursorUpgrade || profileChanged
   // Freeze targets for a HARD fold. Falling back to the previous values keeps a
   // pass that has no mutation lane (bridge unavailable) from rewinding them.
   const frozenCursor = updates?.cursor ?? previous?.maxMemoryMutationId
@@ -459,6 +482,14 @@ function refreshBaseline(
       // The watermark moves only on a HARD rebuild: everything written since
       // the previous fold becomes part of the frozen m[0] pool here.
       ...memories?.maxMemoryId === undefined ? {} : { maxMemoryId: memories.maxMemoryId },
+      // WP8: the profile freeze. The digest recorded is the FOLD digest (every
+      // active row), because this fold renders the whole profile and the next
+      // pass's pool is exactly that set — recording the pool digest here would
+      // buy a second, useless rebuild.
+      profileM0Digest: profile?.foldDigest ?? '',
+      ...profile === undefined
+        ? previous?.profileWatermark === undefined ? {} : { profileWatermark: previous.profileWatermark }
+        : { profileWatermark: profile.currentMaxId },
       // Same rule for the mutation cursor (§7.5 step 4): folding m[0] bakes the
       // pending updates in, so the `<memory-updates>` block disappears.
       ...frozenCursor === undefined ? {} : { maxMemoryMutationId: frozenCursor },
@@ -481,11 +512,19 @@ function refreshBaseline(
   const forcedMemoryLines = forcedRender.forcedMemoryIds
     .filter(id => forcedRowsById.has(id))
     .map(id => renderMemoryLine((memories?.eligibleRows ?? []).find(row => row.id === id)!))
+  // WP8: a HARD fold swallows the profile delta (the whole profile becomes
+  // m[0]); a soft pass renders the pool in m[0] and the new entries in m[1].
+  const profilePoolLines = hard
+    ? [...(profile?.lines ?? []), ...(profile?.newLines ?? [])]
+    : profile?.lines ?? []
+  const profileDeltaLines = hard ? [] : profile?.newLines ?? []
   const block = renderBaseline({
     now,
     baseline: sets.baseline,
     delta: sets.delta,
     memories: memories?.lines ?? [],
+    ...profilePoolLines.length === 0 ? {} : { profileLines: profilePoolLines },
+    ...profileDeltaLines.length === 0 ? {} : { newProfileLines: profileDeltaLines },
     ...memories?.newLines === undefined ? {} : { newMemories: memories.newLines },
     ...memories?.newMemoryIds === undefined ? {} : { newMemoryIds: memories.newMemoryIds },
     ...memories?.baselineIds === undefined ? {} : { baselineIds: memories.baselineIds },
@@ -544,6 +583,12 @@ function refreshBaseline(
       nodeSeq: landedSeq,
       compartments: { baseline: sets.baseline.length, delta: sets.delta.length },
       memories: { rows: memories?.lines.length ?? 0, digest: memories?.digest.slice(0, 12) },
+      profile: {
+        rows: profile?.lines.length ?? 0,
+        newRows: hard ? 0 : profile?.newLines.length ?? 0,
+        digest: profile?.digest.slice(0, 12),
+        watermark: state.profileWatermark,
+      },
       memoryUpdates: {
         pending: updates?.updates.length ?? 0,
         rendered: hard ? 0 : updates?.updates.length ?? 0,
@@ -553,6 +598,7 @@ function refreshBaseline(
       bytes: block.length,
       estTokens: estimateTokens(block),
       ...memoriesChanged ? { reason: 'memory-digest-changed' } : {},
+      ...profileChanged ? { reason: 'profile-digest-changed' } : {},
       ...routeChanged ? { reason: 'route-changed' } : {},
       ...epochChanged ? { reason: 'project-memory-epoch-changed' } : {},
       ...cursorUpgrade ? { reason: 'mutation-cursor-upgrade' } : {},

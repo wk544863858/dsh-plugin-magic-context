@@ -50,6 +50,7 @@ const MAJOR_KINDS = [
   'baseline',
   'emergency-reclaim',
   'memory-recall',
+  'profile-recall',
   'memory-write',
   'memory-promote',
   'project-drift',
@@ -735,6 +736,7 @@ function computeMetrics(rows) {
     wire: { events: 0, swept: 0, remaining: 0 },
     toolCall: { total: 0, byTool: {}, queued: 0, restored: 0, refused: 0, refuseReasons: {}, durations: [] },
     memoryRecall: { total: 0, rows: 0, budgetTokens: 0, usedTokens: 0 },
+    profileRecall: { total: 0, rows: 0, estTokens: 0 },
     engine: { total: 0, byAction: {} },
     // 记忆车道维护（dreamer 替身）：verify 节奏、wrong 率、lag 与 pool 是
     // staging 扳机的三个观测锚点（见 buildHealth 的阈值提示）。
@@ -787,6 +789,7 @@ const SUMMED_KINDS = {
   'emergency-reclaim': { group: 'emergency', counter: 'events', sums: ['dropped', 'protected', 'retried'] },
   'wire-repair': { group: 'wire', counter: 'events', sums: ['swept', 'remaining'] },
   'memory-recall': { group: 'memoryRecall', counter: 'total', sums: ['rows', 'budgetTokens', 'usedTokens'] },
+  'profile-recall': { group: 'profileRecall', counter: 'total', sums: ['rows', 'estTokens'] },
 }
 switch (row.kind) {
       case 'pass': {
@@ -1538,6 +1541,13 @@ function renderText(payload) {
       `  memory-recall : ${fmtInt(mr.total)} 次，召回行 ${fmtInt(mr.rows)}，`
       + `使用 tokens ${fmtInt(mr.usedTokens)} / 预算 ${fmtInt(mr.budgetTokens)}（平均每次 ${fmtFixed(mr.avgUsedTokens, 1)}）`,
     )
+    const pr = metrics.profileRecall
+    if (pr.total > 0) {
+      lines.push(
+        `  profile-recall: ${fmtInt(pr.total)} 次，注入画像行 ${fmtInt(pr.rows)}，`
+        + `估算 tokens ${fmtInt(pr.estTokens)}（m[0] <user-profile>；用户域渲染开关 memory.global.user.render）`,
+      )
+    }
     const mt = metrics.maintenance
     if (mt.ticks > 0) {
       lines.push(

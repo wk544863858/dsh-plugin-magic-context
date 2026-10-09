@@ -41,6 +41,7 @@ export type JournalKind =
   | 'emergency-reclaim'
   | 'wire-repair'
   | 'memory-recall'
+  | 'profile-recall'
   | 'search-hint'
   | 'memory-promote'
   | 'maintenance'

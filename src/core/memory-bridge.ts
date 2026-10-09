@@ -168,6 +168,12 @@ export interface MemoryBridge {
    * the m[0] snapshot and the mutation cursor must be rebuilt, not reused.
    */
   projectMemoryEpochFingerprint(project?: string): string
+  /**
+   * WP8: the user profile (`user_memories`) — the one global lane that needs no
+   * activation rule, because it is about the person, not about a project. Read
+   * only; `undefined` when the store predates the table or the profile is empty.
+   */
+  profileRecall(request: ProfileRecallRequest): ProfileRecallResult | undefined
   /** The bridge's own health, for /ctx-status and the logs. */
   readonly status: {
     readonly ok: boolean
@@ -225,6 +231,56 @@ export interface MemoryBridgeLogger {
   info(message: string): void
   warn(message: string): void
 }
+
+/**
+ * WP8: one active profile row. `user_memories` carries no category, no
+ * shareable flag and no project — that absence IS the domain: the profile is
+ * global to the person, which is why it needs no activation rule where `org`
+ * and `machine` do.
+ */
+export interface ProfileRow {
+  readonly id: number
+  readonly content: string
+  readonly promotedAt: number
+  readonly updatedAt: number
+}
+
+export interface ProfileRecallRequest {
+  readonly now: number
+  /** m[0] budget for the profile block; the delta gets 25% of it. */
+  readonly budgetTokens?: number
+  /**
+   * The frozen watermark. Rows with `id` above it are the in-session additions
+   * and render in `<new-user-profile>`; `undefined` means "nothing frozen yet",
+   * which puts the whole profile in m[0].
+   */
+  readonly maxId?: number
+}
+
+export interface ProfileRecallResult {
+  readonly rows: readonly ProfileRow[]
+  readonly lines: readonly string[]
+  /**
+   * `sha1(id:updated_at…)` over the pool the WATERMARK defines (every active
+   * row at or below it) — not over the budget selection. The budget moves with
+   * unrelated configuration, and a config change must not look like a data
+   * change; the bytes that actually render are covered by the fold instead.
+   */
+  readonly digest: string
+  /**
+   * The same digest over EVERY active row: what a HARD fold freezes, because
+   * the fold renders the whole profile and the next pass's pool is exactly the
+   * full active set. Freezing {@link digest} there would rebuild a second time.
+   */
+  readonly foldDigest: string
+  readonly newRows: readonly ProfileRow[]
+  readonly newLines: readonly string[]
+  /** `MAX(id)` over the ACTIVE rows: what a HARD rebuild freezes. */
+  readonly currentMaxId: number
+}
+
+/** Default m[0] budget for `<user-profile>` (Magic Context's own number). */
+export const PROFILE_M0_BUDGET_TOKENS = 4000
 
 interface MemoryBridgeOptions {
   readonly dbPath?: string
@@ -384,6 +440,11 @@ export function renderMemoryLine(row: MemoryRow): string {
   return `- [${row.category || 'MEMORY'}${badge}] ${row.content.replace(/\s+/g, ' ').trim()}`
 }
 
+/** Render one profile row as a baseline line. */
+export function renderProfileLine(row: ProfileRow): string {
+  return `- ${row.content.replace(/\s+/g, ' ').trim()}`
+}
+
 /**
  * Open the shared memory database read-only. Any incompatibility (missing
  * file, unknown schema version, missing table) disables recall with a loud
@@ -404,6 +465,7 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
       mutations: () => undefined,
       maxMemoryMutationId: () => 0,
       projectMemoryEpochFingerprint: () => '',
+      profileRecall: () => undefined,
       close: () => undefined,
     }
   }
@@ -552,6 +614,26 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
         members,
         shareCategories: categories,
         domains,
+      }
+    }
+
+    // WP8: the user profile. `user_memories` is optional (older contracts lack
+    // it) and its stamp columns are probed rather than assumed, so a schema
+    // drift degrades to "no profile" instead of taking the recall path down.
+    let profileStatement: ReturnType<typeof db.prepare> | undefined
+    if (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'user_memories'").get() !== undefined) {
+      const profileColumns = new Set(
+        (db.prepare('PRAGMA table_info(user_memories)').all() as Array<{ name: string }>).map(row => row.name),
+      )
+      if (profileColumns.has('id') && profileColumns.has('content') && profileColumns.has('status')) {
+        const promoted = profileColumns.has('promoted_at')
+          ? 'promoted_at'
+          : profileColumns.has('created_at') ? 'created_at' : 'id'
+        const updated = profileColumns.has('updated_at') ? 'updated_at' : promoted
+        profileStatement = db.prepare(
+          'SELECT id, content, ' + promoted + ' AS promoted_at, ' + updated + ' AS updated_at '
+            + "FROM user_memories WHERE status = 'active' ORDER BY " + promoted + ' ASC, id ASC',
+        )
       }
     }
 
@@ -915,6 +997,54 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
         }
       },
       mutations: readMutations,
+      profileRecall: (request) => {
+        try {
+          if (profileStatement === undefined) return undefined
+          const rows = (profileStatement.all() as unknown as Array<{
+            id: number; content: string; promoted_at: number | null; updated_at: number | null
+          }>).map(row => ({
+            id: row.id,
+            content: row.content,
+            promotedAt: row.promoted_at ?? row.id,
+            updatedAt: row.updated_at ?? row.promoted_at ?? row.id,
+          }))
+          if (rows.length === 0) return undefined
+          const budget = request.budgetTokens ?? PROFILE_M0_BUDGET_TOKENS
+          const watermark = request.maxId
+          const pool = watermark === undefined ? rows : rows.filter(row => row.id <= watermark)
+          const additions = watermark === undefined ? [] : rows.filter(row => row.id > watermark)
+          const pick = (candidates: readonly ProfileRow[], tokens: number): ProfileRow[] => {
+            const selected: ProfileRow[] = []
+            let used = 0
+            for (const row of candidates) {
+              const cost = estimateTokens(renderProfileLine(row))
+              // `continue`, not `break`: one expensive entry must not hide the
+              // cheaper ones behind it (the same rule the memory picker keeps).
+              if (used + cost > tokens) continue
+              used += cost
+              selected.push(row)
+            }
+            return selected
+          }
+          const selectedPool = pick(pool, budget)
+          const selectedDelta = pick(additions, Math.max(1, Math.floor(budget * 0.25)))
+          if (selectedPool.length === 0 && selectedDelta.length === 0 && rows.length === 0) return undefined
+          const digestOf = (list: readonly ProfileRow[]): string =>
+            createHash('sha1').update(list.map(row => `${String(row.id)}:${String(row.updatedAt)}`).join('|')).digest('hex')
+          return {
+            rows: selectedPool,
+            lines: selectedPool.map(renderProfileLine),
+            digest: digestOf(pool),
+            foldDigest: digestOf(rows),
+            newRows: selectedDelta,
+            newLines: selectedDelta.map(renderProfileLine),
+            currentMaxId: rows.reduce((max, row) => Math.max(max, row.id), 0),
+          }
+        } catch (error) {
+          options.logger.warn(`magic-context profile read failed (continuing without it): ${errText(error)}`)
+          return undefined
+        }
+      },
       recall: (request) => {
         try {
           // B3 (MC single_store_reads): one deferred read transaction so the

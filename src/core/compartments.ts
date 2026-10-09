@@ -346,9 +346,30 @@ export function renderBaseline(input: {
    * like MC's deltaMemories composition (inject-compartments.ts:2966-2969).
    */
   readonly forcedMemoryLines?: readonly string[]
+  /**
+   * WP8: the user-profile lines that belong to m[0] (`<user-profile>`). The
+   * profile has no activation rule — it is global to the person, exactly as in
+   * Magic Context — so it renders ABOVE the project memories: who the person is
+   * frames what the project is.
+   *
+   * The budget is the caller's (the bridge trims with the same `continue`
+   * semantics the memory pool uses), because only the reader knows how many
+   * tokens the profile is worth.
+   */
+  readonly profileLines?: readonly string[]
+  /**
+   * WP8: profile rows written AFTER the frozen m[0] watermark. They render in
+   * the m[1] region as `<new-user-profile>`, so a new profile entry never
+   * rebuilds the cached prefix.
+   */
+  readonly newProfileLines?: readonly string[]
   readonly budgetTokens: number
 }): string {
   const sections: string[] = []
+  const profileLines = input.profileLines ?? []
+  if (profileLines.length > 0) {
+    sections.push(['<user-profile>', ...profileLines, '</user-profile>'].join('\n'))
+  }
   if (input.memories.length > 0) {
     sections.push(['<project-memories>', ...input.memories, '</project-memories>'].join('\n'))
   }
@@ -388,6 +409,10 @@ export function renderBaseline(input: {
     : []
   if (newMemories.length > 0) {
     sections.push(['<new-memories>', ...newMemories, '</new-memories>'].join('\n'))
+  }
+  const newProfileLines = input.newProfileLines ?? []
+  if (newProfileLines.length > 0) {
+    sections.push(['<new-user-profile>', ...newProfileLines, '</new-user-profile>'].join('\n'))
   }
   if (input.delta.length > 0) {
     const ordered = [...input.delta].sort((left, right) => right.createdAt - left.createdAt)

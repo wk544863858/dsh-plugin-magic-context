@@ -17,7 +17,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { AdapterStores } from '../core/stores.ts'
 import type { Journal } from '../core/journal.ts'
 import { decidePass, pressurePercent, pressureWindowTokens, type PressurePolicy } from '../core/policy.ts'
-import { resolveIdentitySpec } from '../core/memory-bridge.ts'
+import { PROFILE_M0_BUDGET_TOKENS, resolveIdentitySpec } from '../core/memory-bridge.ts'
 import type { MemoryFact } from '../core/memory-categories.ts'
 import { errText } from '../core/types.ts'
 import {
@@ -322,6 +322,22 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
           // `enabled` inside gates the ranking takeover, stats always ride.
           ...memoryIdentity === undefined ? {} : { scoring: lane.memoryScoring(memoryIdentity) },
         })
+        // WP8: the user profile. Its own read with its own watermark — the
+        // profile is unaffected by project identity, and this lane can be
+        // switched off (`memory.global.user.render`, default true) without
+        // touching memory recall at all.
+        const profileEnabled = liveBoolean(config.memory?.global?.user?.render, true)
+        const profile = !profileEnabled || memoryRecall === undefined
+          ? undefined
+          : memoryRecall.profileRecall({
+            // Frozen-prefix discipline, same as memory recall: the m[0] profile
+            // evaluates against the HARD-rebuild clock, not a live one.
+            now: stores.baselineState(sessionId)?.frozenAt ?? Date.now(),
+            budgetTokens: PROFILE_M0_BUDGET_TOKENS,
+            ...stores.baselineState(sessionId)?.profileWatermark === undefined
+              ? {}
+              : { maxId: stores.baselineState(sessionId)?.profileWatermark },
+          })
         // A2 (MC getVisibleMemoryIds): the ids the injected block renders NOW
         // are what ctx_memory search suppresses as already-visible. Replaced
         // per pass, process-memory only, fail-open when absent.
@@ -390,6 +406,22 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
             sessionId,
           )
         }
+        if (profile !== undefined && (profile.lines.length > 0 || profile.newLines.length > 0)) {
+          journal?.info(
+            'profile-recall',
+            `injected ${String(profile.lines.length)} profile row(s) into m[0]`
+              + `${profile.newLines.length > 0 ? `, ${String(profile.newLines.length)} new in m[1]` : ''}`,
+            {
+              rows: profile.rows.length,
+              newRows: profile.newRows.length,
+              digest: profile.digest.slice(0, 12),
+              watermark: stores.baselineState(sessionId)?.profileWatermark,
+              currentMaxId: profile.currentMaxId,
+              estTokens: profile.lines.reduce((total, line) => total + Math.ceil(line.length / 4), 0),
+            },
+            sessionId,
+          )
+        }
         const outcome = runManagementPass({
           session: payload.agent.session,
           sessionId,
@@ -436,6 +468,7 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
                 maxMemoryId: currentMaxMemoryId,
               },
             },
+          ...profile === undefined ? {} : { profile },
           // `cursor` is deliberately the CURRENT max mutation id, not the paged
           // read cursor: on a HARD rebuild m[0] swallows everything up to now,
           // so freezing a partial page would re-render rows it already folded.

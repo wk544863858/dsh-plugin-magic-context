@@ -100,6 +100,28 @@ export interface MagicContextDshConfig {
       source?: 'adapter' | 'contract'
     }
     /**
+     * The `user` (profile) lane. It has no activation rule because it is about
+     * the person, not a project — which is exactly why its two halves are
+     * separate switches: rendering reads the shared store, collecting writes it.
+     */
+    global?: {
+      user?: {
+        /**
+         * Inject the stored profile as m[0] `<user-profile>` (and new entries as
+         * m[1] `<new-user-profile>`). Default true — Magic Context injected the
+         * profile into every session, and this adapter had no such lane.
+         * Read-only: nothing is written to the shared store.
+         */
+        render?: boolean
+        /**
+         * Produce new profile candidates from DSH sessions. Default FALSE: this
+         * is the path that writes to the shared store, so it stays off until
+         * the write is deliberately turned on.
+         */
+        collect?: boolean
+      }
+    }
+    /**
      * Workspace root for the evidence pass (schema v7): its greps run here.
      * Defaults to `memory.project` when that is a real filesystem path.
      */
