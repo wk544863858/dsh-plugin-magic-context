@@ -78,6 +78,8 @@ const PHASE_A = [
  */
 const PHASE_B = [
   'tests/directive-detect.spec.ts',
+  'tests/profile-collection.spec.ts',
+  'tests/profile-collection-run.spec.ts',
   'tests/profile-confirmation.spec.ts',
   'tests/profile-render.spec.ts',
 ]

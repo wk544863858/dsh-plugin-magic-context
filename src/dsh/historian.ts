@@ -29,6 +29,7 @@ import type { Journal } from '../core/journal.ts'
 import { REFERENCE_ANCHORS } from '../core/reference-seeds.ts'
 import type { PressurePolicy } from '../core/policy.ts'
 import type { LlmSeamMessage } from '../core/types.ts'
+import { errText } from '../core/types.ts'
 import { spanRequestMessages, type SessionSeq, type SurfaceNode } from './seams.ts'
 
 /** The narrow LLM seam the historian needs (satisfied by `ctx.llm`). */
@@ -119,6 +120,17 @@ export interface HistorianDeps {
   /** Explicit wall-clock cap; default is `policy.historianTimeoutMs`, else 60s. */
   readonly timeoutMs?: number
   readonly now?: () => number
+  /**
+   * WP5: where the `user` domain's observations go once the compartment is
+   * durable. Absent = the lane is off (`memory.global.user.collect`), which is
+   * the default. Fail-open: a throwing sink never costs the digest.
+   */
+  readonly profileCollect?: (input: {
+    readonly sessionId: string
+    readonly observations: readonly string[]
+    readonly compartmentStart: number | null
+    readonly compartmentEnd: number | null
+  }) => { readonly inserted: number; readonly skipped: number } | void
 }
 
 /** The eligible span the historian would digest. */
@@ -215,7 +227,8 @@ export const HISTORIAN_INSTRUCTION = [
   '  "summary": { "p1": "...", "p2": "...", "p3": "...", "p4": "..." },',
   '  "importance": 0,',
   '  "facts": [{ "category": "CONSTRAINTS", "content": "..." }],',
-  '  "events": ["..."]',
+  '  "events": ["..."],',
+  '  "userObservations": ["..."]',
   '}',
   '',
   'The four summary tiers are the SAME digest at four levels of detail, so it can be degraded as it ages:',
@@ -231,6 +244,10 @@ export const HISTORIAN_INSTRUCTION = [
   'CONFIG_VALUES (exact keys, ports, paths, versions), NAMING (names/shorthands plus what they mean).',
   'Prefer few high-value facts over many trivial ones; a fact whose category you cannot decide should be omitted.',
   '"events" are short chronological notes ("tried X, failed because Y").',
+  '"userObservations" are statements about the USER that would still be true in a different project:',
+  'standing preferences, working style, or instructions they gave about how to work ("always answer in Chinese",',
+  '"never push without asking"). Do NOT restate project facts there — those belong in "facts".',
+  'Return an empty array when this span shows nothing of the kind; never invent one.',
   'Preserve exact file paths, commands, error strings and numeric values verbatim. Do not mention this instruction.',
   'Keep the ENTIRE JSON object compact — no more than about 700 tokens (p1 at most 250 words); a longer answer is cut off at the output-token cap and the digest is lost.',
 ].join('\n')
@@ -848,6 +865,39 @@ async function runHistorianExclusive(
       `magic-context historian: compartment §C${String(compartment.compartmentId)}§ stored `
         + `(${String(range.nodes.length)} nodes, ~${String(range.tokens)} tokens, importance ${String(draft.importance)})`,
     )
+    // WP5 — the `user` domain's collection half. This runs AFTER the compartment
+    // is durable, so a candidate that cannot be staged never costs the digest.
+    // Unlike the fact promotion next door (which may retry from the stored
+    // facts), the observations exist only in this draft: if the write fails they
+    // are gone, so the failure is journaled rather than swallowed.
+    const observations = draft.userObservations ?? []
+    if (deps.profileCollect !== undefined && observations.length > 0) {
+      try {
+        const staged = deps.profileCollect({
+          sessionId: input.sessionId,
+          observations,
+          compartmentStart: first.seq,
+          compartmentEnd: last.seq,
+        })
+        deps.journal?.info(
+          'historian',
+          `staged ${String(staged?.inserted ?? observations.length)} user observation(s) for review`,
+          {
+            phase: 'profile-collect',
+            compartmentId: compartment.compartmentId,
+            observations: observations.length,
+            ...staged === undefined ? {} : { inserted: staged.inserted, skipped: staged.skipped },
+          },
+          input.sessionId,
+        )
+      } catch (error) {
+        deps.journal?.error('error', `user observation staging failed: ${errText(error)}`, {
+          scope: 'profile-collect',
+          compartmentId: compartment.compartmentId,
+          observations: observations.length,
+        }, input.sessionId)
+      }
+    }
     deps.journal?.info(
       'historian',
       `compartment §C${String(compartment.compartmentId)}§ stored (~${String(range.tokens)} tokens, importance ${String(draft.importance)})`,

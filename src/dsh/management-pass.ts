@@ -131,6 +131,18 @@ export interface ManagementPassInput {
   }
   /** The project identity facts belong to (required for promotion). */
   readonly memoryIdentity?: string
+  /**
+   * WP5: the `user` domain's candidate sink, handed to the historian. Present
+   * only when the lane is switched on (`memory.global.user.collect`, default
+   * off); the historian calls it after the compartment is durable and swallows
+   * its failures, so a candidate problem can never cost a digest.
+   */
+  readonly profileCollect?: (input: {
+    readonly sessionId: string
+    readonly observations: readonly string[]
+    readonly compartmentStart: number | null
+    readonly compartmentEnd: number | null
+  }) => { readonly inserted: number; readonly skipped: number } | void
   readonly now?: () => number
 }
 
@@ -752,6 +764,7 @@ export function runManagementPass(input: ManagementPassInput): ManagementPassRes
         ...input.journal === undefined ? {} : { journal: input.journal },
         ...input.historian.route === undefined ? {} : { route: input.historian.route },
         ...input.historian.now === undefined ? {} : { now: input.historian.now },
+        ...input.profileCollect === undefined ? {} : { profileCollect: input.profileCollect },
       }
       void runHistorian(deps, {
         sessionId: input.sessionId,

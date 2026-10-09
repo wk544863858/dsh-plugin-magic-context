@@ -158,6 +158,34 @@ export const WORKSPACES_DDL = `
 `
 
 /**
+ * The user-profile tables, verbatim from the live contract (2026-10-10):
+ * `user_memory_candidates` is the staging pool the historian feeds (WP5) and
+ * `user_memories` is the promoted profile the render lane reads (WP7/WP8).
+ * `project_state['__global__'].project_user_profile_version` is NOT created
+ * here — MC keeps it in `project_state`, which callers request separately.
+ */
+export const PROFILE_DDL = `
+  CREATE TABLE user_memory_candidates(
+    id INTEGER PRIMARY KEY,
+    content TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    source_compartment_start INTEGER,
+    source_compartment_end INTEGER,
+    created_at INTEGER NOT NULL);
+  CREATE INDEX idx_umc_created ON user_memory_candidates(created_at);
+  CREATE TABLE user_memories(
+    id INTEGER PRIMARY KEY,
+    content TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    promoted_at INTEGER NOT NULL,
+    source_candidate_ids TEXT DEFAULT '[]',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    source_candidate_provenance TEXT);
+  CREATE INDEX idx_um_status ON user_memories(status);
+`
+
+/**
  * Create a throwaway context.db in a fresh temp dir with the requested
  * tables, stamp `schemaVersion` into schema_migrations (null skips the
  * table entirely), close the handle, and return the path plus the temp dir
@@ -172,6 +200,7 @@ export function makeMemoryDb(input: {
   fts?: boolean
   artefacts?: boolean
   workspaces?: boolean
+  profile?: boolean
 }): { path: string; dir: string } {
   const dir = mkdtempSync(join(tmpdir(), input.prefix ?? 'mc-db-'))
   const path = join(dir, 'context.db')
@@ -184,6 +213,7 @@ export function makeMemoryDb(input: {
     if (input.fts) ddl += FTS_DDL
     if (input.artefacts) ddl += ARTEFACT_DDL
     if (input.workspaces) ddl += WORKSPACES_DDL
+    if (input.profile) ddl += PROFILE_DDL
     if (input.schemaVersion !== null) {
       ddl += '  CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER);\n'
     }

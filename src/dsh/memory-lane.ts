@@ -13,6 +13,7 @@ import { errText } from '../core/types.ts'
 import type { PressurePolicy } from '../core/policy.ts'
 import { openMemoryBridge, DEFAULT_SHARE_CATEGORIES, defaultMemoryDbPath, resolveIdentitySpec } from '../core/memory-bridge.ts'
 import { openMemoryWriter, type MemoryWriter } from '../core/memory-write.ts'
+import { openProfileWriter, type ProfileWriter } from '../core/profile-write.ts'
 import { openMemorySearch, type MemorySearch, type MemorySearchHit } from '../core/memory-search.ts'
 import { cosineSimilarity, defaultEmbeddingCacheDir, openLocalEmbedder } from '../core/embedding-local.ts'
 import { defineCtxMemoryTool, type LocalDefineTool } from './tool-bridge.ts'
@@ -37,6 +38,13 @@ export interface MemoryLane {
   memorySettings: MagicContextDshConfig['memory']
   memoryRecall: ReturnType<typeof openMemoryBridge> | undefined
   memoryWriter: MemoryWriter | undefined
+  /**
+   * WP5: the `user` domain's candidate sink, opened beside the memory writer
+   * (same contract database, different table and different fence). `undefined`
+   * when the contract has no candidate table or the store is unreadable — the
+   * collection lane is best-effort by design.
+   */
+  profileWriter: ProfileWriter | undefined
   memorySearch: MemorySearch | undefined
   /** A2: per-session memory ids the injected block currently renders. */
   visibleMemoryIdsBySession: Map<string, Set<number>>
@@ -120,6 +128,24 @@ export function openMemoryLane(
     ctx.logger.info(
       `magic-context dsh adapter: memory writer at ${memoryWriter.dbPath} `
         + `(${status.ok ? (status.readOnly === true ? 'read-only' : 'read-write') : `unavailable: ${String(status.detail)}`})`,
+    )
+  }
+
+  // WP5: the `user` domain's candidate sink. Opened whenever the memory lane is
+  // usable at all — whether candidates are actually RECORDED is a live config
+  // decision (`memory.global.user.collect`, default off) read per pass, so the
+  // switch can be flipped without reopening the store.
+  const profileWriter: ProfileWriter | undefined =
+    memoryRecall === undefined
+      ? undefined
+      : openProfileWriter({
+        dbPath: memorySettings?.dbPath ?? memoryRecall.dbPath ?? defaultMemoryDbPath(),
+        logger: ctx.logger,
+      })
+  if (profileWriter !== undefined) {
+    ctx.logger.info(
+      `magic-context dsh adapter: profile candidate writer at ${profileWriter.dbPath} `
+        + `(${profileWriter.status.ok ? 'read-write' : `unavailable: ${String(profileWriter.status.detail)}`})`,
     )
   }
 
@@ -380,6 +406,7 @@ export function openMemoryLane(
     memorySettings,
     memoryRecall,
     memoryWriter,
+    profileWriter,
     memorySearch,
     visibleMemoryIdsBySession,
     memorySearchForTool,

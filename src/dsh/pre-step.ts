@@ -103,7 +103,7 @@ export type PreStepListener = (
 export function preStepListener(deps: PreStepDeps): PreStepListener {
   const { ctx, config, stores, journal, llm, reduceTracker, lane, projects, seenSessions, activePolicy } = deps
   const { seenIdentities, sessionIdentity } = projects
-  const { memoryRecall, memoryWriter, visibleMemoryIdsBySession } = lane
+  const { memoryRecall, memoryWriter, profileWriter, visibleMemoryIdsBySession } = lane
   /** Consecutive defers per session, keyed by reason, to log transitions only. */
   const deferStreak = new Map<string, { reason: string; count: number }>()
   /** One-shot flag: a drifted pre-step payload must warn once, not every step. */
@@ -484,6 +484,22 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
           ...memoryWriter === undefined || memoryIdentity === undefined || config.memory?.autoPromote === false
             ? {}
             : { memoryPromote: (promote: { identity: string; facts: readonly MemoryFact[]; sessionId: string }) => memoryWriter.promoteFacts(promote), memoryIdentity },
+          // WP5: the `user` domain's collection switch — read LIVE, so it can be
+          // flipped without a remount, and default OFF because this lane stages
+          // rows in the shared contract. The historian journals what it staged
+          // (including what normalization dropped), so the switch's effect is
+          // visible from the journal rather than inferred from the pool size.
+          ...profileWriter === undefined || profileWriter.status.ok !== true
+            || !liveBoolean(config.memory?.global?.user?.collect, false)
+            ? {}
+            : {
+              profileCollect: (collect: {
+                sessionId: string
+                observations: readonly string[]
+                compartmentStart: number | null
+                compartmentEnd: number | null
+              }) => profileWriter.recordCandidates(collect),
+            },
         })
         journal?.info('pass', `execute (${pass.reason}) at ${pressure?.toFixed(1) ?? '?'}%`, {
           decision: 'execute',

@@ -28,6 +28,16 @@ export interface CompartmentDraft {
   /** Categorized facts — the only shape Magic Context can promote. */
   readonly facts: readonly MemoryFact[]
   readonly events: readonly string[]
+  /**
+   * WP5: statements about the USER that would still hold in another project
+   * ("always answer in Chinese", "never push without asking"). They travel
+   * outside `facts` because facts are project-scoped and these are not.
+   *
+   * Optional on purpose: a compartment row stored before WP5 has none, and the
+   * historian writes them to the candidate pool immediately after the digest
+   * lands, so nothing has to re-read them out of the row later.
+   */
+  readonly userObservations?: readonly string[]
 }
 
 /** A stored compartment row. */
@@ -589,5 +599,8 @@ export function parseHistorianOutput(text: string): CompartmentDraft {
     importance,
     facts: asFactArray(record.facts),
     events: asStringArray(record.events),
+    // WP5: absent on every digest written before the field existed, and on any
+    // model that follows the instruction by omitting an empty array.
+    userObservations: asStringArray(record.userObservations),
   }
 }
