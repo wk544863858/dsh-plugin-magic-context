@@ -18,19 +18,35 @@
  */
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { parseFlags, stringFlag } from './cli-flags.mjs'
 
 const args = process.argv.slice(2)
-const flags = new Map()
-for (let i = 0; i < args.length; i += 1) {
-  const arg = args[i]
-  if (!arg.startsWith('--')) continue
-  const next = args[i + 1]
-  if (next !== undefined && !next.startsWith('--')) {
-    flags.set(arg.slice(2), next)
-    i += 1
-  } else {
-    flags.set(arg.slice(2), true)
-  }
+const KNOWN_FLAGS = ['dry-run', 'workspace', 'enable', 'rollback', 'db', 'data-dir']
+const { flags, unknown: unknownFlags, help } = parseFlags(args, KNOWN_FLAGS)
+
+const USAGE = `usage: mc-import-workspace.mjs [options]
+
+  --dry-run            show what would be imported, write nothing
+  --workspace <name>   import this workspace (default: the only one)
+  --enable             switch the org domain on after importing
+  --rollback           remove the imported members and disable the domain
+  --db <path>          contract database (default: the shared context.db)
+  --data-dir <path>    adapter data directory
+
+No options at all imports without enabling, which is safe to re-run (idempotent).`
+
+if (help) {
+  console.log(USAGE)
+  process.exit(0)
+}
+// An unknown flag must never fall through to "do the import". The failure mode
+// this prevents: an operator types `--help` to see what the tool does, and the
+// tool does it. The import is idempotent and never enables a domain on its own,
+// so the blast radius is small — but a tool that acts on instructions it did not
+// understand is a tool nobody can reason about.
+if (unknownFlags.length > 0) {
+  console.error(`mc-import-workspace: unknown flag --${unknownFlags[0]}\n\n${USAGE}`)
+  process.exit(2)
 }
 
 const { defaultContractDb } = await import('./mc-contract-freeze.mjs')
@@ -39,9 +55,9 @@ const { readWorkspacePlan, importWorkspacePlan, rollbackWorkspaceImport, summari
   '../src/core/domain-import.ts'
 )
 
-const contractDb = resolve(typeof flags.get('db') === 'string' ? flags.get('db') : defaultContractDb())
-const dataDir = resolve(typeof flags.get('data-dir') === 'string' ? flags.get('data-dir') : defaultDataDir())
-const workspaceName = typeof flags.get('workspace') === 'string' ? flags.get('workspace') : undefined
+const contractDb = resolve(stringFlag(flags, 'db') ?? defaultContractDb())
+const dataDir = resolve(stringFlag(flags, 'data-dir') ?? defaultDataDir())
+const workspaceName = stringFlag(flags, 'workspace')
 
 if (!existsSync(contractDb)) {
   console.error(`mc-import-workspace: contract database not found: ${contractDb}`)

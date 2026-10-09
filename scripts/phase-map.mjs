@@ -99,6 +99,7 @@ const PHASE_D = [
   'tests/vector-backfill.spec.ts',
   'tests/report-classify.spec.ts',
   'tests/domain-checks.spec.ts',
+  'tests/cli-flags.spec.ts',
   'tests/strip-drill.spec.ts',
 ]
 
