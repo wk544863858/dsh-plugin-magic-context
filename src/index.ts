@@ -55,6 +55,8 @@ import {
 } from './dsh/seams.ts'
 import { reclaimForEmergency } from './dsh/emergency.ts'
 import type { HistorianLlm } from './dsh/historian.ts'
+import { historianInFlight } from './dsh/historian.ts'
+import { publishReadyCompartments } from './dsh/management-pass.ts'
 import { defineCtxExpandTool, defineCtxReduceTool, defineCtxMemoryTool, type LocalDefineTool } from './dsh/tool-bridge.ts'
 import { ReduceNudgeTracker } from './dsh/reduce-guidance.ts'
 import { registerCtxStatusCommand } from './dsh/status-command.ts'
@@ -274,21 +276,78 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     if (session === undefined || sessionId === undefined) return next()
     const before = session.surface.replaceGeneration
     try {
-      const nodes = enumerateSurfaceToolResults(session, callId =>
-        stores.getTag(sessionId, { kind: 'tool-result', callId }))
       // C1: the token window scales with the route's context window.
       const context = requestContextOf(session)
+      // ── Tier 0 (fusion, mon3stera's ready bank): land ready compartments
+      // BEFORE the drop lane. One replacement reclaims a whole digested
+      // span; an emergency drop only individual tool results — and the
+      // request has already failed once, so this bust cannot lose more than
+      // the failed retry did. This lane is a forced execute band in
+      // everything but name (the same exception family as the wire-repair
+      // iron rule: the provider rejected the wire as-is). Fail-open: a
+      // publish failure falls through to the drop lane, never skips it. No
+      // baseline refresh and no fact promotion here — both belong to the
+      // next execute pass (facts stay durable in the compartment row).
+      const publishedIds: number[] = []
+      const publishOnce = (): void => {
+        const bank = publishReadyCompartments({
+          session,
+          sessionId,
+          stores,
+          policy,
+          ...journal === undefined ? {} : { journal },
+        })
+        publishedIds.push(...bank.ids)
+      }
+      publishOnce()
+      // ── Tier 0.5 (OFF by default): a digest in flight gets a bounded
+      // chance to finish before the drop lane fires (mon3stera's
+      // waitReadyTimeout race). `forceWaitReadyMs: 0` — the shipped default —
+      // skips the wait; flip it after the force-path observation window.
+      if (publishedIds.length === 0) {
+        const waitReadyMs = Math.max(0, policy.forceWaitReadyMs)
+        const inFlight = historianInFlight(sessionId)
+        if (waitReadyMs > 0 && inFlight !== undefined) {
+          await Promise.race([
+            inFlight.catch(() => undefined),
+            new Promise<void>(resolve => {
+              const timer = setTimeout(resolve, waitReadyMs)
+              ;(timer as { unref?: () => void }).unref?.()
+            }),
+          ])
+          journal?.info('force-path', `overflow path waited on the in-flight historian (${String(waitReadyMs)}ms cap)`, {
+            tier: 'wait',
+            waitReadyMs,
+          }, sessionId)
+          publishOnce()
+        }
+      }
+      if (publishedIds.length > 0) {
+        journal?.warn('force-path', `provider rejected the request as too long; landed ${String(publishedIds.length)} ready compartment(s) before the drop lane`, {
+          tier: 'publish',
+          published: publishedIds,
+          reason: 'context-window-exceeded',
+          generationBefore: before,
+          generationAfter: session.surface.replaceGeneration,
+        }, sessionId)
+      }
+      // Re-enumerate AFTER any publish: it shadows surface nodes, and
+      // dropping against a stale seq would throw into the waterfall.
+      const nodes = enumerateSurfaceToolResults(session, callId =>
+        stores.getTag(sessionId, { kind: 'tool-result', callId }))
       const reclaim = reclaimForEmergency(session, nodes, policy, context.contextWindow)
       journal?.warn('emergency-reclaim', `provider rejected the request as too long; dropped ${String(reclaim.dropped.length)} tool output(s)`, {
         dropped: reclaim.dropped.length,
         protected: reclaim.protectedCount,
         reason: 'context-window-exceeded',
+        tier: reclaim.dropped.length > 0 ? 'drop' : publishedIds.length > 0 ? 'publish-only' : 'none',
+        publishedBeforeDrop: publishedIds,
         generationBefore: before,
         generationAfter: session.surface.replaceGeneration,
         retried: session.surface.replaceGeneration > before,
       }, sessionId)
       ctx.logger.warn(
-        `magic-context: emergency reclaim dropped ${String(reclaim.dropped.length)} tool outputs `
+        `magic-context: overflow reclaim landed ${String(publishedIds.length)} compartment(s), dropped ${String(reclaim.dropped.length)} tool outputs `
           + `(${String(reclaim.protectedCount)} protected) after a context-overflow rejection`,
       )
     } catch (error) {
@@ -688,6 +747,20 @@ export const Config = z.object({
     baselineTokens: z.number().default(2_000).volatile(),
     memoryBudgetTokens: z.number().default(8_000).volatile(),
     memoryLimit: z.number().default(40).volatile(),
+    /**
+     * The compartment publish guard (fusion v7): `observe` journals the
+     * verdicts only (shipped default); `enforce` acts on them — supersede a
+     * draft whose range gained substantive nodes, reject a digest that would
+     * not shrink the wire; `off` skips the guard.
+     */
+    compartmentGuardMode: z.string().default('observe').volatile(),
+    /** Entrant tokens past which a draft's range counts as drifted (re-digest). */
+    compartmentEntrantTokens: z.number().min(0).default(200).volatile(),
+    /**
+     * Overflow-path wait on an in-flight historian before the drop lane
+     * (0 = never wait — the shipped default; flip after observation).
+     */
+    forceWaitReadyMs: z.number().min(0).default(0).volatile(),
   }),
 })
 

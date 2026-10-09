@@ -16,7 +16,8 @@ import { openMemorySearch, type MemorySearch, type MemorySearchHit } from '../co
 import { cosineSimilarity, defaultEmbeddingCacheDir, openLocalEmbedder } from '../core/embedding-local.ts'
 import { defineCtxMemoryTool, type LocalDefineTool } from './tool-bridge.ts'
 import type { MagicContextDshConfig, MagicContextDshConfigDefineTool } from './config.ts'
-import { liveBoolean } from './volatile.ts'
+import { liveBoolean, liveValue } from './volatile.ts'
+import { DEFAULT_MEMORY_SCORING, type MemoryRecallScoring, type MemoryScoringConfig } from '../core/memory-scoring.ts'
 
 /** The `ctx_memory` search closure's contract (tool-bridge's search seam). */
 export interface MemoryToolSearch {
@@ -44,6 +45,12 @@ export interface MemoryLane {
    * tool exec. `undefined` when the memory lane is off.
    */
   searchForSession: ((session: unknown, query: string, limit: number) => Promise<readonly MemorySearchHit[]>) | undefined
+  /**
+   * The S(t) scoring input for one resolved identity (live config + sidecar
+   * stats), or an all-disabled/empty one when the lane is off. The stats are
+   * ALWAYS returned (shadow collection); `config.enabled` gates the ranking.
+   */
+  memoryScoring(identity: string): MemoryRecallScoring
   /** One wording for the writer's state (boot log + telemetry meta). */
   describeMemoryWrite(): string
   /** The `defineCtxMemoryTool` deps object (identity resolution + recall + search). */
@@ -200,9 +207,17 @@ export function openMemoryLane(
           },
         } : {},
       })
-      return outcome.ok
-        ? { ok: true as const, text: outcome.text, hits: outcome.hits.map(hit => ({ id: hit.id })) }
-        : { ok: false as const, reason: outcome.reason }
+      if (!outcome.ok) return { ok: false as const, reason: outcome.reason }
+      // S(t) sidecar: a search hit strengthens the row for future injection
+      // (mon3stera's recordMemoryHit on the ctx_search path). Fail-open —
+      // scoring stats are advisory and must never fail the tool call.
+      try {
+        const now = Date.now()
+        for (const hit of outcome.hits) stores.recordMemoryEvent(request.identity, hit.id, 'hit', now)
+      } catch {
+        /* scoring stats are advisory */
+      }
+      return { ok: true as const, text: outcome.text, hits: outcome.hits.map(hit => ({ id: hit.id })) }
     }
 
   /**
@@ -260,6 +275,55 @@ export function openMemoryLane(
       return outcome.ok ? outcome.hits : []
     }
 
+  /**
+   * The volatile `memory.scoring` overrides, unwrapped at every read (nested
+   * schemastery references wrap each level — see volatile.ts's measured
+   * double-unwrap note). Unknown keys fall back to the mon3stera defaults.
+   */
+  const resolveScoringConfig = (): MemoryScoringConfig => {
+    const raw = memorySettings?.scoring as Record<string, unknown> | undefined
+    const numberOf = (value: unknown, fallback: number): number => {
+      const resolved = liveValue(value)
+      return typeof resolved === 'number' && Number.isFinite(resolved) ? resolved : fallback
+    }
+    const halfLives: Record<string, number | null> = { ...DEFAULT_MEMORY_SCORING.halfLives }
+    const rawHalfLives = liveValue(raw?.halfLives)
+    if (rawHalfLives !== null && typeof rawHalfLives === 'object') {
+      for (const [category, value] of Object.entries(rawHalfLives as Record<string, unknown>)) {
+        const resolved = liveValue(value)
+        if (resolved === null) halfLives[category] = null
+        else if (typeof resolved === 'number' && Number.isFinite(resolved) && resolved > 0) {
+          halfLives[category] = resolved
+        }
+      }
+    }
+    const enabled = liveValue(raw?.enabled)
+    return {
+      enabled: typeof enabled === 'boolean' ? enabled : DEFAULT_MEMORY_SCORING.enabled,
+      alpha: numberOf(raw?.alpha, DEFAULT_MEMORY_SCORING.alpha),
+      beta: numberOf(raw?.beta, DEFAULT_MEMORY_SCORING.beta),
+      archiveThreshold: numberOf(raw?.archiveThreshold, DEFAULT_MEMORY_SCORING.archiveThreshold),
+      halfLives,
+    }
+  }
+
+  const memoryScoring = (identity: string): MemoryRecallScoring => {
+    let stats: ReturnType<AdapterStores['listMemoryStats']> = []
+    try {
+      stats = stores.listMemoryStats(identity)
+    } catch {
+      // A closed store mid-remount degrades to no stats (cold start favored).
+    }
+    return {
+      config: resolveScoringConfig(),
+      statsById: new Map(stats.map(row => [row.memoryId, {
+        hits: row.hits,
+        ...row.lastHitAt === undefined ? {} : { lastHitAt: row.lastHitAt },
+        localArchived: row.localArchived,
+      }])),
+    }
+  }
+
   return {
     memoryEnabled,
     memorySettings,
@@ -269,6 +333,7 @@ export function openMemoryLane(
     visibleMemoryIdsBySession,
     memorySearchForTool,
     searchForSession,
+    memoryScoring,
     describeMemoryWrite,
     ctxMemoryRegistration: ({ activePolicy, defineTool, journal }) => {
       // The registration is only reached when the bridge opened (index.ts wires

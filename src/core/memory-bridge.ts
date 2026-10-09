@@ -34,6 +34,7 @@ import { homedir } from 'node:os'
 import { join, normalize, resolve } from 'node:path'
 import { estimateTokens, MEMORY_VISIBILITY_SENTINEL, type MemoryMutationType, type MemoryUpdateLine } from './compartments.ts'
 import { memoryCategoryOrder, V2_MEMORY_CATEGORIES } from './memory-categories.ts'
+import { scoreMemory, type MemoryRecallScoring } from './memory-scoring.ts'
 import { errText } from './types.ts'
 
 const VALID_SHARE_CATEGORIES = new Set<string>(V2_MEMORY_CATEGORIES)
@@ -92,6 +93,14 @@ export interface MemoryRecallRequest {
   readonly maxMemoryId?: number
   /** Keyword filter (the ctx_memory tool); absent recalls the highest-priority set. */
   readonly query?: string
+  /**
+   * S(t) decay scoring (schema v7 sidecar): when given and `config.enabled`,
+   * rows whose score fell under `archiveThreshold` (or that the adapter
+   * retired locally) are excluded from injection but stay in `eligibleIds`
+   * (searchable, mutation pointers intact), and the budget picker prefers
+   * hotter rows. Absent or disabled: MC's priority order, unchanged.
+   */
+  readonly scoring?: MemoryRecallScoring
 }
 
 export interface MemoryRecallResult {
@@ -898,6 +907,38 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
               row.content.toLowerCase().includes(needle) || row.category.toLowerCase().includes(needle))
           if (filtered.length === 0) return undefined
 
+          // S(t) decay scoring (schema v7): retired rows drop out of the
+          // injection pool but stay in eligibleIds — searchable, and
+          // `<memory-updates>` pointers for them stay resolvable. The picker
+          // prefers hotter rows (score desc, MC priority as the tiebreak);
+          // the RENDER order below stays MC's category order, so the injected
+          // block still reads like the OpenCode/Pi block.
+          const scoring = request.scoring
+          const scoringActive = scoring !== undefined && scoring.config.enabled
+          const retiredIds = new Set<number>()
+          const scoreOf = (row: MemoryRow): number => {
+            if (scoring === undefined) return 0
+            const stat = scoring.statsById.get(row.id)
+            return scoreMemory(
+              {
+                importance: row.importance,
+                category: row.category,
+                hits: stat?.hits ?? 0,
+                ...stat?.lastHitAt === undefined ? {} : { lastHitAt: stat.lastHitAt },
+              },
+              scoring.config,
+              request.now,
+            )
+          }
+          if (scoringActive && scoring !== undefined) {
+            for (const row of filtered) {
+              const stat = scoring.statsById.get(row.id)
+              if (stat?.localArchived === true || scoreOf(row) < scoring.config.archiveThreshold) {
+                retiredIds.add(row.id)
+              }
+            }
+          }
+
           // The additive lane: rows above the stored watermark are in-session
           // additions and render in m[1], so they never disturb the m[0] pool
           // digest below (Magic Context's maxMemoryId contract).
@@ -908,11 +949,19 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
             candidates: readonly MemoryRow[],
             budgetTokens: number,
           ): MemoryRow[] => {
-            // Priority order picks the budget; the render order is MC's category
-            // order, so the injected block reads like the OpenCode/Pi block.
+            // Priority order picks the budget (S(t) score desc first when the
+            // decay scoring is on, MC priority as the tiebreak); the render
+            // order is MC's category order, so the injected block reads like
+            // the OpenCode/Pi block.
+            const usable = scoringActive
+              ? candidates.filter(row => !retiredIds.has(row.id))
+              : candidates
             const selected: MemoryRow[] = []
             let used = 0
-            for (const row of [...candidates].sort(comparePriority)) {
+            const ranked = scoringActive
+              ? [...usable].sort((left, right) => scoreOf(right) - scoreOf(left) || comparePriority(left, right))
+              : [...usable].sort(comparePriority)
+            for (const row of ranked) {
               if (selected.length >= request.limit) break
               const cost = estimateTokens(renderMemoryLine(row))
               if (used + cost > budgetTokens) continue

@@ -318,8 +318,20 @@ async function collectText(
   return { text, ...usage === undefined ? {} : { usage }, ...finishReason === undefined ? {} : { finishReason } }
 }
 
-/** In-flight sessions: Magic Context never runs two historians for one session. */
-const inFlight = new Set<string>()
+/**
+ * In-flight historian runs, one per session: Magic Context never runs two
+ * historians for one session. The value (not just a flag) is the point — the
+ * force band and the provider-overflow path can AWAIT the running digest
+ * (`historianInFlight`) instead of dropping tool results while a compartment
+ * is seconds from landing (the ready-bank pattern from mon3stera's
+ * dsh-magic-context `engine.inFlight`).
+ */
+const inFlight = new Map<string, Promise<Compartment | undefined>>()
+
+/** The historian run in flight for one session, when any. */
+export function historianInFlight(sessionId: string): Promise<Compartment | undefined> | undefined {
+  return inFlight.get(sessionId)
+}
 
 /**
  * One attempt's stream, bounded by the run's remaining wall-clock budget.
@@ -742,10 +754,11 @@ export async function callHistorian(
 
 /**
  * Run one historian pass for a session. Returns the stored compartment, or
- * undefined when nothing was eligible / a run is already in flight. Throws
- * only for call or contract failures (the caller logs and continues).
+ * undefined when nothing was eligible. A run already in flight is JOINED —
+ * the same eventual compartment, never a second concurrent call. Throws only
+ * for call or contract failures (the caller logs and continues).
  */
-export async function runHistorian(
+export function runHistorian(
   deps: HistorianDeps,
   input: {
     readonly sessionId: string
@@ -759,7 +772,28 @@ export async function runHistorian(
     readonly forcedRange?: readonly SurfaceNode[]
   },
 ): Promise<Compartment | undefined> {
-  if (inFlight.has(input.sessionId)) return undefined
+  const existing = inFlight.get(input.sessionId)
+  if (existing !== undefined) return existing
+  const run: Promise<Compartment | undefined> = runHistorianExclusive(deps, input).finally(() => {
+    if (inFlight.get(input.sessionId) === run) inFlight.delete(input.sessionId)
+  })
+  inFlight.set(input.sessionId, run)
+  return run
+}
+
+async function runHistorianExclusive(
+  deps: HistorianDeps,
+  input: {
+    readonly sessionId: string
+    readonly nodes: readonly SurfaceNode[]
+    readonly baselineNodeSeq?: number
+    readonly contextWindow?: number
+    readonly route?: { provider: string; model: string }
+    readonly signal?: AbortSignal
+    readonly session: Parameters<typeof spanRequestMessages>[0]
+    readonly forcedRange?: readonly SurfaceNode[]
+  },
+): Promise<Compartment | undefined> {
   const range = input.forcedRange !== undefined
     ? { nodes: input.forcedRange, tokens: input.forcedRange.reduce((total, node) => total + estimateTokens(node.text), 0) }
     : selectHistorianRange({
@@ -782,9 +816,8 @@ export async function runHistorian(
     return undefined
   }
 
-  inFlight.add(input.sessionId)
   const now = deps.now?.() ?? Date.now()
-  try {
+  {
     const draft = await callHistorian(deps, {
       sessionId: input.sessionId,
       session: input.session,
@@ -827,8 +860,6 @@ export async function runHistorian(
       input.sessionId,
     )
     return compartment
-  } finally {
-    inFlight.delete(input.sessionId)
   }
 }
 

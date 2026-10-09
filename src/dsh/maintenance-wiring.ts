@@ -21,7 +21,8 @@ import { errText } from '../core/types.ts'
 import type { HistorianLlm } from './historian.ts'
 import type { MagicContextDshConfig } from './config.ts'
 import type { PreStepProjects } from './pre-step.ts'
-import { liveBoolean, liveNumber, liveString } from './volatile.ts'
+import { liveBoolean, liveNumber, liveString, liveValue } from './volatile.ts'
+import { existsSync } from 'node:fs'
 
 /** Newest maintenance tally, surfaced by the telemetry panel (dreamer KPI). */
 export interface MaintenanceLast {
@@ -59,6 +60,25 @@ export function wireMaintenance(input: {
     if (liveBoolean(config.maintenance?.enabled, true) === false) return
     maintenanceBusy = true
     try {
+      // The evidence pass (schema v7, mon3stera's codebase-grounded verify):
+      // root resolution order — the explicit `memory.evidenceRoot`, then
+      // `memory.project` when it is a real path (a `git:`/`dir:` identity is
+      // not). Without a root the stage skips and the tick behaves exactly as
+      // before; the mode ships `off` for the shadow-window rollout.
+      const evidenceModeRaw = String(liveValue(config.maintenance?.evidenceVerify?.mode) ?? '')
+      const evidenceMode = evidenceModeRaw === 'shadow' || evidenceModeRaw === 'enforce' ? evidenceModeRaw : undefined
+      const evidenceRoot = ((): string | undefined => {
+        const explicit = liveValue(config.memory?.evidenceRoot)
+        if (typeof explicit === 'string' && explicit.length > 0 && existsSync(explicit)) return explicit
+        const project = liveValue(config.memory?.project)
+        if (
+          typeof project === 'string' && project.length > 0
+          && !project.startsWith('git:') && !project.startsWith('dir:')
+          && existsSync(project)
+        ) return project
+        return undefined
+      })()
+      const evidenceMaxRows = liveNumber(config.maintenance?.evidenceVerify?.maxRows, 4)
       const identities = new Set<string>()
       if (config.memory?.project !== undefined) identities.add(config.memory.project)
       for (const identity of seenIdentities) identities.add(identity)
@@ -72,6 +92,9 @@ export function wireMaintenance(input: {
           sessionId: 'mc-maintenance',
           journal,
           ...(llm === undefined || !routeReady ? {} : { llm: llm as unknown as MaintenanceLlm, route: { provider: verifyProvider, model: verifyModel } }),
+          ...(evidenceMode !== undefined && evidenceRoot !== undefined
+            ? { evidence: { mode: evidenceMode, root: evidenceRoot, maxRows: evidenceMaxRows } }
+            : {}),
         })
         // A writer-level problem applies to every identity — stop the sweep.
         if (outcome.reason === 'writer-unavailable' || outcome.reason === 'read-only') break

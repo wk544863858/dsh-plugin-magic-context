@@ -63,6 +63,8 @@ export function policyOf(configured: Partial<PressurePolicy> | undefined): Press
       policy[key] = liveNumber(value, fallback) as never
     } else if (typeof fallback === 'boolean') {
       policy[key] = liveBoolean(value, fallback) as never
+    } else if (typeof fallback === 'string') {
+      policy[key] = liveString(value, fallback) as never
     } else {
       policy[key] = value as never
     }

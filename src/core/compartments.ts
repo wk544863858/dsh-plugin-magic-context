@@ -46,6 +46,15 @@ export interface Compartment extends CompartmentDraft {
   readonly baselineEpoch: number
   /** The placeholder event that landed for it, once the publish lane ran. */
   readonly landedEventSeq?: number
+  /**
+   * Terminal non-publish outcome (adapter schema v7): `not-shrinkable` (the
+   * publish guard proved the digest does not pay for its baseline render) or
+   * `superseded-entrants` (substantive nodes entered the positional range
+   * after drafting — the row is retired and its span re-claimed for a fresh
+   * digest). A row with a landed reason is never published and never retried;
+   * `listUnlandedCompartments` excludes it.
+   */
+  readonly landedReason?: string
 }
 
 export type CompartmentTier = 'p1' | 'p2' | 'p3' | 'p4'

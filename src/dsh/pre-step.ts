@@ -305,6 +305,9 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
           ...stores.baselineState(sessionId)?.maxMemoryId === undefined
             ? {}
             : { maxMemoryId: stores.baselineState(sessionId)?.maxMemoryId },
+          // S(t) decay scoring (schema v7): the sidecar stats + live config;
+          // `enabled` inside gates the ranking takeover, stats always ride.
+          ...memoryIdentity === undefined ? {} : { scoring: lane.memoryScoring(memoryIdentity) },
         })
         // A2 (MC getVisibleMemoryIds): the ids the injected block renders NOW
         // are what ctx_memory search suppresses as already-visible. Replaced
@@ -318,6 +321,22 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
           if (visibleMemoryIdsBySession.size > 256) {
             const oldest = visibleMemoryIdsBySession.keys().next().value
             if (oldest !== undefined) visibleMemoryIdsBySession.delete(oldest)
+          }
+        }
+        // S(t) sidecar (schema v7): recall injections strengthen the rows for
+        // future ranking, and the orphan sweep drops stats rows whose memory
+        // left the visible pool. Shadow collection — runs whether or not the
+        // ranking takeover is enabled. Fail-open: scoring stats are advisory.
+        if (memories !== undefined && memoryIdentity !== undefined) {
+          try {
+            const statsNow = Date.now()
+            for (const row of memories.rows) stores.recordMemoryEvent(memoryIdentity, row.id, 'injection', statsNow)
+            for (const row of memories.newRows) stores.recordMemoryEvent(memoryIdentity, row.id, 'injection', statsNow)
+            const knownIds = new Set<number>(memories.eligibleIds)
+            for (const row of memories.newRows) knownIds.add(row.id)
+            stores.pruneMemoryStats(memoryIdentity, [...knownIds])
+          } catch {
+            /* scoring stats are advisory */
           }
         }
         // The watermark is read straight from the store, so a HARD rebuild can

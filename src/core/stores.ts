@@ -18,7 +18,7 @@ import type { JournalEntry, JournalKind, JournalLevel } from './journal.ts'
 import type { MemoryFact } from './memory-categories.ts'
 import type { TagRecord, TagTarget, UsageRecord } from './types.ts'
 
-export const SCHEMA_VERSION = 6
+export const SCHEMA_VERSION = 7
 
 /** The m[0]/m[1] baseline identity for one session. */
 export interface BaselineState {
@@ -58,6 +58,23 @@ export interface BaselineState {
   readonly updatedAt: number
 }
 
+/**
+ * One S(t) sidecar row: per-project, per-shared-memory usage the ADAPTER
+ * tracks for its own decay scoring. The shared memory store is never written
+ * for this (writer-contract discipline) — these columns exist only here.
+ */
+export interface MemoryStatRow {
+  readonly projectIdentity: string
+  readonly memoryId: number
+  readonly hits: number
+  readonly lastHitAt?: number
+  readonly injections: number
+  readonly lastInjectedAt?: number
+  /** Adapter-local injection retirement; still searchable, just not injected. */
+  readonly localArchived: boolean
+  readonly updatedAt: number
+}
+
 export interface AdapterStores {
   readonly dbPath: string
   /** Fails closed (returns null) when the persisted version is ahead. */
@@ -84,6 +101,18 @@ export interface AdapterStores {
   /** Compartments whose reclaim placeholder has not landed yet. */
   listUnlandedCompartments(sessionId: string): Compartment[]
   markCompartmentLanded(sessionId: string, compartmentId: number, landedEventSeq: number): void
+  /**
+   * Terminal publish refusal (schema v7): the compartment KEEPS its
+   * covered-seq claims (the span IS digested — it just does not pay for its
+   * render), but it is never published and never retried.
+   */
+  markCompartmentRejected(sessionId: string, compartmentId: number, reason: string): void
+  /**
+   * Retire a drifted draft (schema v7): unlike a rejection the covered-seq
+   * claims are RELEASED, so the next historian run re-digests the span
+   * including the nodes that entered it after drafting.
+   */
+  supersedeCompartment(sessionId: string, compartmentId: number, reason: string): void
   /**
    * Replace a stored compartment's DIGEST (tiers, importance, facts, events)
    * while keeping its identity, coverage and landed placeholder. The recomp lane
@@ -125,6 +154,14 @@ export interface AdapterStores {
    * re-tag of a pruned target simply allocates the next fresh number.
    */
   pruneTags(before: number): number
+  /** S(t) sidecar: record one search hit or recall injection (upsert + bump). */
+  recordMemoryEvent(projectIdentity: string, memoryId: number, kind: 'hit' | 'injection', now: number): void
+  /** S(t) sidecar rows for one identity, narrowed to `memoryIds` when given. */
+  listMemoryStats(projectIdentity: string, memoryIds?: readonly number[]): MemoryStatRow[]
+  /** Flip the adapter-local injection-retirement flag (never the shared store). */
+  setMemoryLocalArchived(projectIdentity: string, memoryId: number, archived: boolean, now: number): void
+  /** Delete sidecar rows whose memory id is no longer known; returns rows removed. */
+  pruneMemoryStats(projectIdentity: string, keepIds: readonly number[]): number
   /** Row count plus the oldest/newest timestamps. */
   journalBounds(): { rows: number; oldest?: number; newest?: number }
   close(): void
@@ -288,6 +325,42 @@ const MIGRATIONS: readonly Migration[] = [
       db.exec(`
         ALTER TABLE baseline_state ADD COLUMN max_memory_mutation_id INTEGER;
         ALTER TABLE baseline_state ADD COLUMN project_epoch_fingerprint TEXT;
+      `)
+    },
+  },
+  {
+    // v7: the fusion additions (borrowed from mon3stera/dsh-magic-context
+    // @0.1.0, audited 2026-10-09; see docs/ for the fusion plan).
+    //  - compartments.landed_reason: a TERMINAL non-publish outcome.
+    //    `not-shrinkable`: the publish guard proved the digest does not pay
+    //    for its own baseline render. `superseded-entrants`: substantive
+    //    nodes entered the positional range after drafting. A reasoned row
+    //    is never published and never retried (listUnlandedCompartments
+    //    excludes it), ending the old rejected-draft-retried-forever shape.
+    //  - compartments.superseded: retires a drifted draft AND RELEASES its
+    //    covered-seq claims, so the next historian run re-digests the whole
+    //    span (originals plus the entrants) instead of leaking it.
+    //  - memory_stats: the S(t) scoring sidecar. Hits/injections for rows of
+    //    the SHARED memory store are tracked HERE, adapter-local — the
+    //    shared store is never written for scoring (writer-contract
+    //    discipline: only the bridge's contract actions touch it).
+    version: 7,
+    up: (db) => {
+      db.exec(`
+        ALTER TABLE compartments ADD COLUMN landed_reason TEXT;
+        ALTER TABLE compartments ADD COLUMN superseded INTEGER NOT NULL DEFAULT 0;
+        CREATE TABLE memory_stats(
+          project_identity TEXT NOT NULL,
+          memory_id INTEGER NOT NULL,
+          hits INTEGER NOT NULL DEFAULT 0,
+          last_hit_at INTEGER,
+          injections INTEGER NOT NULL DEFAULT 0,
+          last_injected_at INTEGER,
+          local_archived INTEGER NOT NULL DEFAULT 0,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY(project_identity, memory_id)
+        );
+        CREATE INDEX memory_stats_archived ON memory_stats(project_identity, local_archived);
       `)
     },
   },
@@ -489,6 +562,7 @@ export function openStores(dataDir: string): AdapterStores {
     covered_tokens: number; importance: number
     tier_p1: string; tier_p2: string; tier_p3: string; tier_p4: string
     facts: string; events: string; baseline_epoch: number; landed_event_seq: number | null
+    landed_reason: string | null; superseded: number
   }
 
   const toCompartment = (row: CompartmentRow): Compartment => ({
@@ -505,6 +579,7 @@ export function openStores(dataDir: string): AdapterStores {
     events: JSON.parse(row.events) as string[],
     baselineEpoch: row.baseline_epoch,
     ...row.landed_event_seq === null ? {} : { landedEventSeq: row.landed_event_seq },
+    ...row.landed_reason === null ? {} : { landedReason: row.landed_reason },
   })
 
   const allocateCompartment: AdapterStores['allocateCompartment'] = (
@@ -569,13 +644,27 @@ export function openStores(dataDir: string): AdapterStores {
       .all(sessionId) as unknown as CompartmentRow[]).map(toCompartment)
 
   const listUnlandedCompartments = (sessionId: string): Compartment[] =>
-    (db.prepare('SELECT * FROM compartments WHERE session_id = ? AND landed_event_seq IS NULL ORDER BY compartment_id')
+    (db.prepare('SELECT * FROM compartments WHERE session_id = ? AND landed_event_seq IS NULL '
+        + 'AND superseded = 0 AND landed_reason IS NULL ORDER BY compartment_id')
       .all(sessionId) as unknown as CompartmentRow[]).map(toCompartment)
 
   const markCompartmentLanded = (sessionId: string, compartmentId: number, landedEventSeq: number): void => {
     db.prepare(
       'UPDATE compartments SET landed_event_seq = ? WHERE session_id = ? AND compartment_id = ?',
     ).run(landedEventSeq, sessionId, compartmentId)
+  }
+
+  const markCompartmentRejected = (sessionId: string, compartmentId: number, reason: string): void => {
+    db.prepare(
+      'UPDATE compartments SET landed_reason = ? WHERE session_id = ? AND compartment_id = ? '
+        + 'AND landed_event_seq IS NULL',
+    ).run(reason, sessionId, compartmentId)
+  }
+
+  const supersedeCompartment = (sessionId: string, compartmentId: number, reason: string): void => {
+    db.prepare(
+      'UPDATE compartments SET superseded = 1, landed_reason = ? WHERE session_id = ? AND compartment_id = ?',
+    ).run(reason, sessionId, compartmentId)
   }
 
   const replaceCompartmentDraft = (sessionId: string, compartmentId: number, draft: CompartmentDraft): void => {
@@ -596,7 +685,9 @@ export function openStores(dataDir: string): AdapterStores {
   }
 
   const coveredSeqs = (sessionId: string): Set<number> => {
-    const rows = db.prepare('SELECT covered_seqs FROM compartments WHERE session_id = ?')
+    // Superseded drafts release their claims: their span (originals plus the
+    // nodes that drifted in) goes back into the historian's eligibility pool.
+    const rows = db.prepare('SELECT covered_seqs FROM compartments WHERE session_id = ? AND superseded = 0')
       .all(sessionId) as Array<{ covered_seqs: string }>
     const seqs = new Set<number>()
     for (const row of rows) {
@@ -674,6 +765,8 @@ export function openStores(dataDir: string): AdapterStores {
     listCompartments,
     listUnlandedCompartments,
     markCompartmentLanded,
+    markCompartmentRejected,
+    supersedeCompartment,
     replaceCompartmentDraft,
     coveredSeqs,
     baselineState,
@@ -767,6 +860,79 @@ export function openStores(dataDir: string): AdapterStores {
     },
     pruneTags: (before) => {
       const result = db.prepare('DELETE FROM tags WHERE created_at < ?').run(before)
+      return Number(result.changes)
+    },
+    recordMemoryEvent: (projectIdentity, memoryId, kind, now) => {
+      // Two statements on purpose: the upsert seeds the row, the bump applies
+      // the one counter the event names. ≤ ~46 events per pass (memoryLimit +
+      // search rows), so the extra prepare is noise next to correctness.
+      db.prepare(
+        'INSERT INTO memory_stats(project_identity, memory_id, updated_at) VALUES(?, ?, ?) '
+          + 'ON CONFLICT(project_identity, memory_id) DO NOTHING',
+      ).run(projectIdentity, memoryId, now)
+      if (kind === 'hit') {
+        db.prepare(
+          'UPDATE memory_stats SET hits = hits + 1, last_hit_at = ?, updated_at = ? '
+            + 'WHERE project_identity = ? AND memory_id = ?',
+        ).run(now, now, projectIdentity, memoryId)
+      } else {
+        db.prepare(
+          'UPDATE memory_stats SET injections = injections + 1, last_injected_at = ?, updated_at = ? '
+            + 'WHERE project_identity = ? AND memory_id = ?',
+        ).run(now, now, projectIdentity, memoryId)
+      }
+    },
+    listMemoryStats: (projectIdentity, memoryIds) => {
+      const toStat = (row: {
+        project_identity: string; memory_id: number; hits: number; last_hit_at: number | null
+        injections: number; last_injected_at: number | null; local_archived: number; updated_at: number
+      }): MemoryStatRow => ({
+        projectIdentity: row.project_identity,
+        memoryId: row.memory_id,
+        hits: row.hits,
+        ...row.last_hit_at === null ? {} : { lastHitAt: row.last_hit_at },
+        injections: row.injections,
+        ...row.last_injected_at === null ? {} : { lastInjectedAt: row.last_injected_at },
+        localArchived: row.local_archived !== 0,
+        updatedAt: row.updated_at,
+      })
+      if (memoryIds !== undefined && memoryIds.length === 0) return []
+      if (memoryIds === undefined) {
+        return (db.prepare('SELECT * FROM memory_stats WHERE project_identity = ?')
+          .all(projectIdentity) as Array<Parameters<typeof toStat>[0]>).map(toStat)
+      }
+      const out: MemoryStatRow[] = []
+      // Chunked IN lists stay under SQLite's bound-parameter ceiling.
+      for (let index = 0; index < memoryIds.length; index += 500) {
+        const chunk = memoryIds.slice(index, index + 500)
+        const placeholders = chunk.map(() => '?').join(', ')
+        const rows = db.prepare(
+          `SELECT * FROM memory_stats WHERE project_identity = ? AND memory_id IN (${placeholders})`,
+        ).all(projectIdentity, ...chunk) as Array<Parameters<typeof toStat>[0]>
+        out.push(...rows.map(toStat))
+      }
+      return out
+    },
+    setMemoryLocalArchived: (projectIdentity, memoryId, archived, now) => {
+      db.prepare(
+        'INSERT INTO memory_stats(project_identity, memory_id, local_archived, updated_at) VALUES(?, ?, ?, ?) '
+          + 'ON CONFLICT(project_identity, memory_id) DO UPDATE SET '
+          + 'local_archived = excluded.local_archived, updated_at = excluded.updated_at',
+      ).run(projectIdentity, memoryId, archived ? 1 : 0, now)
+    },
+    pruneMemoryStats: (projectIdentity, keepIds) => {
+      // One statement: orphans are rows whose memory_id left the known pool.
+      // keepIds is the project's whole visible pool (memoryLimit-bounded
+      // rendering aside, pools stay in the hundreds — well under SQLite's
+      // bound-parameter ceiling).
+      if (keepIds.length === 0) {
+        const result = db.prepare('DELETE FROM memory_stats WHERE project_identity = ?').run(projectIdentity)
+        return Number(result.changes)
+      }
+      const placeholders = keepIds.map(() => '?').join(', ')
+      const result = db.prepare(
+        `DELETE FROM memory_stats WHERE project_identity = ? AND memory_id NOT IN (${placeholders})`,
+      ).run(projectIdentity, ...keepIds)
       return Number(result.changes)
     },
     journalBounds: () => {

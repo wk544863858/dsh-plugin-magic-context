@@ -713,7 +713,7 @@ describe('baseline rendering: the delta lane stays inside m[1] (A7)', () => {
 describe('adapter store: the per-session mutation cursor (schema v6)', () => {
   it('round-trips the cursor and the epoch fingerprint', () => {
     const dataDir = tempDir('mc-delta-store-')
-    expect(SCHEMA_VERSION).toBe(6)
+    expect(SCHEMA_VERSION).toBe(7)
     const stores = openStores(dataDir)
     try {
       stores.saveBaselineState({
@@ -747,11 +747,15 @@ describe('adapter store: the per-session mutation cursor (schema v6)', () => {
     stores.setMeta('probe', 'kept')
     stores.close()
 
-    // Downgrade the fixture to v5: the two v6 columns are gone.
+    // Downgrade the fixture to v5: the two v6 columns and the whole v7
+    // additions are gone (a real v5 database never carried them).
     const db = new DatabaseSync(dbPath)
     db.exec(`
       ALTER TABLE baseline_state DROP COLUMN max_memory_mutation_id;
       ALTER TABLE baseline_state DROP COLUMN project_epoch_fingerprint;
+      DROP TABLE memory_stats;
+      ALTER TABLE compartments DROP COLUMN landed_reason;
+      ALTER TABLE compartments DROP COLUMN superseded;
       UPDATE meta SET value = '5' WHERE key = 'schema_version';
     `)
     db.close()
@@ -777,7 +781,7 @@ describe('adapter store: the per-session mutation cursor (schema v6)', () => {
     const check = new DatabaseSync(dbPath, { readOnly: true })
     try {
       const version = check.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }
-      expect(version.value).toBe('6')
+      expect(version.value).toBe('7')
       const names = new Set(
         (check.prepare('PRAGMA table_info(baseline_state)').all() as Array<{ name: string }>).map(row => row.name),
       )
@@ -793,14 +797,18 @@ describe('adapter store: the per-session mutation cursor (schema v6)', () => {
     const dbPath = join(dataDir, 'dsh-magic-context.db')
     const stores = openStores(dataDir)
     stores.close()
-    // v3 predates the journal table (v4), the memory watermark (v5) and the
-    // delta-lane columns (v6): reopening must run all three migrations.
+    // v3 predates the journal table (v4), the memory watermark (v5), the
+    // delta-lane columns (v6) and the fusion columns/table (v7): reopening
+    // must run all four migrations.
     const db = new DatabaseSync(dbPath)
     db.exec(`
       DROP TABLE journal;
       ALTER TABLE baseline_state DROP COLUMN max_memory_id;
       ALTER TABLE baseline_state DROP COLUMN max_memory_mutation_id;
       ALTER TABLE baseline_state DROP COLUMN project_epoch_fingerprint;
+      DROP TABLE memory_stats;
+      ALTER TABLE compartments DROP COLUMN landed_reason;
+      ALTER TABLE compartments DROP COLUMN superseded;
       UPDATE meta SET value = '3' WHERE key = 'schema_version';
     `)
     db.close()

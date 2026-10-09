@@ -66,6 +66,34 @@ export interface MagicContextDshConfig {
      */
     write?: boolean
     /**
+     * S(t) decay scoring (schema v7 sidecar, borrowed from mon3stera's
+     * dsh-magic-context): hits slow the decay and boost the score;
+     * sub-threshold rows stop being injected here (they stay searchable in
+     * ctx_memory). Stats are ALWAYS collected in the adapter's own
+     * `memory_stats` table; `enabled` gates only the ranking takeover.
+     * Profile-JSON only (like the rest of `memory`, not in the settings
+     * schema — a declared key would open the lane for every profile).
+     */
+    scoring?: {
+      /** Default false: collect stats, keep MC's ranking. */
+      enabled?: boolean
+      /** Hit boost strength (mon3stera default 0.4). */
+      alpha?: number
+      /** How much each hit slows the decay (mon3stera default 0.2). */
+      beta?: number
+      /** Scores below this stop being injected (default 2, on the 1–100 scale). */
+      archiveThreshold?: number
+      /** Category half-life in DAYS; null = immortal. Defaults: PROJECT_RULES/
+       * ARCHITECTURE/CONSTRAINTS immortal, CONFIG_VALUES 60, NAMING 90,
+       * USER_PREFERENCES 14, WORKFLOW_RULES/KNOWN_ISSUES 30, ENVIRONMENT 90. */
+      halfLives?: Record<string, number | null>
+    }
+    /**
+     * Workspace root for the evidence pass (schema v7): its greps run here.
+     * Defaults to `memory.project` when that is a real filesystem path.
+     */
+    evidenceRoot?: string
+    /**
      * Backfill stored-query vectors for rows the shared store has none of
      * (the B4 lane). Default false: the query side embeds on demand anyway,
      * and the backfill costs a local model load. Intentionally undocumented
@@ -93,6 +121,18 @@ export interface MagicContextDshConfig {
     intervalMs?: number
     verifyProvider?: string
     verifyModel?: string
+    /**
+     * The evidence pass (schema v7, borrowed from mon3stera's
+     * codebase-grounded verify): `shadow` journals what the workspace
+     * evidence would decide against each stage-1 stale/wrong flag (default
+     * `off`); `enforce` defers the destructive stage-1 verdicts and lets the
+     * evidence decide instead. Needs a workspace root — `memory.evidenceRoot`
+     * or a `memory.project` that is a real filesystem path.
+     */
+    evidenceVerify?: {
+      mode?: 'off' | 'shadow' | 'enforce'
+      maxRows?: number
+    }
   }
   /**
    * Host-supplied CompactionEngine base class (in-tree glue injects it; when

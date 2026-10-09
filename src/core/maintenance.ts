@@ -25,6 +25,8 @@
  */
 import type { Journal } from './journal.ts'
 import type { MemoryRecord, MemoryWriter } from './memory-write.ts'
+import { runEvidenceVerify, type EvidenceRowInput } from './evidence-verify.ts'
+import { errText } from './types.ts'
 import type { LlmSeamMessage } from './types.ts'
 
 /** The narrow LLM seam maintenance needs (structurally `ctx.llm`). */
@@ -50,6 +52,19 @@ export interface MaintenanceDeps {
   readonly sessionId: string
   readonly journal: Journal
   readonly now?: () => number
+  /**
+   * The evidence pass (schema v7, borrowed from mon3stera's codebase-grounded
+   * verify): `shadow` journals what the workspace evidence would decide,
+   * `enforce` defers the destructive stage-1 verdicts (stale rewrites, wrong
+   * archives — capped at `maxRows`) and lets the evidence decide. Requires a
+   * workspace root; without one the stage is skipped — a tick has no session
+   * to inherit a root from (the wiring resolves it from config).
+   */
+  readonly evidence?: {
+    readonly mode: 'shadow' | 'enforce'
+    readonly root?: string
+    readonly maxRows?: number
+  }
 }
 
 export interface MaintenanceOutcome {
@@ -280,6 +295,18 @@ export async function runMaintenanceTick(deps: MaintenanceDeps): Promise<Mainten
   const lagMs: number[] = []
   const known = new Map(candidates.map(row => [row.id, row] as const))
   let skipped = 0
+  // The evidence pass (schema v7): `shadow` journals the workspace-grounded
+  // verdicts; `enforce` DEFERS the destructive stage-1 verdicts below (capped)
+  // and lets the evidence decide. A deferred verdict must never vanish — every
+  // exit (acted / uncertain / failed) re-applies the stage-1 action unless the
+  // evidence positively overruled it (then the row is marked verified).
+  const evidence = deps.evidence
+  const evidenceMode = evidence !== undefined && evidence.root !== undefined
+    ? evidence.mode === 'enforce' ? 'enforce' as const : 'shadow' as const
+    : undefined
+  const evidenceCap = Math.max(1, evidence?.maxRows ?? 4)
+  const flagged: EvidenceRowInput[] = []
+  const deferred = new Map<number, { verdict: 'stale' | 'wrong'; content?: string }>()
   for (const verdict of verdicts) {
     const row = known.get(verdict.id)
     if (row === undefined) continue
@@ -290,12 +317,39 @@ export async function runMaintenanceTick(deps: MaintenanceDeps): Promise<Mainten
       verifiedIds.push(verdict.id)
       lagMs.push(now - row.createdAt)
     } else if (verdict.verdict === 'stale' && verdict.content !== undefined) {
+      if (evidenceMode !== undefined && flagged.length < evidenceCap) {
+        flagged.push({
+          id: verdict.id,
+          category: row.category,
+          content: row.content,
+          verdict: 'stale',
+          proposedContent: verdict.content,
+          ...verdict.reason !== undefined ? { stageReason: verdict.reason } : {},
+        })
+        if (evidenceMode === 'enforce') {
+          deferred.set(verdict.id, { verdict: 'stale', content: verdict.content })
+          continue
+        }
+      }
       const result = writer.updateMemory({ identity, id: verdict.id, content: verdict.content })
       if (result.ok) {
         tally.updated += 1
         lagMs.push(now - row.createdAt)
       }
     } else if (verdict.verdict === 'wrong') {
+      if (evidenceMode !== undefined && flagged.length < evidenceCap) {
+        flagged.push({
+          id: verdict.id,
+          category: row.category,
+          content: row.content,
+          verdict: 'wrong',
+          ...verdict.reason !== undefined ? { stageReason: verdict.reason } : {},
+        })
+        if (evidenceMode === 'enforce') {
+          deferred.set(verdict.id, { verdict: 'wrong' })
+          continue
+        }
+      }
       const result = writer.archiveMemory({ identity, id: verdict.id, reason: 'verify-wrong' })
       if (result.ok) {
         tally.archived += 1
@@ -305,7 +359,102 @@ export async function runMaintenanceTick(deps: MaintenanceDeps): Promise<Mainten
       skipped += 1
     }
   }
-  if (verifiedIds.length > 0) tally.verified = writer.markVerified(identity, verifiedIds, now)
+  // The deferred-action helper: a deferred destructive verdict must NEVER
+  // vanish — every exit below (acted / uncertain / failed) ends with the
+  // stage-1 action applied unless the evidence positively overruled it.
+  const applyDeferred = (id: number): void => {
+    const pending = deferred.get(id)
+    if (pending === undefined) return
+    deferred.delete(id)
+    const source = known.get(id)
+    if (pending.verdict === 'stale' && pending.content !== undefined) {
+      if (writer.updateMemory({ identity, id, content: pending.content }).ok) {
+        tally.updated += 1
+        if (source !== undefined) lagMs.push(now - source.createdAt)
+      }
+      return
+    }
+    if (writer.archiveMemory({ identity, id, reason: 'verify-wrong' }).ok) {
+      tally.archived += 1
+      if (source !== undefined) lagMs.push(now - source.createdAt)
+    }
+  }
+  let evidenceConfirmed = 0
+  let evidenceOverturned = 0
+  let evidenceUncertain = 0
+  if (flagged.length > 0 && evidence?.root !== undefined) {
+    try {
+      const outcome = await runEvidenceVerify({
+        llm: deps.llm,
+        route: deps.route,
+        journal: deps.journal,
+        sessionId: deps.sessionId,
+      }, evidence.root, flagged)
+      for (const row of flagged) {
+        const verdict = outcome.verdicts.get(row.id)
+        if (verdict === undefined) {
+          applyDeferred(row.id)
+          continue
+        }
+        evidenceConfirmed += verdict.verdict === 'confirmed' ? 1 : 0
+        evidenceOverturned += verdict.verdict === 'overturned' ? 1 : 0
+        evidenceUncertain += verdict.verdict === 'uncertain' ? 1 : 0
+        if (evidenceMode === 'shadow') {
+          // Stage-1 already applied; the evidence row is the observation that
+          // decides whether the next window flips the mode to `enforce`.
+          deps.journal.info(
+            'evidence-verify',
+            `shadow: #${String(row.id)} ${row.verdict} — evidence says ${verdict.verdict}`,
+            {
+              id: row.id,
+              flag: row.verdict,
+              evidenceVerdict: verdict.verdict,
+              ...(verdict.content !== undefined ? { wouldUpdateWith: verdict.content.slice(0, 200) } : {}),
+              ...(verdict.reason !== undefined ? { reason: verdict.reason.slice(0, 200) } : {}),
+            },
+            deps.sessionId,
+          )
+          continue
+        }
+        if (verdict.verdict === 'confirmed') {
+          if (row.verdict === 'stale') {
+            const content = verdict.content ?? row.proposedContent
+            if (content !== undefined && writer.updateMemory({ identity, id: row.id, content }).ok) {
+              tally.updated += 1
+              const source = known.get(row.id)
+              if (source !== undefined) lagMs.push(now - source.createdAt)
+            }
+          } else if (writer.archiveMemory({ identity, id: row.id, reason: 'verify-evidence' }).ok) {
+            tally.archived += 1
+            const source = known.get(row.id)
+            if (source !== undefined) lagMs.push(now - source.createdAt)
+          }
+          deferred.delete(row.id)
+        } else if (verdict.verdict === 'overturned') {
+          // The evidence positively overruled the flag: the row is fine as
+          // written — mark it verified so the sweep stops re-flagging it.
+          if (writer.markVerified(identity, [row.id], now) > 0) tally.verified += 1
+          deferred.delete(row.id)
+        } else {
+          // Uncertain: the stage-1 judgment stands (documented default —
+          // uncertainty defers to the existing verdict, it does not block it).
+          applyDeferred(row.id)
+        }
+      }
+      for (const id of [...deferred.keys()]) applyDeferred(id)
+    } catch (error) {
+      // Fail-open: a broken evidence pass leaves the stage-1 verdicts standing
+      // (deferred rows get their original action; nothing vanishes silently).
+      const why = errText(error)
+      deps.journal.warn('evidence-verify', `evidence pass failed; stage-1 verdicts stand: ${why}`, {
+        scope: 'evidence-verify',
+        detail: why,
+        rows: flagged.length,
+      }, deps.sessionId)
+      for (const id of [...deferred.keys()]) applyDeferred(id)
+    }
+  }
+  if (verifiedIds.length > 0) tally.verified += writer.markVerified(identity, verifiedIds, now)
   // Classify scoring rides the same verdict round trip (MC's classify slice):
   // metadata-only, applied AFTER the content verdicts so a stale rewrite is
   // scored on its corrected text and archived rows self-filter through the
@@ -338,6 +487,17 @@ export async function runMaintenanceTick(deps: MaintenanceDeps): Promise<Mainten
       verdicts: verdicts.length,
       poolUnverified: pool,
       verify: 'ran',
+      ...(flagged.length > 0
+        ? {
+          evidence: {
+            mode: evidenceMode ?? 'shadow',
+            rows: flagged.length,
+            confirmed: evidenceConfirmed,
+            overturned: evidenceOverturned,
+            uncertain: evidenceUncertain,
+          },
+        }
+        : {}),
       ...(usage !== undefined ? { usage } : {}),
       ...(lagMaxH !== undefined ? { lagMaxH: round1(lagMaxH) } : {}),
       ...(lagAvgH !== undefined ? { lagAvgH: round1(lagAvgH) } : {}),
