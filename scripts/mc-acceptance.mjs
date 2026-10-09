@@ -258,22 +258,30 @@ if (dsh) {
         archivedIds = new Set(mutationByType.filter((m) => m.mutation_type === 'archive').map((m) => Number(m.target_memory_id)));
       } catch { /* 老库可能没有 memory_mutation_log */ }
       const rows = mc.prepare(`SELECT id, project_path, category, importance, scope, shareable, source_type, status,
-        verification_status, seen_count, retrieval_count, created_at, updated_at, last_seen_at, expires_at
+        verification_status, seen_count, retrieval_count, created_at, updated_at, last_seen_at, expires_at, classified_at
         FROM memories WHERE id IN (${placeholders})`).all(...ids);
       const bad = [];
       let touchedAfter = 0;
       let archivedAfter = 0;
+      let classifiedAfter = 0;
       for (const r of rows) {
         const problems = [];
         const wasUpdated = mutatedIds.has(Number(r.id));
-        // 提升之后被合法触碰的两种路径：显式 update/archive（有变更日志），
-        // 以及去重命中（seen_count 前移 + updated_at/last_seen_at 前移，且按契约不写变更日志）。
+        // 提升之后被合法触碰的三种路径：显式 update/archive（有变更日志），
+        // 去重命中（seen_count 前移 + updated_at/last_seen_at 前移，且按契约不写变更日志），
+        // 以及 classify 打分（v0.3.3 裁决：metadata-only 落地 importance+classified_at，
+        // 同样按契约不写变更日志——时间戳保持不动，只有打分与 classified_at 变化）。
         const deduped = Number(r.seen_count) > 1;
+        const classified = r.classified_at !== null && r.classified_at !== undefined;
+        if (classified) classifiedAfter++;
         const touched = wasUpdated || deduped;
         if (touched) touchedAfter++;
         if (r.status === 'archived' && archivedIds.has(Number(r.id))) archivedAfter++;
         if (r.source_type !== 'historian') problems.push(`source_type=${r.source_type}`);
-        if (!wasUpdated && Number(r.importance) !== 50) problems.push(`importance=${r.importance}`);
+        if (classified) {
+          // 打分行校验打分值域本身；importance 不再期望提升默认值 50。
+          if (Number(r.importance) < 1 || Number(r.importance) > 100) problems.push(`importance=${r.importance} 越界`);
+        } else if (!wasUpdated && Number(r.importance) !== 50) problems.push(`importance=${r.importance}`);
         if (r.scope !== 'project') problems.push(`scope=${r.scope}`);
         if (Number(r.shareable) !== 0) problems.push(`shareable=${r.shareable}`);
         // Maintenance verify (wrong→archiveMemory) is the designed lifecycle end
@@ -292,7 +300,7 @@ if (dsh) {
       }
       const missing = ids.length - rows.length;
       add(bad.length === 0 && missing === 0 ? 'PASS' : 'FAIL', 'promotion.contract',
-        `窗口内提升 ${ids.length} 行；库里命中 ${rows.length}；此后被更新/去重触碰 ${touchedAfter} 行（相应放宽 importance/时间戳校验）；契约归档 ${archivedAfter} 行；字段偏差 ${bad.length}${missing ? `；缺失 ${missing}` : ''}${bad.length ? ': ' + bad.slice(0, 4).join(' ') : ''}`);
+        `窗口内提升 ${ids.length} 行；库里命中 ${rows.length}；此后被更新/去重触碰 ${touchedAfter} 行（相应放宽 importance/时间戳校验）；classify 打分 ${classifiedAfter} 行（metadata-only，校验值域）；契约归档 ${archivedAfter} 行；字段偏差 ${bad.length}${missing ? `；缺失 ${missing}` : ''}${bad.length ? ': ' + bad.slice(0, 4).join(' ') : ''}`);
 
       // 纯追加：不得有 insert/delete 类变更日志；update 类必须与显式 ctx_memory update 调用对应
       const agg = new Map();
