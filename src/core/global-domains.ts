@@ -263,7 +263,17 @@ export function approvalGate(
   }
   const domain = store.getDomain(candidate.domainId)
   if (domain === undefined) return { ok: false, error: `unknown domain '${candidate.domainId}'` }
-  if (candidate.category !== undefined && !domain.shareCategories.includes(candidate.category)) {
+  // A published row needs a category (the contract has it NOT NULL and the
+  // reader filters on the allowlist) — refuse here rather than letting the
+  // INSERT fail with a constraint error the reviewer cannot act on.
+  if (candidate.category === undefined || candidate.category === '') {
+    return {
+      ok: false,
+      error: `candidate #${String(candidate.id)} carries no category; a published memory needs one `
+        + `(one of: ${domain.shareCategories.join(', ') || 'the domain allowlist'})`,
+    }
+  }
+  if (!domain.shareCategories.includes(candidate.category)) {
     // Publishing under a category outside the allowlist succeeds and is then
     // invisible forever — a silent failure, so it is refused up front.
     return {
@@ -281,4 +291,89 @@ export function approvalGate(
     }
   }
   return { ok: true }
+}
+
+/**
+ * The write port a publish needs. Satisfied structurally by the adapter's memory
+ * writer, so this module never opens a write connection of its own.
+ */
+export interface DomainWritePort {
+  publishDomainMemory(input: {
+    readonly identity: string
+    readonly category: string
+    readonly content: string
+    readonly importance?: number
+  }): { readonly ok: true; readonly id: number; readonly created: boolean } | { readonly ok: false; readonly detail: string }
+}
+
+export type DomainPublishResult =
+  | {
+    readonly ok: true
+    readonly memoryId: number
+    readonly created: boolean
+    /** The domain identity the row was published under — a peer project. */
+    readonly identity: string
+    readonly category: string
+  }
+  | { readonly ok: false; readonly error: string }
+
+/**
+ * Publish an approved candidate into the shared store, under its domain
+ * identity. This is the step that makes organisation knowledge real: the domain
+ * identity IS a peer project, so the existing peer lane carries the row with no
+ * second pool, no second watermark and no second digest.
+ *
+ * Order is load-bearing and deliberate:
+ *
+ *   1. the approval gate (credentials, category allowlist, recurrence) — a
+ *      refusal here must cost nothing;
+ *   2. the write;
+ *   3. the state transition, LAST.
+ *
+ * A candidate whose write failed therefore stays `pending` and can be retried,
+ * instead of being marked approved with an empty store behind it.
+ */
+export function publishGlobalCandidate(
+  store: AdapterStores,
+  options: {
+    readonly candidateId: number
+    readonly writer: DomainWritePort
+    readonly now: number
+    readonly importance?: number
+  },
+): DomainPublishResult {
+  const candidate = store.getGlobalCandidate(options.candidateId)
+  if (candidate === undefined) {
+    return { ok: false, error: `no candidate #${String(options.candidateId)}` }
+  }
+  // The gate is the single implementation of every publish prerequisite, so the
+  // command surface, the tests and this function can never disagree about what
+  // is publishable.
+  const gate = approvalGate(store, candidate)
+  if (!gate.ok) return { ok: false, error: gate.error }
+  const domain = store.getDomain(candidate.domainId)
+  if (domain === undefined) return { ok: false, error: `unknown domain '${candidate.domainId}'` }
+  // The gate guarantees these; re-reading narrows the optional fields for the
+  // writer without a non-null assertion.
+  const category = candidate.category
+  if (category === undefined || category === '') {
+    return { ok: false, error: `candidate #${String(candidate.id)} carries no category` }
+  }
+
+  const written = options.writer.publishDomainMemory({
+    identity: candidate.domainId,
+    category,
+    content: candidate.content,
+    ...options.importance === undefined ? {} : { importance: options.importance },
+  })
+  if (!written.ok) return { ok: false, error: `publish refused: ${written.detail}` }
+
+  store.setGlobalCandidateState(candidate.id, 'approved', options.now)
+  return {
+    ok: true,
+    memoryId: written.id,
+    created: written.created,
+    identity: candidate.domainId,
+    category,
+  }
 }

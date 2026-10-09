@@ -254,13 +254,30 @@ describe('the approval gate', () => {
   it('still refuses a machine-detected one-off', () => {
     const store = makeStore()
     const candidate = store.upsertGlobalCandidate(
-      { domainId: ORG_DOMAIN_ID, content: 'seen once', normalizedHash: 'h1', firstIdentity: 'git:alpha' },
+      { domainId: ORG_DOMAIN_ID, content: 'seen once', normalizedHash: 'h1', firstIdentity: 'git:alpha', category: 'ARCHITECTURE' },
       NOW,
     )
     store.recordCandidateObservation({ candidateId: candidate.id, identity: 'git:alpha', sessionId: 's1' }, NOW)
     const gate = approvalGate(store, store.getGlobalCandidate(candidate.id)!)
     expect(gate.ok).toBe(false)
     if (!gate.ok) expect(gate.error).toContain('at least two')
+  })
+
+  it('refuses a candidate with no category (an anomaly the reviewer can act on)', () => {
+    // Every real candidate inherits its category from the memory it came from,
+    // so a missing one is a data anomaly. It must be refused with the anomaly
+    // named — publishing it would fail the contract's NOT NULL constraint with
+    // an error nobody can act on.
+    const store = makeStore()
+    const candidate = store.upsertGlobalCandidate(
+      { domainId: ORG_DOMAIN_ID, content: 'category-less', normalizedHash: 'h9', firstIdentity: 'git:alpha' },
+      NOW,
+    )
+    store.recordCandidateObservation({ candidateId: candidate.id, identity: 'git:alpha', sessionId: 's1' }, NOW)
+    store.recordCandidateObservation({ candidateId: candidate.id, identity: 'git:beta', sessionId: 's2' }, NOW)
+    const gate = approvalGate(store, store.getGlobalCandidate(candidate.id)!)
+    expect(gate.ok).toBe(false)
+    if (!gate.ok) expect(gate.error).toContain('no category')
   })
 
   it('refuses a category the domain does not share, instead of publishing it invisible', () => {

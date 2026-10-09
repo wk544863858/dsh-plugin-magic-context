@@ -269,6 +269,11 @@ export type MemoryRetrievalOutcome =
     readonly reason: MemoryWriteFailureReason
   }
 
+/** WP9/WP10 domain publish: the row id, and whether this call created it. */
+export type DomainPublishResult =
+  | { readonly ok: true; readonly id: number; readonly created: boolean }
+  | MemoryWriteFailure
+
 export interface MemoryWriter {
   readonly dbPath: string
   readonly status: MemoryWriterStatus
@@ -295,6 +300,19 @@ export interface MemoryWriter {
   writeMemory(input: WriteMemoryInput): MemoryWriteResult
   /** `update`: content/category/importance + the §4.5 clears, plus an `update` delta. */
   updateMemory(input: UpdateMemoryInput): MemoryWriteResult
+  /**
+   * WP9/WP10: insert (or re-encounter) one DOMAIN memory under a synthetic
+   * identity, with `scope`/`shareable` written explicitly so peer projects can
+   * actually read it. Idempotent on the contract's
+   * `UNIQUE(project_path, category, normalized_hash)`: a repeat bumps
+   * `seen_count` and reports `created: false` rather than duplicating the row.
+   */
+  publishDomainMemory(input: {
+    readonly identity: string
+    readonly category: string
+    readonly content: string
+    readonly importance?: number
+  }): DomainPublishResult
   /** `archive`: `status = 'archived'` (± reason/supersede) plus an `archive`/`superseded` delta. */
   archiveMemory(input: ArchiveMemoryInput): MemoryWriteResult
   /** `merge`: sources superseded into the aggregated target; `superseded` + `update` deltas. */
@@ -346,6 +364,33 @@ const INSERT_MEMORY = `
     first_seen_at, created_at, updated_at, last_seen_at,
     status, expires_at, verification_status
   ) VALUES(?, ?, ?, ?, 50, 'project', 0, ?, 'historian', 1, 0, ?, ?, ?, ?, 'active', ?, 'unverified')
+`
+
+/**
+ * WP9/WP10 — a DOMAIN memory: owned by a synthetic domain identity and readable
+ * by every peer project.
+ *
+ * The two columns that make it visible are written explicitly:
+ * `scope = 'universe'` and `shareable = 1`. Every other insert path here leaves
+ * them to the schema (`'project'` / `0`), which is correct for a project fact
+ * and would make a domain row invisible to the very projects it exists for —
+ * published, and seen by nobody.
+ *
+ * `expires_at` is NULL on purpose. The contract's TTL categories are the two
+ * legacy ones; organisation knowledge does not rot, and a domain row that
+ * silently expired would take its visibility with it.
+ *
+ * `source_type = 'user'` records that a HUMAN published it (the approval gate),
+ * not the historian: MC reserves the distinction and it is the only way to tell
+ * afterwards which rows were machine-derived.
+ */
+const INSERT_DOMAIN_MEMORY = `
+  INSERT INTO memories(
+    project_path, category, content, normalized_hash, importance, scope, shareable,
+    source_session_id, source_type, seen_count, retrieval_count,
+    first_seen_at, created_at, updated_at, last_seen_at,
+    status, expires_at, verification_status
+  ) VALUES(?, ?, ?, ?, ?, 'universe', 1, ?, 'user', 1, 0, ?, ?, ?, ?, 'active', NULL, 'unverified')
 `
 
 /**
@@ -614,6 +659,7 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
       }),
       stats: () => ({ rows: 0, mutationLog: 0, epoch: 0, verified: 0, unverified: 0 }),
       writeMemory: () => refused,
+      publishDomainMemory: () => refused,
       updateMemory: () => refused,
       archiveMemory: () => refused,
       mergeMemory: () => refused,
@@ -684,6 +730,7 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
       'UPDATE memories SET seen_count = seen_count + 1, last_seen_at = ?, updated_at = ? WHERE id = ?',
     )
     const insert = db.prepare(INSERT_MEMORY)
+    const insertDomain = db.prepare(INSERT_DOMAIN_MEMORY)
     const maxId = db.prepare('SELECT MAX(id) AS id FROM memories WHERE project_path = ?')
     const authorityManaged = hasAuthority
       ? db.prepare(
@@ -1007,6 +1054,56 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
           })
         } catch (error) {
           return databaseFailure('write', error)
+        }
+      },
+      publishDomainMemory: (input) => {
+        const content = input.content.trim()
+        if (content.length === 0) {
+          return refusal('publish-domain', 'invalid-argument', 'Error: a domain memory needs content.')
+        }
+        if (!isWritableMemoryCategory(input.category)) {
+          return refusal(
+            'publish-domain',
+            'invalid-argument',
+            `Error: '${input.category}' is not a writable memory category.`,
+          )
+        }
+        if (input.identity.trim().length === 0) {
+          return refusal('publish-domain', 'invalid-argument', 'Error: a domain memory needs an identity.')
+        }
+        if (contractFenced) return fenceRefusal('publish-domain')
+        const blocked = authorityYield(input.identity)
+        if (blocked !== undefined) return blocked
+        const hash = normalizedMemoryHash(content)
+        try {
+          const outcome = runImmediate<DomainPublishResult>(() => {
+            // The contract's UNIQUE(project_path, category, normalized_hash)
+            // makes republishing idempotent: the row is already visible, so the
+            // only honest change is the recurrence counter.
+            const existing = byHash.get(input.identity, input.category, hash) as { id: number } | undefined
+            if (existing !== undefined) {
+              const timestamp = now()
+              bumpSeen.run(timestamp, timestamp, existing.id)
+              return { ok: true, id: existing.id, created: false }
+            }
+            const timestamp = now()
+            const result = insertDomain.run(
+              input.identity,
+              input.category,
+              content,
+              hash,
+              Math.max(1, Math.min(100, Math.round(input.importance ?? 50))),
+              `domain:${input.identity}`,
+              timestamp,
+              timestamp,
+              timestamp,
+              timestamp,
+            )
+            return { ok: true, id: Number(result.lastInsertRowid), created: true }
+          })
+          return outcome
+        } catch (error) {
+          return databaseFailure('publish-domain', error)
         }
       },
       updateMemory: (input) => {

@@ -24,6 +24,8 @@ import {
   approvalGate,
   detectGlobalCandidates,
   promoteMemoryToCandidate,
+  publishGlobalCandidate,
+  type DomainWritePort,
 } from '../core/global-domains.ts'
 
 export interface SurfaceDeps {
@@ -34,6 +36,12 @@ export interface SurfaceDeps {
    * lane is unavailable, in which case those two say so instead of guessing.
    */
   readonly contractDbPath?: string
+  /**
+   * WP9: the only way `/ctx-global approve` becomes visible to other projects.
+   * Absent (read-only or fenced contract) ⇒ approving says so instead of
+   * marking a candidate approved with nothing behind it.
+   */
+  readonly publisher?: DomainWritePort
 }
 
 type CommandResult = { kind: 'success'; text?: string } | { kind: 'error'; text: string }
@@ -51,7 +59,7 @@ type CommandRegistrar = {
 const PROFILE_USAGE = 'list | show <id> | confirm <id> | reject <id>'
 const GLOBAL_USAGE = 'domains | members [<domain>] | enable <domain> | disable <domain> --yes | '
   + 'add <domain> <identity> | remove <domain> <identity> --yes | candidates [<domain>] | '
-  + 'promote <memoryId> [--domain <domain>] | detect | approve <candidateId> | reject-candidate <candidateId> --yes'
+  + 'promote <memoryId> [--domain <domain>] | detect | approve <candidateId> --yes | reject-candidate <candidateId> --yes'
 
 function tokenize(rawInput: string | undefined): string[] {
   return (rawInput ?? '').trim().split(/\s+/).filter(token => token.length > 0)
@@ -145,6 +153,7 @@ export function planGlobalCommand(
   rawInput: string | undefined,
   now: number,
   contractDbPath?: string,
+  publisher?: DomainWritePort,
 ): CommandResult {
   const tokens = stripFlags(tokenize(rawInput))
   const verb = tokens[0] ?? 'domains'
@@ -281,27 +290,45 @@ export function planGlobalCommand(
     if (id === undefined) {
       return { kind: 'error', text: `Magic Context: /ctx-global ${verb} needs a candidate id. Usage: ${GLOBAL_USAGE}` }
     }
-    const state = verb === 'approve' ? 'approved' : 'rejected'
-    if (state === 'rejected' && !wantsApply(tokenize(rawInput))) {
-      return { kind: 'success', text: `Magic Context: would reject candidate #${String(id)} (add --yes to apply).` }
-    }
+    const apply = wantsApply(tokenize(rawInput))
     const row = store.getGlobalCandidate(id)
     if (row === undefined) return { kind: 'error', text: `Magic Context: no candidate #${String(id)}.` }
-    if (state === 'approved') {
-      const gate = approvalGate(store, row)
-      if (!gate.ok) return { kind: 'error', text: `Magic Context: ${gate.error}` }
+
+    if (verb === 'reject-candidate') {
+      if (!apply) {
+        return { kind: 'success', text: `Magic Context: would reject candidate #${String(id)} (add --yes to apply).` }
+      }
+      store.setGlobalCandidateState(id, 'rejected', now)
+      return { kind: 'success', text: `Magic Context: candidate #${String(id)} rejected.` }
     }
-    store.setGlobalCandidateState(id, state, now)
+
+    // `approve` IS the publish: the state flag alone made a candidate that was
+    // "approved" and visible to nobody. The gate runs before the preview and
+    // before the apply, so the two can never disagree about publishability.
+    const gate = approvalGate(store, row)
+    if (!gate.ok) return { kind: 'error', text: `Magic Context: ${gate.error}` }
+    if (!apply) {
+      return {
+        kind: 'success',
+        text: `Magic Context: would publish candidate #${String(id)} as ${row.domainId} [${row.category}] `
+          + `— every peer project would see it. Add --yes to publish.`,
+      }
+    }
+    if (publisher === undefined) {
+      return {
+        kind: 'error',
+        text: 'Magic Context: the shared store is not writable right now (no memory writer), so the candidate '
+          + 'was left pending rather than marked approved with nothing published.',
+      }
+    }
+    const published = publishGlobalCandidate(store, { candidateId: id, writer: publisher, now })
+    if (!published.ok) return { kind: 'error', text: `Magic Context: ${published.error}` }
     return {
       kind: 'success',
-      text: state === 'approved'
-        ? `Magic Context: candidate #${String(id)} approved for ${row.domainId}.\n`
-          // Saying "publishing happens on the next tick" would be a lie: the
-          // write into the shared store under a domain identity is not
-          // implemented yet (it is the step that awaits a go-ahead).
-          + 'NOT PUBLISHED YET: writing it into the shared store under the domain identity is still ahead, '
-          + 'so nothing is visible to other projects until that lands.'
-        : `Magic Context: candidate #${String(id)} rejected.`,
+      text: `Magic Context: candidate #${String(id)} ${published.created ? 'published' : 'was already published'} `
+        + `as memory #${String(published.memoryId)} under ${published.identity} [${published.category}]`
+        + `${published.created ? '' : ' (its recurrence counter moved instead of a duplicate row)'}; `
+        + 'every member project sees it now.',
     }
   }
 
@@ -334,6 +361,6 @@ export function registerCtxGlobalCommand(ctx: Context, deps: SurfaceDeps): void 
     name: 'ctx-global',
     description: 'Magic Context: global domains — inspect, activate, and manage their membership.',
     input: { hint: GLOBAL_USAGE },
-    handler: invocation => planGlobalCommand(deps.stores, invocation.rawInput, Date.now(), deps.contractDbPath),
+    handler: invocation => planGlobalCommand(deps.stores, invocation.rawInput, Date.now(), deps.contractDbPath, deps.publisher),
   })
 }

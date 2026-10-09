@@ -165,7 +165,7 @@ describe('/ctx-global', () => {
     const s = store()
     seedDomain(s)
     const single = s.upsertGlobalCandidate(
-      { domainId: ORG, content: 'only one project saw this', normalizedHash: 'h1', firstIdentity: 'git:a' },
+      { domainId: ORG, content: 'only one project saw this', normalizedHash: 'h1', firstIdentity: 'git:a', category: 'CONSTRAINTS' },
       NOW,
     )
     s.recordCandidateObservation({ candidateId: single.id, identity: 'git:a', sessionId: 's1' }, NOW)
@@ -176,13 +176,72 @@ describe('/ctx-global', () => {
     expect(s.getGlobalCandidate(single.id)?.state).toBe('pending')
 
     const two = s.upsertGlobalCandidate(
-      { domainId: ORG, content: 'two projects saw this', normalizedHash: 'h2', firstIdentity: 'git:a' },
+      { domainId: ORG, content: 'two projects saw this', normalizedHash: 'h2', firstIdentity: 'git:a', category: 'CONSTRAINTS' },
       NOW,
     )
     s.recordCandidateObservation({ candidateId: two.id, identity: 'git:a', sessionId: 's1' }, NOW)
     s.recordCandidateObservation({ candidateId: two.id, identity: 'git:b', sessionId: 's2' }, NOW)
-    expect(planGlobalCommand(s, `approve ${String(two.id)}`, NOW).kind).toBe('success')
-    expect(s.getGlobalCandidate(two.id)?.state).toBe('approved')
+
+    // `approve` IS the publish now (WP9), and publishing is a write into the
+    // shared store — so without --yes it is a PREVIEW and the state must not move.
+    const preview = planGlobalCommand(s, `approve ${String(two.id)}`, NOW)
+    expect(preview.kind).toBe('success')
+    expect(preview.text).toContain('would publish')
+    expect(s.getGlobalCandidate(two.id)?.state).toBe('pending')
+
+    // With --yes but no writable shared store it says so, rather than marking a
+    // candidate approved that nobody can see.
+    const noWriter = planGlobalCommand(s, `approve ${String(two.id)} --yes`, NOW)
+    expect(noWriter.kind).toBe('error')
+    expect(noWriter.text).toContain('not writable')
+    expect(s.getGlobalCandidate(two.id)?.state).toBe('pending')
+  })
+
+  it('publishes an approved candidate and reports what became visible', () => {
+    const s = store()
+    seedDomain(s)
+    const candidate = s.upsertGlobalCandidate(
+      { domainId: ORG, content: 'DB access goes through the bastion', normalizedHash: 'h4', firstIdentity: 'git:a', category: 'CONSTRAINTS' },
+      NOW,
+    )
+    s.recordCandidateObservation({ candidateId: candidate.id, identity: 'git:a', sessionId: 's1' }, NOW)
+    s.recordCandidateObservation({ candidateId: candidate.id, identity: 'git:b', sessionId: 's2' }, NOW)
+
+    const published: Array<{ identity: string; category: string; content: string }> = []
+    const publisher = {
+      publishDomainMemory: (input: { identity: string; category: string; content: string }) => {
+        published.push({ identity: input.identity, category: input.category, content: input.content })
+        return { ok: true as const, id: 9001, created: true }
+      },
+    }
+    const result = planGlobalCommand(s, `approve ${String(candidate.id)} --yes`, NOW, undefined, publisher)
+    expect(result.kind).toBe('success')
+    expect(result.text).toContain('#9001')
+    expect(result.text).toContain(ORG)
+    // The candidate is published under the DOMAIN identity, with its category —
+    // the two fields the peer lane filters on.
+    expect(published).toEqual([{ identity: ORG, category: 'CONSTRAINTS', content: 'DB access goes through the bastion' }])
+    expect(s.getGlobalCandidate(candidate.id)?.state).toBe('approved')
+  })
+
+  it('leaves a candidate pending when the shared write refuses it', () => {
+    const s = store()
+    seedDomain(s)
+    const candidate = s.upsertGlobalCandidate(
+      { domainId: ORG, content: 'a fact the store will refuse', normalizedHash: 'h5', firstIdentity: 'git:a', category: 'CONSTRAINTS' },
+      NOW,
+    )
+    s.recordCandidateObservation({ candidateId: candidate.id, identity: 'git:a', sessionId: 's1' }, NOW)
+    s.recordCandidateObservation({ candidateId: candidate.id, identity: 'git:b', sessionId: 's2' }, NOW)
+
+    const refusing = {
+      publishDomainMemory: () => ({ ok: false as const, detail: 'contract is read-only' }),
+    }
+    const result = planGlobalCommand(s, `approve ${String(candidate.id)} --yes`, NOW, undefined, refusing)
+    expect(result.kind).toBe('error')
+    expect(result.text).toContain('read-only')
+    // The state transition runs LAST: a failed write must stay retryable.
+    expect(s.getGlobalCandidate(candidate.id)?.state).toBe('pending')
   })
 
   it('lists candidates with their recurrence weight', () => {

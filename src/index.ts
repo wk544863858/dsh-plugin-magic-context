@@ -426,7 +426,14 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     // dashboard gone these commands ARE the operating surface for the profile
     // queue and the domains.
     registerCtxProfileCommand(ctx, { stores, ...memoryRecall === undefined ? {} : { contractDbPath: memoryRecall.dbPath } })
-    registerCtxGlobalCommand(ctx, { stores, ...memoryRecall === undefined ? {} : { contractDbPath: memoryRecall.dbPath } })
+    registerCtxGlobalCommand(ctx, {
+      stores,
+      ...memoryRecall === undefined ? {} : { contractDbPath: memoryRecall.dbPath },
+      // WP9: approving a candidate publishes it. Without the writer there is no
+      // way to make it visible, and the command says so rather than marking a
+      // candidate approved that nobody can see.
+      ...memoryWriter === undefined || memoryWriter.status.ok !== true ? {} : { publisher: memoryWriter },
+    })
     ctx.logger.info('magic-context dsh adapter: /ctx-profile and /ctx-global registered')
   }
 
