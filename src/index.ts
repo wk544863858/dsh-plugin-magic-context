@@ -200,7 +200,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
   //   anything else        → on
   // Read once, inside the lane, so a disabled adapter can never half-open.
   const lane = openMemoryLane(ctx, config, stores)
-  const { memoryRecall, memoryWriter, memorySearch, describeMemoryWrite } = lane
+  const { memoryRecall, memoryWriter, profileWriter, memorySearch, describeMemoryWrite } = lane
   const { memorySettings } = lane
 
   const disposers: Array<() => void> = []
@@ -555,6 +555,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     journal,
     llm,
     writer: memoryWriter,
+    profileWriter,
     projects,
     disposers,
     isDisposed: () => adapterDisposed,
@@ -654,6 +655,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     for (const dispose of disposers.splice(0)) dispose()
     telemetry?.close()
     memoryWriter?.close()
+    profileWriter?.close()
     memorySearch?.close()
     memoryRecall?.close()
     stores.close()

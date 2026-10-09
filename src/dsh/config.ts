@@ -119,6 +119,13 @@ export interface MagicContextDshConfig {
          * the write is deliberately turned on.
          */
         collect?: boolean
+        /**
+         * Review candidates into the profile (`user_memories`) — the half that
+         * makes a promoted fact inject into EVERY session. Default FALSE, and
+         * deliberately separate from `collect`: gathering observations is
+         * reversible, publishing a standing rule about the user is not.
+         */
+        review?: boolean
       }
     }
     /**

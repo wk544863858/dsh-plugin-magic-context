@@ -16,7 +16,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { AdapterStores } from '../core/stores.ts'
 import type { Journal } from '../core/journal.ts'
 import { runMaintenanceTick, type MaintenanceLlm } from '../core/maintenance.ts'
+import { PROFILE_REVIEW_META_KEY, runProfileReview, type ProfileReviewLlm, type ProfileReviewOutcome } from '../core/profile-review.ts'
 import type { MemoryWriter } from '../core/memory-write.ts'
+import type { ProfileWriter } from '../core/profile-write.ts'
 import { errText } from '../core/types.ts'
 import type { HistorianLlm } from './historian.ts'
 import type { MagicContextDshConfig } from './config.ts'
@@ -36,6 +38,8 @@ export interface MaintenanceLast {
 export interface MaintenanceWiring {
   /** Getter, not a copy — the panel polls the newest tally. */
   maintenanceLast: () => MaintenanceLast | undefined
+  /** The newest profile-review outcome (WP7), for the same panel. */
+  profileReviewLast: () => ProfileReviewOutcome | undefined
 }
 
 export function wireMaintenance(input: {
@@ -45,15 +49,17 @@ export function wireMaintenance(input: {
   journal: Journal | undefined
   llm: HistorianLlm | undefined
   writer: MemoryWriter | undefined
+  profileWriter: ProfileWriter | undefined
   projects: PreStepProjects
   /** The adapter-level disposer list (timers ride it). */
   disposers: Array<() => void>
   /** The compaction engine sets this when the adapter is disposed. */
   isDisposed: () => boolean
 }): MaintenanceWiring {
-  const { ctx, config, stores, journal, llm, writer, projects, disposers, isDisposed } = input
+  const { ctx, config, stores, journal, llm, writer, profileWriter, projects, disposers, isDisposed } = input
   const { seenIdentities } = projects
   let maintenanceLast: MaintenanceLast | undefined
+  let profileReviewLast: ProfileReviewOutcome | undefined
   let maintenanceBusy = false
   const runMaintenance = async (): Promise<void> => {
     if (maintenanceBusy || isDisposed() || stores.closed || journal === undefined) return
@@ -106,6 +112,34 @@ export function wireMaintenance(input: {
           archived: outcome.archived,
         }
       }
+
+      // WP7: the `user` domain's review. It is GLOBAL — one candidate pool, one
+      // profile — so it runs once per tick rather than per identity, and it is
+      // deliberately outside the loop's `break` (the memory writer failing says
+      // nothing about the profile tables, which live in the same file but are
+      // reached through their own connection).
+      //
+      // The throttle is a stored timestamp because DSH has no daily scheduler to
+      // hang MC's `review-user-memories` cadence on. It is written only when a
+      // review actually RAN, so a failed call is retried on the next tick
+      // instead of being silenced for a day by its own failure.
+      if (liveBoolean(config.memory?.global?.user?.review, false) && profileWriter !== undefined) {
+        const reviewProvider = liveString(config.maintenance?.verifyProvider, '')
+        const reviewModel = liveString(config.maintenance?.verifyModel, '')
+        const reviewRouteReady = reviewProvider.length > 0 && reviewModel.length > 0
+        const lastReviewRaw = Number(stores.getMeta(PROFILE_REVIEW_META_KEY) ?? '')
+        const review = await runProfileReview({
+          writer: profileWriter,
+          sessionId: 'mc-maintenance',
+          journal,
+          ...(llm === undefined || !reviewRouteReady
+            ? {}
+            : { llm: llm as unknown as ProfileReviewLlm, route: { provider: reviewProvider, model: reviewModel } }),
+          ...(Number.isFinite(lastReviewRaw) && lastReviewRaw > 0 ? { lastReviewAt: lastReviewRaw } : {}),
+        })
+        if (review.ran) stores.setMeta(PROFILE_REVIEW_META_KEY, String(Date.now()))
+        profileReviewLast = review
+      }
     } catch (error) {
       journal.error('maintenance', `maintenance tick failed: ${errText(error)}`)
     } finally {
@@ -127,5 +161,8 @@ export function wireMaintenance(input: {
     if (maintenanceTimer !== undefined) clearInterval(maintenanceTimer)
     clearTimeout(maintenanceFirst)
   })
-  return { maintenanceLast: () => maintenanceLast }
+  return {
+    maintenanceLast: () => maintenanceLast,
+    profileReviewLast: () => profileReviewLast,
+  }
 }

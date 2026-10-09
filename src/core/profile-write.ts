@@ -50,10 +50,48 @@ export interface ProfileCandidateOutcome {
   readonly skipped: number
 }
 
+/** One pending candidate, as the review pass reads it. */
+export interface ProfileCandidateRow {
+  readonly id: number
+  readonly content: string
+  readonly sessionId: string
+  readonly compartmentStart: number | null
+  readonly compartmentEnd: number | null
+  readonly createdAt: number
+}
+
+/** One promoted profile row, as the render lane reads it (WP7/WP8). */
+export interface ProfileRow {
+  readonly id: number
+  readonly content: string
+  readonly promotedAt: number
+  readonly sourceCandidateIds: readonly number[]
+}
+
 export interface ProfileWriter {
   readonly dbPath: string
   readonly status: { readonly ok: boolean; readonly detail?: string }
   recordCandidates(input: ProfileCandidateInput): ProfileCandidateOutcome
+  /** Pending candidates, oldest first (the review pass reads a prefix). */
+  listCandidates(limit: number): readonly ProfileCandidateRow[]
+  countCandidates(): number
+  /** TTL: drop candidates older than the cutoff. Returns how many were dropped. */
+  expireCandidates(cutoffMs: number): number
+  /** Consumption: drop exactly these candidate ids. Returns how many were dropped. */
+  deleteCandidates(ids: readonly number[]): number
+  /** The promoted profile, oldest first — the same order the render lane uses. */
+  listActiveProfiles(): readonly ProfileRow[]
+  /**
+   * Promote one profile row. Returns its new id, or `undefined` when the write
+   * did not happen (unavailable store), so the caller can tell "promoted" from
+   * "silently dropped".
+   */
+  promoteProfile(input: {
+    readonly content: string
+    readonly candidateIds: readonly number[]
+    readonly promotedAt: number
+    readonly provenance?: string
+  }): number | undefined
   close(): void
 }
 
@@ -98,6 +136,36 @@ const INSERT_CANDIDATE = `
   ) VALUES(?, ?, ?, ?, ?)
 `
 
+const SELECT_CANDIDATES = `
+  SELECT id, content, session_id AS sessionId,
+         source_compartment_start AS compartmentStart,
+         source_compartment_end AS compartmentEnd,
+         created_at AS createdAt
+    FROM user_memory_candidates
+   ORDER BY created_at ASC, id ASC
+   LIMIT ?
+`
+
+/**
+ * Promotion (WP7). `status` is written explicitly rather than left to the
+ * column default: the render lane reads `status = 'active'`, and a profile row
+ * that arrives with any other value would be invisible while looking written.
+ */
+const INSERT_PROFILE = `
+  INSERT INTO user_memories(
+    content, status, promoted_at, source_candidate_ids, created_at, updated_at,
+    source_candidate_provenance
+  ) VALUES(?, 'active', ?, ?, ?, ?, ?)
+`
+
+const SELECT_PROFILES = `
+  SELECT id, content, promoted_at AS promotedAt,
+         source_candidate_ids AS sourceCandidateIds
+    FROM user_memories
+   WHERE status = 'active'
+   ORDER BY promoted_at ASC, id ASC
+`
+
 export function openProfileWriter(options: ProfileWriterOptions): ProfileWriter {
   const now = options.now ?? Date.now
   const unavailable = (detail: string): ProfileWriter => {
@@ -106,6 +174,12 @@ export function openProfileWriter(options: ProfileWriterOptions): ProfileWriter 
       dbPath: options.dbPath,
       status: { ok: false, detail },
       recordCandidates: () => ({ inserted: 0, skipped: 0 }),
+      listCandidates: () => [],
+      countCandidates: () => 0,
+      expireCandidates: () => 0,
+      deleteCandidates: () => 0,
+      listActiveProfiles: () => [],
+      promoteProfile: () => undefined,
       close: () => undefined,
     }
   }
@@ -147,6 +221,30 @@ export function openProfileWriter(options: ProfileWriterOptions): ProfileWriter 
   }
 
   const insert = db.prepare(INSERT_CANDIDATE)
+  const selectCandidates = db.prepare(SELECT_CANDIDATES)
+  const countCandidates = db.prepare('SELECT COUNT(*) AS c FROM user_memory_candidates')
+  const deleteCandidate = db.prepare('DELETE FROM user_memory_candidates WHERE id = ?')
+  const expireCandidates = db.prepare('DELETE FROM user_memory_candidates WHERE created_at < ?')
+  const insertProfile = db.prepare(INSERT_PROFILE)
+  const selectProfiles = db.prepare(SELECT_PROFILES)
+
+  /** Run `fn` inside BEGIN IMMEDIATE, rolling back on any throw. */
+  const inTransaction = <T>(fn: () => T): T => {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      const result = fn()
+      db.exec('COMMIT')
+      return result
+    } catch (error) {
+      try {
+        db.exec('ROLLBACK')
+      } catch {
+        /* the transaction may already be gone */
+      }
+      throw error
+    }
+  }
+
   return {
     dbPath: options.dbPath,
     status: { ok: true },
@@ -157,26 +255,97 @@ export function openProfileWriter(options: ProfileWriterOptions): ProfileWriter 
       const start = input.compartmentStart ?? null
       const end = input.compartmentEnd ?? null
       try {
-        db.exec('BEGIN IMMEDIATE')
-        try {
+        inTransaction(() => {
           for (const content of kept) {
             insert.run(content, input.sessionId, start, end, timestamp)
           }
-          db.exec('COMMIT')
-        } catch (error) {
-          try {
-            db.exec('ROLLBACK')
-          } catch {
-            /* the transaction may already be gone */
-          }
-          throw error
-        }
+        })
         return { inserted: kept.length, skipped }
       } catch (error) {
         options.logger.warn(
           `magic-context profile candidate write failed: ${errText(error)}`,
         )
         return { inserted: 0, skipped }
+      }
+    },
+    listCandidates: (limit) => {
+      if (!Number.isFinite(limit) || limit <= 0) return []
+      try {
+        return selectCandidates.all(limit) as unknown as ProfileCandidateRow[]
+      } catch (error) {
+        options.logger.warn(`magic-context profile candidate read failed: ${errText(error)}`)
+        return []
+      }
+    },
+    countCandidates: () => {
+      try {
+        return (countCandidates.get() as { c: number } | undefined)?.c ?? 0
+      } catch {
+        return 0
+      }
+    },
+    expireCandidates: (cutoffMs) => {
+      try {
+        return Number(expireCandidates.run(cutoffMs).changes)
+      } catch (error) {
+        options.logger.warn(`magic-context profile candidate expiry failed: ${errText(error)}`)
+        return 0
+      }
+    },
+    deleteCandidates: (ids) => {
+      if (ids.length === 0) return 0
+      try {
+        return inTransaction(() => {
+          let removed = 0
+          for (const id of ids) removed += Number(deleteCandidate.run(id).changes)
+          return removed
+        })
+      } catch (error) {
+        options.logger.warn(`magic-context profile candidate consumption failed: ${errText(error)}`)
+        return 0
+      }
+    },
+    listActiveProfiles: () => {
+      try {
+        return (selectProfiles.all() as unknown as Array<{
+          id: number
+          content: string
+          promotedAt: number
+          sourceCandidateIds: string | null
+        }>).map((row) => {
+          let ids: number[] = []
+          try {
+            const parsed: unknown = JSON.parse(row.sourceCandidateIds ?? '[]')
+            if (Array.isArray(parsed)) ids = parsed.filter((id): id is number => typeof id === 'number')
+          } catch {
+            // A malformed provenance list is not worth failing a read over.
+          }
+          return { id: row.id, content: row.content, promotedAt: row.promotedAt, sourceCandidateIds: ids }
+        })
+      } catch (error) {
+        options.logger.warn(`magic-context profile read failed: ${errText(error)}`)
+        return []
+      }
+    },
+    promoteProfile: (input) => {
+      const content = input.content.trim()
+      if (content === '') return undefined
+      const timestamp = now()
+      try {
+        return inTransaction(() => {
+          const result = insertProfile.run(
+            content,
+            input.promotedAt,
+            JSON.stringify([...input.candidateIds]),
+            timestamp,
+            timestamp,
+            input.provenance ?? null,
+          )
+          return Number(result.lastInsertRowid)
+        })
+      } catch (error) {
+        options.logger.warn(`magic-context profile promotion failed: ${errText(error)}`)
+        return undefined
       }
     },
     close: () => {

@@ -82,6 +82,7 @@ const PHASE_B = [
   'tests/profile-collection-run.spec.ts',
   'tests/profile-confirmation.spec.ts',
   'tests/profile-render.spec.ts',
+  'tests/profile-review.spec.ts',
 ]
 
 /** Phase C: org/machine domains. Publishing writes the contract — not started. */
@@ -118,9 +119,8 @@ export const PHASES = [
     specs: PHASE_B,
     checks: [],
     blind: [
-      'WP5 采集：写 user_memory_candidates，等用户放行',
-      'WP7 评审：写 user_memories，等用户放行',
-      '因此本阶段的候选池与评审收敛没有端到端用例',
+      'WP5/WP7 已实现并有用例，但开关默认 off：真机端到端（真实会话产出候选 → 评审 → 注入）尚未跑过',
+      'B-8 端到端（合成会话全链路可 journal 回溯）仍缺',
     ],
   },
   {
