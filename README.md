@@ -5,7 +5,7 @@
 > 自己的仓库。上游项目 MIT 许可，© 2025 Ufuk Altinok；本仓库新增部分 © 2026 wukai。
 > 出处、基线版本与内嵌第三方文件见 [NOTICE](NOTICE)，许可见 [LICENSE](LICENSE)。
 >
-> 设计与契约文档（`docs/dsh-plugin-*.md`）留在上游仓库里，正文中相关链接直接指向 GitHub。
+> 设计与契约文档（`docs/dsh-plugin-*.md`）已收编进本仓库 `docs/`（2026-10-09），正文中相关链接指向仓库内文件。
 > 本包的数据库仍在 `~/.local/share/cortexkit/` 命名空间下——那是与 magic-context
 > **共享同一个记忆库**的互操作路径，刻意不随改名而改。
 
@@ -200,7 +200,7 @@ epoch 指纹稳定、权威守卫（authority 表空 + privilege 未启用）、
   HARD 基线重建）· 🗑️ 丢弃上下文（应急丢弃 / 丢弃落地）· 🧭 归档已存 · 🧰 维护巡检 · ⚠️ 失败。
   噪声不进列表：`pass defer`、`boot`、`engine`、`context-pressure`、`memory-recall`，
   以及 **SOFT** 基线刷新（只数进节拍行；HARD 重建是 priced cache bust，算记录）。
-  逐条映射规则与两个 node 侧校验脚本见 [主界面遥测契约]((docs/dsh-plugin-ui-telemetry-contract.md)) 勘误第 8 条。
+  逐条映射规则与两个 node 侧校验脚本见 [主界面遥测契约](docs/dsh-plugin-ui-telemetry-contract.md) 勘误第 8 条。
   （2026-10-07 起对话流内的 turnTail 区块已移除：动作可查性由 `session-notice.ts` 的会话流 notice 承担，
   胶囊面板是实时/遥测面。）
 - **徽标面板自动关闭**：点击面板/徽标之外的任意位置、按 Esc、或窗口失焦即关闭
@@ -211,9 +211,9 @@ epoch 指纹稳定、权威守卫（authority 表空 + privilege 未启用）、
 **安全**：该路由没有 token 鉴权（仅 loopback），因此**只输出计数与单行摘要**——不含消息正文、
 不含文件路径、不含凭据（journal 本身即无正文）。
 
-> 配置界面的机制与坑见 [配置界面契约]((docs/dsh-plugin-config-ui-contract.md))（含
+> 配置界面的机制与坑见 [配置界面契约](docs/dsh-plugin-config-ui-contract.md)（含
 > "profile patch config 整体替换"与"default export 吞掉 Config"两个实测陷阱）；
-> 遥测通路对比见 [主界面遥测契约]((docs/dsh-plugin-ui-telemetry-contract.md))。
+> 遥测通路对比见 [主界面遥测契约](docs/dsh-plugin-ui-telemetry-contract.md)。
 
 ## 已实现（阶段 0 + 1 + 2）
 
@@ -381,7 +381,7 @@ node scripts/dsh-doctor.mjs [--store db] [--json]  # 只读健康报告：fence 
 四个槽位注册项都声明 `locale: 'magic-context'`，文案一律走框架注入的 `t`，切换语言即时生效、无需刷新。
 宿主（node）侧没有 locale 服务，写进会话流、**模型可见**的 `session-notice` 保持英文常量（与其它宿主面
 一致，也避免同一会话中途换语言造成 cached prefix 抖动）。机制与理由见
-[docs/dsh-plugin-ui-telemetry-contract.md 勘误 §7]((docs/dsh-plugin-ui-telemetry-contract.md))。
+[docs/dsh-plugin-ui-telemetry-contract.md 勘误 §7](docs/dsh-plugin-ui-telemetry-contract.md)。
 
 ## 阶段 1 衔接点（下一步）
 
