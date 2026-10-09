@@ -34,9 +34,29 @@ export interface SessionNoticeResult {
   readonly tokensAfter: number
 }
 
-/** Structural `session.append` — the plugin cannot import host types. */
+/**
+ * Structural `session.append` — the plugin cannot import host types.
+ *
+ * `surface` carries the one precondition this class needs. DSH has exactly two
+ * shapes of durable surface write and they bear different safety obligations
+ * (audit: `docs/dsh-surface-write-audit-2026-10-09.md`):
+ *
+ * - **append-type** (this file; the auto-search hint before 0.4.2): legal only
+ *   once the session's first `system/message` is on the log. The host writes it
+ *   as surface node 0 of the first step, so a record appended before that
+ *   becomes node 0 itself, and the loader's `foldSurface` rejects the whole log
+ *   on every replay ("requires a protected first surface head") — the
+ *   2026-10-09 corruption incident.
+ * - **replace-type** (`replaceSurfaceRange`, `replaceToolResultContent`): safe
+ *   by construction, because a replacement needs an existing target node, which
+ *   cannot exist on a headless surface.
+ *
+ * A caller that cannot expose the surface degrades to the unguarded behavior;
+ * the production caller passes the host session, which has the getter.
+ */
 export interface SessionNoticeSession {
   append(type: string, data: unknown, options?: unknown): unknown
+  readonly surface?: { readonly nodes: readonly unknown[] }
 }
 
 export interface SessionNoticeInput {
@@ -46,7 +66,7 @@ export interface SessionNoticeInput {
 
 export type SessionNoticeOutcome =
   | { readonly ok: true; readonly summary: string; readonly seq: unknown }
-  | { readonly ok: false; readonly reason: 'not-notable' | 'append-failed'; readonly detail?: string }
+  | { readonly ok: false; readonly reason: 'not-notable' | 'headless-surface' | 'append-failed'; readonly detail?: string }
 
 /** The host's one-line bound for `notice` summaries. */
 export const NOTICE_SUMMARY_MAX_CHARS = 120
@@ -100,17 +120,28 @@ export function sessionNoticeSummary(result: SessionNoticeResult): string | null
  * Append one magic-context entry to the live stream. The single home of the entry
  * shape: a user-role message carrying the plugin source, appended with
  * `surfaceOp: 'append'` so the host accepts it as a normal tail node.
+ *
+ * Refuses on a headless surface: an out-of-band append before the host has
+ * written surface node 0 (the first `system/message`) would take that position
+ * itself and make the log unloadable on replay (2026-10-09 incident; the class
+ * rule lives in {@link SessionNoticeSession}).
+ *
  * Never throws: a broken transcript nicety must not wedge the turn.
  * @param session - the session whose stream is appended to.
  * @param text - the model-visible body (keep it short; it becomes context).
  * @param summary - the one-line collapsed row the transcript shows.
- * @returns the appended seq, or the append failure.
+ * @returns the appended seq, or the refusal/append failure.
  */
 export function appendMagicContextEntry(
   session: SessionNoticeSession,
   text: string,
   summary: string,
-): { readonly ok: true; readonly seq: unknown } | { readonly ok: false; readonly detail: string } {
+): { readonly ok: true; readonly seq: unknown }
+  | { readonly ok: false; readonly reason: 'headless-surface'; readonly detail?: undefined }
+  | { readonly ok: false; readonly reason: 'append-failed'; readonly detail: string } {
+  if (session.surface !== undefined && session.surface.nodes.length === 0) {
+    return { ok: false, reason: 'headless-surface' }
+  }
   const message = {
     id: randomUUID(),
     role: 'user',
@@ -120,7 +151,7 @@ export function appendMagicContextEntry(
   try {
     return { ok: true, seq: session.append('user/message', message, { surfaceOp: 'append' }) }
   } catch (error) {
-    return { ok: false, detail: error instanceof Error ? error.message : String(error) }
+    return { ok: false, reason: 'append-failed', detail: error instanceof Error ? error.message : String(error) }
   }
 }
 
@@ -135,6 +166,10 @@ export function appendSessionNotice(input: SessionNoticeInput): SessionNoticeOut
   const lines: string[] = [summary]
   if (input.result.baselineUpdated) lines.push('Baseline refreshed (m[0] frozen point advanced)')
   const appended = appendMagicContextEntry(input.session, lines.join('\n'), summary)
-  if (!appended.ok) return { ok: false, reason: 'append-failed', detail: appended.detail }
+  if (!appended.ok) {
+    return appended.reason === 'headless-surface'
+      ? { ok: false, reason: 'headless-surface' }
+      : { ok: false, reason: 'append-failed', detail: appended.detail }
+  }
   return { ok: true, summary, seq: appended.seq }
 }

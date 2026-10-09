@@ -469,11 +469,21 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
         }, sessionId)
         // Channel A of the live session stream: one notice entry per pass
         // that actually did something (publish / force-drop / promotion).
-        // `appendSessionNotice` is fail-open and quiet on nothing-notable.
+        // `appendSessionNotice` is fail-open, quiet on nothing-notable, and
+        // refuses a headless surface (an out-of-band append before the host
+        // wrote surface node 0 would make the log unloadable — 2026-10-09
+        // incident; see docs/dsh-surface-write-audit-2026-10-09.md). A refusal
+        // means the execute band opened on a headless surface, which should be
+        // impossible (no surface ⇒ no usage and no wire defects ⇒ defer), so it
+        // is journaled as an anomaly rather than silently dropped.
         if (liveBoolean(config.sessionNotices, true)) {
           const notice = appendSessionNotice({ session: payload.agent.session, result: outcome })
           if (notice.ok) {
             journal?.info('session-notice', notice.summary, { seq: notice.seq }, sessionId)
+          } else if (notice.reason === 'headless-surface') {
+            journal?.warn('session-notice', 'notice suppressed: session surface has no protected head yet', {
+              reason: notice.reason,
+            }, sessionId)
           } else if (notice.reason === 'append-failed') {
             journal?.warn('session-notice', `notice append failed: ${notice.detail ?? '?'}`, {
               detail: notice.detail,

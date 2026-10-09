@@ -131,4 +131,32 @@ describe('appendSessionNotice', () => {
       expect(outcome.detail).toContain('session sealed')
     }
   })
+
+  it('refuses a headless surface — the protected-head precondition', () => {
+    // 2026-10-09 incident: an out-of-band append before the host wrote surface
+    // node 0 became node 0 itself and the loader rejected the log on replay.
+    let calls = 0
+    const session = {
+      surface: { nodes: [] },
+      append: () => { calls += 1; return 1 },
+    }
+    const outcome = appendSessionNotice({ session, result: { ...base, factsPromoted: 1 } })
+    expect(outcome).toEqual({ ok: false, reason: 'headless-surface' })
+    expect(calls).toBe(0)
+  })
+
+  it('appends normally once the surface has a node, and degrades when it cannot be read', () => {
+    let calls = 0
+    const withHead = {
+      surface: { nodes: [9] },
+      append: (_type: string, _data: unknown, _options: unknown) => { calls += 1; return 11 },
+    }
+    const appended = appendSessionNotice({ session: withHead, result: { ...base, factsPromoted: 1 } })
+    expect(appended.ok).toBe(true)
+    expect(calls).toBe(1)
+    // No `surface` on the structural handle (host drift): unguarded, as before.
+    const unreadable = { append: () => { calls += 1; return 12 } }
+    expect(appendSessionNotice({ session: unreadable, result: { ...base, factsPromoted: 1 } }).ok).toBe(true)
+    expect(calls).toBe(2)
+  })
 })
