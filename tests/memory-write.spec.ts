@@ -406,7 +406,7 @@ describe('agent write path (contract §11)', () => {
         content: 'old architecture note',
         importance: 40,
       }))
-      // Simulate post-classify state so the fail-closed resets are observable.
+      // Simulate post-classify state so the resets that still fire are observable.
       run(path, "UPDATE memories SET shareable = 1, classified_at = 123, mural_cue = 'cue', mural_cue_hash = 'h', mural_cue_at = 5, mural_cue_rejection_count = 3 WHERE id = ?", id)
       run(path, 'INSERT INTO memory_embeddings(memory_id, model, created_at) VALUES(?, ?, 0)', id, 'test-model')
       run(path, 'INSERT INTO memory_verifications(memory_id, file_path, verified_at) VALUES(?, ?, 0)', id, 'src/a.ts')
@@ -428,7 +428,12 @@ describe('agent write path (contract §11)', () => {
         importance: 77,
         normalizedHash: normalizedMemoryHash('new architecture note'),
         updatedAt: T0 + 60_000,
-        shareable: 0,
+        // WP4 divergence from MC §4.3. The score-derived state still clears
+        // (see the classified_at/mural_cue assertion below), but `shareable` is
+        // now OURS to maintain: with no classify task left to re-score the row,
+        // the reset would silently withdraw a shared memory from every other
+        // project's view. `tests/memory-sharing.spec.ts` owns that contract.
+        shareable: 1,
         seenCount: 1,
       })
       expect(one<Record<string, number | string | null>>(

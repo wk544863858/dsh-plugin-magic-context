@@ -474,6 +474,38 @@ const APPEND_MUTATION = `
   VALUES (?, ?, ?, ?, ?, ?, ?)
 `
 
+/**
+ * The restore half of §4.3 (WP4 — this adapter becomes the owner of sharing).
+ *
+ * MC clears `shareable` on every content change, because its classify judgement
+ * was scored against the old text. That is coherent while MC's classify task
+ * owns the flag and will re-score the row. Once this adapter owns sharing,
+ * nothing re-scores it: a rewritten org memory would drop out of every other
+ * project's view, and a rewritten shared fact would quietly stop crossing
+ * projects — a withdrawal nobody asked for.
+ *
+ * `scope` needs no restore: neither reset statement touches it. The
+ * `AND shareable = 0` guard only keeps the write a no-op when something already
+ * put the value back; the DECISION to restore is made before the mutation runs
+ * (see {@link sharingToRestore}), never by the guard.
+ */
+const RESTORE_SHARING = 'UPDATE memories SET shareable = ? WHERE id = ? AND shareable = 0'
+
+/**
+ * Whether a content mutation must put a row's sharing back, and to what value.
+ *
+ * One-directional on purpose: a row that WAS shared (`shareable = 1`) keeps its
+ * sharing; a row that was not is never promoted. The reverse direction is the
+ * one that leaks — an edit must never be able to widen visibility.
+ *
+ * `shareable` is read through the §11.1 projection, which COALESCEs a legacy
+ * NULL to 0, so a NULL row is treated as private rather than unknown.
+ */
+export function sharingToRestore(row: { readonly shareable: number } | undefined | null): number | undefined {
+  if (row === null || row === undefined) return undefined
+  return row.shareable === 1 ? 1 : undefined
+}
+
 /** `list` (§11.6): injectable rows of one project, in MC's render order. */
 const listMemoriesSql = (unverifiedOnly: boolean, recurrenceFirst = false): string =>
   `SELECT ${MEMORY_SELECT_COLUMNS} FROM memories
@@ -687,6 +719,7 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
     const archiveMemoryWithReason = db.prepare(ARCHIVE_MEMORY_WITH_REASON)
     const supersedeMemory = db.prepare(SUPERSEDE_MEMORY)
     const mergeMemoryTarget = db.prepare(MERGE_MEMORY_TARGET)
+    const restoreSharing = db.prepare(RESTORE_SHARING)
     const appendMutation = db.prepare(APPEND_MUTATION)
     const listMemoriesAll = db.prepare(LIST_MEMORIES)
     const listMemoriesLimited = db.prepare(`${LIST_MEMORIES} LIMIT ?`)
@@ -1030,6 +1063,10 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
               input.importance ?? null,
               row.id,
             )
+            // §4.3 cleared `shareable`; put back what this edit did not decide to
+            // change, decided from the row as it was read inside this transaction.
+            const restore = sharingToRestore(row)
+            if (restore !== undefined) restoreSharing.run(restore, row.id)
             deleteEmbeddings?.run(row.id)
             deleteVerifications?.run(row.id)
             appendMutation.run(input.identity, 'update', row.id, null, category, input.content, timestamp)
@@ -1208,6 +1245,10 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
               timestamp,
               target.id,
             )
+            // Same §4.3 restore as `update`: the merge target keeps whatever
+            // sharing it had, and a private target is never promoted by a merge.
+            const restoreTarget = sharingToRestore(target)
+            if (restoreTarget !== undefined) restoreSharing.run(restoreTarget, target.id)
             for (const source of sources) {
               supersedeMemory.run(target.id, null, timestamp, source.id)
               appendMutation.run(input.identity, 'superseded', source.id, target.id, null, null, timestamp)

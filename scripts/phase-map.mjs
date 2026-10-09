@@ -68,6 +68,7 @@ const PHASE_A = [
   'tests/domain-import.spec.ts',
   'tests/domain-visibility.spec.ts',
   'tests/memory-delta.spec.ts',
+  'tests/memory-sharing.spec.ts',
 ]
 
 /**
@@ -107,7 +108,7 @@ export const PHASES = [
     specs: PHASE_A,
     /** Extra commands that must pass for the gate, run after the specs. */
     checks: [{ label: 'contract freeze', script: 'scripts/mc-contract-freeze.mjs', args: ['verify', '--allow-missing'] }],
-    blind: ['真库写入路径（WP4 共享属性维护尚未开工）'],
+    blind: ['WP4 共享属性维护已在合成库验证；真库首次共享行更新尚未执行'],
   },
   {
     id: 'b',
