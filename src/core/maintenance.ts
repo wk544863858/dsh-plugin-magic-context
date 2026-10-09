@@ -156,10 +156,12 @@ function parseVerdicts(text: string): Array<{ id: number; verdict: string; impor
 
 /** One LLM round trip. Returns the raw text, or the reason it produced none —
  * the reason is journaled (a bare "verify call failed" hid six live ticks
- * worth of root cause). */
-async function collectText(llm: MaintenanceLlm, deps: MaintenanceDeps, userPrompt: string): Promise<{ ok: true; text: string; truncated: boolean } | { ok: false; why: string }> {
+ * worth of root cause). The provider's usage sample rides along when the
+ * stream reports one: it is the dream token anchor the patrol watches. */
+async function collectText(llm: MaintenanceLlm, deps: MaintenanceDeps, userPrompt: string): Promise<{ ok: true; text: string; truncated: boolean; usage?: Record<string, number> } | { ok: false; why: string }> {
   const byIndex = new Map<number, string>()
   let truncated = false
+  let usage: Record<string, number> | undefined
   try {
     const chunks = llm.stream({
       provider: deps.route!.provider,
@@ -176,6 +178,14 @@ async function collectText(llm: MaintenanceLlm, deps: MaintenanceDeps, userPromp
       const chunk = raw as { type: string; index?: number; text?: string }
       if (chunk.type === 'text-delta' && typeof chunk.index === 'number' && typeof chunk.text === 'string') {
         byIndex.set(chunk.index, (byIndex.get(chunk.index) ?? '') + chunk.text)
+      } else if (chunk.type === 'usage') {
+        // Same capture as the historian's collector: keep the numeric fields.
+        const reported = (raw as { usage?: Record<string, unknown> }).usage
+        const numeric: Record<string, number> = {}
+        for (const [key, value] of Object.entries(reported ?? {})) {
+          if (typeof value === 'number') numeric[key] = value
+        }
+        usage = numeric
       } else if (chunk.type === 'finish') {
         // Same terminal-reason semantics as the historian's collector:
         // error/aborted fail with the failure detail. max-tokens is NOT fatal
@@ -196,7 +206,7 @@ async function collectText(llm: MaintenanceLlm, deps: MaintenanceDeps, userPromp
   }
   const text = [...byIndex.entries()].sort(([a], [b]) => a - b).map(([, value]) => value).join('')
   if (text.length === 0) return { ok: false, why: truncated ? 'stream hit max-tokens with no text' : 'stream produced no text deltas' }
-  return { ok: true, text, truncated }
+  return { ok: true, text, truncated, ...(usage === undefined ? {} : { usage }) }
 }
 
 function renderRow(row: MemoryRecord, nowMs: number): string {
@@ -260,6 +270,11 @@ export async function runMaintenanceTick(deps: MaintenanceDeps): Promise<Mainten
   }
   const text = call.text
   const verdicts = parseVerdicts(text)
+  // Dream token anchor: the same {inputTokens,outputTokens} shape the
+  // historian banks, so mc-report parses both lanes identically.
+  const usage = call.usage !== undefined
+    ? { inputTokens: call.usage.inputTokens ?? 0, outputTokens: call.usage.outputTokens ?? 0 }
+    : undefined
   const verifiedIds: number[] = []
   const scored: Array<{ id: number; importance: number }> = []
   const lagMs: number[] = []
@@ -310,6 +325,7 @@ export async function runMaintenanceTick(deps: MaintenanceDeps): Promise<Mainten
     `maintenance: expired ${String(tally.expired)} · verified ${String(tally.verified)}`
       + ` · updated ${String(tally.updated)} · archived ${String(tally.archived)}`
       + ` · scored ${String(scoredApplied)} · pool ${String(pool)}`
+      + (usage !== undefined ? ` · tokens ${String(usage.inputTokens)}/${String(usage.outputTokens)}` : '')
       + (call.truncated ? ` (truncated: banked ${String(verdicts.length)}/${String(candidates.length)} verdicts)` : ''),
     {
       expired: tally.expired,
@@ -322,6 +338,7 @@ export async function runMaintenanceTick(deps: MaintenanceDeps): Promise<Mainten
       verdicts: verdicts.length,
       poolUnverified: pool,
       verify: 'ran',
+      ...(usage !== undefined ? { usage } : {}),
       ...(lagMaxH !== undefined ? { lagMaxH: round1(lagMaxH) } : {}),
       ...(lagAvgH !== undefined ? { lagAvgH: round1(lagAvgH) } : {}),
       ...call.truncated ? { truncated: true } : {},

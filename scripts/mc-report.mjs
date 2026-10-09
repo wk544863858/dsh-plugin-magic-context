@@ -745,6 +745,11 @@ function computeMetrics(rows) {
       poolLast: null,
       lagMaxList: [],
       lagAvgList: [],
+      // Dream token 锚点：verify 拍的 provider usage（按天累计在 daily）。
+      usageIn: 0,
+      usageOut: 0,
+      usageTicks: 0,
+      daily: {},
     },
     memoryLane: { promoteEvents: 0, promotions: 0, seenAgain: 0 },
     errors: [],
@@ -942,6 +947,19 @@ switch (row.kind) {
         if (lagMax !== null) m.maintenance.lagMaxList.push(lagMax)
         const lagAvg = toNum(d.lagAvgH)
         if (lagAvg !== null) m.maintenance.lagAvgList.push(lagAvg)
+        const usage = d.usage !== null && typeof d.usage === 'object' ? d.usage : {}
+        const usageIn = toNum(usage.inputTokens) ?? 0
+        const usageOut = toNum(usage.outputTokens) ?? 0
+        if (usageIn > 0 || usageOut > 0) {
+          m.maintenance.usageTicks += 1
+          m.maintenance.usageIn += usageIn
+          m.maintenance.usageOut += usageOut
+          const day = fmtLocalDate(row.at)
+          const dayBucket = m.maintenance.daily[day] ?? { in: 0, out: 0 }
+          dayBucket.in += usageIn
+          dayBucket.out += usageOut
+          m.maintenance.daily[day] = dayBucket
+        }
         break
       }
 
@@ -986,6 +1004,7 @@ switch (row.kind) {
   m.maintenance.lagAvgH = avg(m.maintenance.lagAvgList)
   m.maintenance.judged = m.maintenance.verified + m.maintenance.updated + m.maintenance.archived
   m.maintenance.wrongRate = m.maintenance.judged > 0 ? m.maintenance.archived / m.maintenance.judged : null
+  m.maintenance.usageTotal = m.maintenance.usageIn + m.maintenance.usageOut
   return m
 }
 
@@ -1059,6 +1078,16 @@ function buildHealth(ctx) {
         push(
           'promotion-rate-high',
           `窗口内晋升 ${metrics.memoryLane.promotions} 行 > 300 行/天 × ${opts.days} 天——进水超预期（staging 扳机条件之一）。`,
+        )
+      }
+      // Dream token 看门狗：verify 拍正常量级在万级 tokens/天，单日超过 5M
+      // 说明批量或路由失控（首个经验阈值，触发后按实际基线调整）。
+      const dreamDailyMax = Object.values(metrics.maintenance.daily)
+        .reduce((peak, u) => Math.max(peak, u.in + u.out), 0)
+      if (dreamDailyMax > 5_000_000) {
+        push(
+          'dream-tokens-high',
+          `dream（维护 verify）单日 token 耗用峰值 ${fmtInt(dreamDailyMax)} > 5M——批量或路由疑似失控，复核 VERIFY_BATCH 与路由配置。`,
         )
       }
       if (metrics.errors.length > 0) {
@@ -1370,6 +1399,17 @@ function renderText(payload) {
         + `scored ${fmtInt(mt.scored)}，lag 最大 ${fmtFixed(mt.lagMaxH, 1)}h / 平均 ${fmtFixed(mt.lagAvgH, 1)}h，`
         + `pool 最新 ${mt.poolLast === null ? '-' : fmtInt(mt.poolLast)}`,
       )
+      // Dream token 锚点：窗口累计 + 按天累计（近 7 天，新→旧）。
+      lines.push(
+        `  dream tokens  : 累计 ${fmtInt(mt.usageTotal)}（input ${fmtInt(mt.usageIn)} / output ${fmtInt(mt.usageOut)}，`
+        + `${fmtInt(mt.usageTicks)} 拍上报）`,
+      )
+      const dreamDays = Object.entries(mt.daily).sort((a, b) => (a[0] < b[0] ? 1 : -1)).slice(0, 7)
+      if (dreamDays.length > 0) {
+        lines.push(
+          '    按天累计    : ' + dreamDays.map(([day, u]) => `${day} ${fmtInt(u.in + u.out)}`).join(' · '),
+        )
+      }
     }
     const lane = metrics.memoryLane
     if (lane.promoteEvents > 0) {

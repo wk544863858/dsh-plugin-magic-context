@@ -305,6 +305,40 @@ describe('maintenance tick — verification (dreamer verify slice)', () => {
     }
   })
 
+  it('banks the provider usage sample into the payload (dream token anchor)', async () => {
+    const path = createDb()
+    const id = seedRow(path, { category: 'ARCHITECTURE', content: 'usage sample', verificationStatus: 'unverified' })
+    const writer = openMemoryWriter({ dbPath: path, logger: silentLogger, now: () => T0 })
+    const journal = fakeJournal()
+    const llm = {
+      async *stream(options: { messages: readonly { content: unknown }[] }) {
+        const content = options.messages[0]?.content
+        if (!Array.isArray(content)) throw new TypeError('content.some is not a function')
+        yield { type: 'text-delta', index: 0, text: verdictReply([{ id, verdict: 'verified', importance: 70 }]) }
+        // Same chunk the real seam emits (historian's capture shape): numeric
+        // fields are kept, non-numeric noise is dropped.
+        yield { type: 'usage', usage: { inputTokens: 1234, outputTokens: 56, cacheReadTokens: 'not-a-number' } }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      },
+    }
+    try {
+      const outcome = await runMaintenanceTick({
+        writer,
+        identity: OWN,
+        sessionId: 'mc-maintenance',
+        journal,
+        llm,
+        route: ROUTE,
+        now: () => T0,
+      })
+      expect(outcome.verifyRan).toBe(true)
+      const last = journal.entries.at(-1)
+      expect(last?.data?.usage).toEqual({ inputTokens: 1234, outputTokens: 56 })
+    } finally {
+      writer.close()
+    }
+  })
+
   it('reaches unverified rows even when verified rows fill the render window', async () => {
     const path = createDb()
     // 70 verified rows sort BEFORE the candidate in MC's render order
