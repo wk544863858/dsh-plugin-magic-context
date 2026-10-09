@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-magic-context",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Magic Context for DeepSeek Harness: reversible context reclaim, an out-of-band historian, an m[0]/m[1] baseline, shared project memories, and the compaction seam.",
   "type": "module",
   "license": "MIT",
@@ -35,7 +35,7 @@
     "test:watch": "vitest",
     "gate": "node scripts/mc-test.mjs --full",
     "freeze": "node scripts/mc-contract-freeze.mjs verify",
-    "freeze:snapshot": "node scripts/mc-contract-freeze.mjs snapshot",
+    "freeze:snapshot": "node scripts/mc-contract-freeze.mjs snapshot --mirror",
     "check:i18n": "node scripts/mc-i18n-check.mjs",
     "doctor": "node scripts/dsh-doctor.mjs",
     "build:seeds": "node scripts/build-reference-seeds.mjs"

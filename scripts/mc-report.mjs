@@ -1054,9 +1054,53 @@ function queryScoringStats(db) {
   } catch { return null }
 }
 
+// 全局域与画像队列快照（适配器 schema v8；v7 及更早的库没有这些表，静默跳过）。
+// 这一节回答的是产品问题而不是性能问题：域到底有没有被启用？确认队列有没有积压？
+function queryDomainStats(db) {
+  const tableExists = (name) => {
+    try {
+      return db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?").get(name) !== undefined
+    } catch { return false }
+  }
+  if (!tableExists('domains')) return null
+  const safe = (fn, fallback) => { try { return fn() } catch { return fallback } }
+  const domains = safe(() => db.prepare(
+    `SELECT d.domain_id AS domainId, d.kind AS kind, d.enabled AS enabled, d.budget_tokens AS budget,
+            d.cap AS cap, d.share_categories AS shareCategories,
+            (SELECT COUNT(*) FROM domain_members m WHERE m.domain_id = d.domain_id) AS members
+       FROM domains d ORDER BY d.kind, d.domain_id`,
+  ).all(), [])
+  const candidates = safe(() => db.prepare(
+    "SELECT state, COUNT(*) AS c FROM global_candidates GROUP BY state",
+  ).all(), [])
+  const confirmations = safe(() => db.prepare(
+    'SELECT state, COUNT(*) AS c FROM profile_confirmations GROUP BY state',
+  ).all(), [])
+  const promotable = safe(() => db.prepare(
+    "SELECT COUNT(*) AS c FROM global_candidates WHERE state = 'pending' AND distinct_identities >= 2",
+  ).get(), { c: 0 })
+  const countOf = (rows, state) => Number(rows.find(row => row.state === state)?.c ?? 0)
+  return {
+    domains,
+    members: domains.reduce((total, domain) => total + Number(domain.members), 0),
+    enabledDomains: domains.filter(domain => Number(domain.enabled) === 1).length,
+    candidates: {
+      pending: countOf(candidates, 'pending'),
+      approved: countOf(candidates, 'approved'),
+      rejected: countOf(candidates, 'rejected'),
+      expired: countOf(candidates, 'expired'),
+      promotable: Number(promotable?.c ?? 0),
+    },
+    confirmations: {
+      pending: countOf(confirmations, 'pending'),
+      approved: countOf(confirmations, 'approved'),
+      rejected: countOf(confirmations, 'rejected'),
+    },
+  }
+}
+
 /** 第 5 节：健康提示（启发式，命中才输出）。 */
-function buildHealth(ctx) {
-  const { db, opened, dbExists, openError, valid, schemaError, counts, summary, metrics, opts, windowError } = ctx
+function buildHealth(ctx) {  const { db, opened, dbExists, openError, valid, schemaError, counts, summary, metrics, opts, windowError } = ctx
   const hints = []
   const push = (code, message) => hints.push({ code, message })
 
@@ -1183,6 +1227,41 @@ function buildHealth(ctx) {
   }
   if (windowError !== null && windowError !== undefined) {
     push('window-read-error', `读取时间窗失败：${windowError}`)
+  }
+
+  // 全局域（schema v8）的两条运维扳机。它们不判"故障"，只判"需要人看一眼"：
+  // 域已导入却全停用 ⇒ 跨项目共享仍在走契约回落，接管的最后一步没做完；
+  // 确认队列积压 ⇒ 约束型候选在等人回答，没人回答它们就永远不会生效。
+  const ds = metrics.domainStats
+  if (ds !== null && ds !== undefined) {
+    if (ds.domains.length > 0 && ds.enabledDomains === 0) {
+      push(
+        'domains-imported-not-enabled',
+        `已定义 ${fmtInt(ds.domains.length)} 个全局域但全部停用：跨项目共享仍在使用契约回落（workspaces 表）。`
+          + '确认成员无误后用 /ctx-global enable <domain> 接管。',
+      )
+    }
+    if (ds.domains.length === 0) {
+      push(
+        'no-domains-configured',
+        '适配器库里没有任何全局域：域车道尚未接管。若契约工作区仍有成员，'
+          + '先跑 node scripts/mc-import-workspace.mjs（幂等、可回滚）。',
+      )
+    }
+    if (ds.confirmations.pending >= 3) {
+      push(
+        'profile-confirmation-backlog',
+        `画像确认队列积压 ${fmtInt(ds.confirmations.pending)} 条：约束型候选在等待人工答复，`
+          + '未确认前不会生效。用 /ctx-profile list 处理。',
+      )
+    }
+    if (ds.candidates.promotable >= 3) {
+      push(
+        'global-candidate-backlog',
+        `${fmtInt(ds.candidates.promotable)} 条全局候选已满足跨项目复现门（≥2 个项目独立观察到）但仍在待定：`
+          + '用 /ctx-global candidates 复核。',
+      )
+    }
   }
   return hints
 }
@@ -1514,6 +1593,26 @@ function renderText(payload) {
         `  S(t) 打分     : ${fmtInt(Number(sc.rows))} 条在册（hits ${fmtInt(Number(sc.hits))} / injections ${fmtInt(Number(sc.injections))}）`,
       )
     }
+    const ds = metrics.domainStats
+    if (ds) {
+      const domainText = ds.domains.length === 0
+        ? '未定义任何域'
+        : ds.domains.map(domain =>
+          `${domain.kind}[${fmtInt(Number(domain.budget))} tok·cap ${fmtInt(Number(domain.cap))}]`
+            + `${Number(domain.enabled) === 1 ? '启用' : '停用'}·${fmtInt(Number(domain.members))} 成员`).join('；')
+      lines.push(
+        `  全局域        : ${fmtInt(ds.domains.length)} 个（启用 ${fmtInt(ds.enabledDomains)}）— ${domainText}`,
+      )
+      const conf = ds.confirmations
+      lines.push(
+        `  画像确认队列  : 待确认 ${fmtInt(conf.pending)}（approved ${fmtInt(conf.approved)} / rejected ${fmtInt(conf.rejected)}）`,
+      )
+      const cand = ds.candidates
+      lines.push(
+        `  全局候选      : 待定 ${fmtInt(cand.pending)}（其中可晋升 ${fmtInt(cand.promotable)}）`
+          + ` · 已批准 ${fmtInt(cand.approved)} / 已拒绝 ${fmtInt(cand.rejected)} / 已过期 ${fmtInt(cand.expired)}`,
+      )
+    }
     if (metrics.engine.total > 0) {
       lines.push(`  engine        : ${fmtInt(metrics.engine.total)} 次；action 分布 ${renderDistribution(metrics.engine.byAction)}`)
     }
@@ -1659,6 +1758,7 @@ function buildReport(opts) {
       summary = summarizeWindow(windowInfo.rows)
       metrics = computeMetrics(windowInfo.rows)
       metrics.scoringStats = queryScoringStats(db)
+      metrics.domainStats = queryDomainStats(db)
       if (windowInfo.atMissing) windowInfo.error = windowInfo.error ?? 'journal 缺少 at 列'
       if (windowInfo.skippedNoAt > 0) notes.push(`有 ${windowInfo.skippedNoAt} 条 journal 行的 at 为空或非法，已跳过。`)
     } catch (error) {

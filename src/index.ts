@@ -61,6 +61,7 @@ import { defineCtxExpandTool, defineCtxReduceTool, defineCtxMemoryTool, type Loc
 import { ReduceNudgeTracker } from './dsh/reduce-guidance.ts'
 import { registerCtxStatusCommand } from './dsh/status-command.ts'
 import { registerCtxRecompCommand } from './dsh/recomp.ts'
+import { registerCtxGlobalCommand, registerCtxProfileCommand } from './dsh/command-surface.ts'
 import { SearchHintTracker } from './dsh/search-hint.ts'
 import { registerMagicCompactionEngine } from './dsh/compaction-engine.ts'
 import { createTelemetryService } from './dsh/telemetry.ts'
@@ -421,6 +422,12 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
       ...config.historian === undefined ? {} : { route: config.historian },
     })
     ctx.logger.info('magic-context dsh adapter: /ctx-status and /ctx-recomp registered')
+    // The global-domain surface rides the same gate: with Magic Context's
+    // dashboard gone these commands ARE the operating surface for the profile
+    // queue and the domains.
+    registerCtxProfileCommand(ctx, { stores })
+    registerCtxGlobalCommand(ctx, { stores })
+    ctx.logger.info('magic-context dsh adapter: /ctx-profile and /ctx-global registered')
   }
 
   // ── The compaction seam ────────────────────────────────────────────────────
