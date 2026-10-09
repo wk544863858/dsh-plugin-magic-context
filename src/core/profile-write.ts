@@ -82,6 +82,15 @@ export interface ProfileWriter {
   /** The promoted profile, oldest first — the same order the render lane uses. */
   listActiveProfiles(): readonly ProfileRow[]
   /**
+   * Retire a profile row — Magic Context's dismissal. The row is KEPT as
+   * `status = 'dismissed'` rather than deleted: it is the record of what was
+   * once injected into every session, and the audit trail would be gone with it.
+   *
+   * Returns whether a row actually changed state; an already-dismissed row
+   * reports `false` instead of a successful no-op, so the caller can say so.
+   */
+  retireProfile(id: number, now: number): boolean
+  /**
    * Promote one profile row. Returns its new id, or `undefined` when the write
    * did not happen (unavailable store), so the caller can tell "promoted" from
    * "silently dropped".
@@ -179,6 +188,7 @@ export function openProfileWriter(options: ProfileWriterOptions): ProfileWriter 
       expireCandidates: () => 0,
       deleteCandidates: () => 0,
       listActiveProfiles: () => [],
+      retireProfile: () => false,
       promoteProfile: () => undefined,
       close: () => undefined,
     }
@@ -227,6 +237,9 @@ export function openProfileWriter(options: ProfileWriterOptions): ProfileWriter 
   const expireCandidates = db.prepare('DELETE FROM user_memory_candidates WHERE created_at < ?')
   const insertProfile = db.prepare(INSERT_PROFILE)
   const selectProfiles = db.prepare(SELECT_PROFILES)
+  const retireProfileStatement = db.prepare(
+    "UPDATE user_memories SET status = 'dismissed', updated_at = ? WHERE id = ? AND status = 'active'",
+  )
 
   /** Run `fn` inside BEGIN IMMEDIATE, rolling back on any throw. */
   const inTransaction = <T>(fn: () => T): T => {
@@ -325,6 +338,14 @@ export function openProfileWriter(options: ProfileWriterOptions): ProfileWriter 
       } catch (error) {
         options.logger.warn(`magic-context profile read failed: ${errText(error)}`)
         return []
+      }
+    },
+    retireProfile: (id, nowMs) => {
+      try {
+        return Number(retireProfileStatement.run(nowMs, id).changes) === 1
+      } catch (error) {
+        options.logger.warn(`magic-context profile retirement failed: ${errText(error)}`)
+        return false
       }
     },
     promoteProfile: (input) => {

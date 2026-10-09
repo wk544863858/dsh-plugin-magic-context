@@ -62,6 +62,17 @@ function rows(path: string): Array<{ content: string; session_id: string; start:
   }
 }
 
+/** The profile row as it survives a retirement: kept, with its new status. */
+function profileStatusRows(path: string): Array<{ id: number; status: string; updated_at: number }> {
+  const db = new DatabaseSync(path)
+  try {
+    return db.prepare('SELECT id, status, updated_at FROM user_memories ORDER BY id').all() as unknown as
+      Array<{ id: number; status: string; updated_at: number }>
+  } finally {
+    db.close()
+  }
+}
+
 function tableNames(path: string): string[] {
   const db = new DatabaseSync(path)
   try {
@@ -187,6 +198,31 @@ describe('openProfileWriter', () => {
     }
     expect(rows(path)[0]!.start).toBeNull()
     expect(rows(path)[0]!.end).toBeNull()
+  })
+
+  it('retires a profile row in place, keeping it as the record of what was injected', () => {
+    const path = makeDb()
+    const writer = openProfileWriter({ dbPath: path, logger: silentLogger, now: () => T0 })
+    try {
+      const id = writer.promoteProfile({ content: 'answers in Chinese', candidateIds: [], promotedAt: T0 })
+      expect(id, 'a row to retire').toBeTypeOf('number')
+      expect(writer.listActiveProfiles()).toHaveLength(1)
+
+      expect(writer.retireProfile(id!, T0 + 1), 'the first retirement changes state').toBe(true)
+      expect(writer.listActiveProfiles(), 'no longer rendered').toHaveLength(0)
+
+      // Negative control: a second retirement is NOT a successful no-op. A
+      // writer that answered `true` here would let the command surface report a
+      // retirement that did nothing.
+      expect(writer.retireProfile(id!, T0 + 2), 'the second retirement changes nothing').toBe(false)
+
+      // The row survives as evidence: the audit trail of what was injected into
+      // every session is not deleted along with the injection.
+      const kept = profileStatusRows(path)
+      expect(kept).toEqual([{ id, status: 'dismissed', updated_at: T0 + 1 }])
+    } finally {
+      writer.close()
+    }
   })
 
   it('is unavailable, not fatal, when the contract has no candidate table', () => {

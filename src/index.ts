@@ -425,7 +425,14 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     // The global-domain surface rides the same gate: with Magic Context's
     // dashboard gone these commands ARE the operating surface for the profile
     // queue and the domains.
-    registerCtxProfileCommand(ctx, { stores, ...memoryRecall === undefined ? {} : { contractDbPath: memoryRecall.dbPath } })
+    registerCtxProfileCommand(ctx, {
+      stores,
+      ...memoryRecall === undefined ? {} : { contractDbPath: memoryRecall.dbPath },
+      // WP12/DoD: retiring a profile row is the user domain's only write from
+      // the command surface. Without the writer the command says so instead of
+      // reporting a retirement that never happened.
+      ...profileWriter === undefined || profileWriter.status.ok !== true ? {} : { profileWriter },
+    })
     registerCtxGlobalCommand(ctx, {
       stores,
       ...memoryRecall === undefined ? {} : { contractDbPath: memoryRecall.dbPath },

@@ -104,6 +104,20 @@ describe('/ctx-profile', () => {
     expect(s.listProfileConfirmations('rejected')).toHaveLength(1)
   })
 
+  it('retires profile rows only through a writer, and only with an id', () => {
+    const s = store()
+    // A read-only or fenced contract yields no writer: refuse, rather than
+    // report a retirement that never happened. (The full path — preview, apply,
+    // row kept as dismissed, second retirement refused — is walked end to end in
+    // tests/strip-drill.spec.ts against a real profile store.)
+    const fenced = planProfileCommand(s, 'retire 1 --yes', NOW)
+    expect(fenced.kind).toBe('error')
+    expect(fenced.text).toContain('not writable')
+
+    expect(planProfileCommand(s, 'retire', NOW).kind).toBe('error')
+    expect(planProfileCommand(s, 'frobnicate', NOW).text).toContain('retire <id> --yes')
+  })
+
   it('rejects unknown ids and unknown verbs with usage', () => {
     const s = store()
     expect(planProfileCommand(s, 'show 99', NOW).kind).toBe('error')

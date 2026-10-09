@@ -28,6 +28,8 @@ import {
   type DomainWritePort,
 } from '../core/global-domains.ts'
 
+import type { ProfileWriter } from '../core/profile-write.ts'
+
 export interface SurfaceDeps {
   readonly stores: AdapterStores
   /**
@@ -42,6 +44,13 @@ export interface SurfaceDeps {
    * marking a candidate approved with nothing behind it.
    */
   readonly publisher?: DomainWritePort
+  /**
+   * WP12/DoD: `/ctx-profile retire` is the user domain's retirement path — the
+   * drill found the org lane had one and the profile lane did not. Absent
+   * (read-only or fenced contract) ⇒ `retire` says so rather than reporting a
+   * retirement that never happened.
+   */
+  readonly profileWriter?: ProfileWriter
 }
 
 type CommandResult = { kind: 'success'; text?: string } | { kind: 'error'; text: string }
@@ -56,7 +65,7 @@ type CommandRegistrar = {
   }): unknown
 }
 
-const PROFILE_USAGE = 'list | show <id> | confirm <id> | reject <id>'
+const PROFILE_USAGE = 'list | show <id> | confirm <id> | reject <id> | retire <id> --yes'
 const GLOBAL_USAGE = 'domains | members [<domain>] | enable <domain> | disable <domain> --yes | '
   + 'add <domain> <identity> | remove <domain> <identity> --yes | candidates [<domain>] | '
   + 'promote <memoryId> [--domain <domain>] | detect | approve <candidateId> --yes | reject-candidate <candidateId> --yes'
@@ -89,7 +98,12 @@ function parseId(raw: string | undefined): number | undefined {
  * drain than to fill. `reject` IS gated, because a rejection is what makes a
  * candidate disappear from the reviewer's view for good.
  */
-export function planProfileCommand(store: AdapterStores, rawInput: string | undefined, now: number): CommandResult {
+export function planProfileCommand(
+  store: AdapterStores,
+  rawInput: string | undefined,
+  now: number,
+  profileWriter?: ProfileWriter,
+): CommandResult {
   const tokens = stripFlags(tokenize(rawInput))
   const verb = tokens[0] ?? 'list'
 
@@ -133,6 +147,40 @@ export function planProfileCommand(store: AdapterStores, rawInput: string | unde
     const decided = decideConfirmation(store, id, 'rejected', now)
     if (decided === undefined) return { kind: 'error', text: `Magic Context: #${String(id)} is not waiting for a decision.` }
     return { kind: 'success', text: `Magic Context: #${String(id)} rejected. It will never be promoted.` }
+  }
+
+  if (verb === 'retire') {
+    const id = parseId(tokens[1])
+    if (id === undefined) return { kind: 'error', text: `Magic Context: /ctx-profile retire needs a profile id. Usage: ${PROFILE_USAGE}` }
+    if (profileWriter === undefined || profileWriter.status.ok !== true) {
+      return {
+        kind: 'error',
+        text: 'Magic Context: the shared profile is not writable right now, so the row was left as it is.',
+      }
+    }
+    const row = profileWriter.listActiveProfiles().find(profile => profile.id === id)
+    if (row === undefined) {
+      // Distinguishing "not active" from "not writable" matters: an id that is
+      // already dismissed must not look like a failed write.
+      return { kind: 'error', text: `Magic Context: #${String(id)} is not an active profile row.` }
+    }
+    if (!wantsApply(tokenize(rawInput))) {
+      return {
+        kind: 'success',
+        text: `Magic Context: would retire #${String(id)} — "${row.content.slice(0, 120)}".\n`
+          + 'It would stop being injected in every session, and the removal forces a HARD baseline rebuild '
+          + '(the profile digest covers active rows). Add --yes to apply.',
+      }
+    }
+    if (!profileWriter.retireProfile(id, now)) {
+      return { kind: 'error', text: `Magic Context: #${String(id)} could not be retired; nothing changed.` }
+    }
+    return {
+      kind: 'success',
+      text: `Magic Context: #${String(id)} retired. It no longer renders in <user-profile>, and every session `
+        + 'that had it folds its baseline on the next pass (the digest covers active rows). The row itself is '
+        + 'kept as dismissed — it is the record of what was once injected.',
+    }
   }
 
   return { kind: 'error', text: `Magic Context: unknown /ctx-profile subcommand '${verb}'. Usage: ${PROFILE_USAGE}` }
@@ -347,7 +395,7 @@ export function registerCtxProfileCommand(ctx: Context, deps: SurfaceDeps): void
     name: 'ctx-profile',
     description: 'Magic Context: answer the profile-confirmation queue (directive-shaped candidates need you).',
     input: { hint: PROFILE_USAGE },
-    handler: invocation => planProfileCommand(deps.stores, invocation.rawInput, Date.now()),
+    handler: invocation => planProfileCommand(deps.stores, invocation.rawInput, Date.now(), deps.profileWriter),
   })
 }
 
