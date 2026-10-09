@@ -157,8 +157,19 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
     // built from the user's own words and appended to the tail. Awaited, because
     // the hint has to ride the request it was computed for, but every path is
     // fail-open and the search carries its own deadline.
+    //
+    // The surface read below is the protected-head guard (2026-10-09 incident):
+    // this waterfall band runs BEFORE the host writes step/start and the first
+    // system/message, so on a fresh session's first step a tail append here took
+    // surface node 0 and the loader rejected the log on every replay (10/10
+    // corrupt logs had the hint as the early node). `surface.nodes.length === 0`
+    // means the head is not on the log yet — skip the hint this step; any
+    // non-empty surface has the head as node 0 and a tail append is safe. A host
+    // drift that removes the `surface` getter throws into the catch below, which
+    // also skips the hint.
     if (deps.searchHints !== undefined && liveBoolean(config.searchHint, true)) {
       try {
+        const surfaceNodes = payload.agent.session.surface.nodes.length
         const prompt = latestUserPromptText(messages)
         if (prompt !== undefined) {
           await planSearchHint(
@@ -167,7 +178,13 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
               tracker: deps.searchHints,
               ...journal === undefined ? {} : { journal },
             },
-            { sessionId, session: payload.agent.session as never, text: prompt.text, turnKey: prompt.turnKey },
+            {
+              sessionId,
+              session: payload.agent.session as never,
+              text: prompt.text,
+              turnKey: prompt.turnKey,
+              surfaceNodes,
+            },
           )
         }
       } catch {

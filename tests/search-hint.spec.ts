@@ -85,6 +85,7 @@ describe('planSearchHint', () => {
       search?: unknown
       tracker?: SearchHintTracker
       timeoutMs?: number
+      surfaceNodes?: number
       kinds?: string[]
     } = {},
   ) => {
@@ -105,6 +106,7 @@ describe('planSearchHint', () => {
         session: stub.session as never,
         text: options.text ?? PROMPT,
         turnKey: 'turn-1',
+        ...options.surfaceNodes === undefined ? {} : { surfaceNodes: options.surfaceNodes },
       },
     )
     return { outcome, stub, kinds }
@@ -133,6 +135,21 @@ describe('planSearchHint', () => {
     expect((await run({ text: '/ctx-status now please' })).outcome).toMatchObject({ action: 'quiet', reason: 'not-a-prompt' })
     expect((await run({ hits: [] })).outcome).toMatchObject({ action: 'quiet', reason: 'no-hits' })
     expect((await run({ search: undefined })).outcome).toMatchObject({ action: 'quiet', reason: 'lane-off' })
+  })
+
+  it('refuses to append on a headless surface (protected-head guard)', async () => {
+    // 2026-10-09 incident: the tail append inside the pre-step waterfall became
+    // surface node 0 on a fresh session, and the loader rejected the whole log.
+    const headless = await run({ hits: [hit(1, 'PROJECT_RULES', 'fail closed')], surfaceNodes: 0 })
+    expect(headless.outcome).toMatchObject({ action: 'quiet', reason: 'surface-headless' })
+    expect(headless.stub.appended).toHaveLength(0)
+    expect(headless.kinds).toContain('search-hint')
+    // The guard is a correctness gate: it fires before the tuning signals.
+    expect((await run({ text: 'hi', surfaceNodes: 0 })).outcome).toMatchObject({ action: 'quiet', reason: 'surface-headless' })
+    // Any non-empty surface has the head as node 0 — the hint is safe again.
+    const resumed = await run({ hits: [hit(1, 'PROJECT_RULES', 'fail closed')], surfaceNodes: 7 })
+    expect(resumed.outcome.action).toBe('hinted')
+    expect(resumed.stub.appended).toHaveLength(1)
   })
 
   it('never lets a slow or failing search reach the turn', async () => {

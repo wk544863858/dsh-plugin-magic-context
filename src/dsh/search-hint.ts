@@ -16,6 +16,16 @@
  *   rewrite what they typed; the adapter appends a separate magic-context entry at
  *   the tail instead (`appendMagicContextEntry`). The cache property is the same —
  *   a node appended for this turn is not in the provider's cached prefix.
+ * - **Headless-surface guard.** The tail append happens inside the `agent/pre-step`
+ *   waterfall, which on a fresh session's first step runs BEFORE the host writes
+ *   `step/start` and the first `system/message` (host agent-loop: waterfall →
+ *   turn/start → step/start → system commits → admitted batch). The hint would
+ *   become surface node 0, and the loader's `foldSurface` then rejects the whole
+ *   log ("requires a protected first surface head") on every later replay — the
+ *   2026-10-09 corruption incident, 10/10 logs with the hint as the early node.
+ *   `planSearchHint` therefore refuses to append while the surface is still empty
+ *   (`surfaceNodes === 0`); any non-empty surface has the head as node 0 and a
+ *   tail append is safe forever after.
  * - **FTS-only search.** `lane.searchForSession` skips the embedding request, so a
  *   cold local model cannot delay the turn the hint is meant to inform. The
  *   stored-vector lane remains available to `ctx_search`, where the agent asked
@@ -116,7 +126,7 @@ export interface SearchHintDeps {
 
 export type SearchHintOutcome =
   | { readonly action: 'hinted'; readonly hits: number; readonly text: string }
-  | { readonly action: 'quiet'; readonly reason: 'too-short' | 'not-a-prompt' | 'already-hinted' | 'no-hits' | 'lane-off' }
+  | { readonly action: 'quiet'; readonly reason: 'too-short' | 'not-a-prompt' | 'already-hinted' | 'no-hits' | 'lane-off' | 'surface-headless' }
   | { readonly action: 'failed'; readonly reason: 'timeout' | 'search-failed' | 'append-failed' }
 
 /** Bound a promise so a slow search can never hold the turn. */
@@ -150,6 +160,15 @@ export async function planSearchHint(
     readonly session: SessionNoticeSession
     readonly text: string
     readonly turnKey: string
+    /**
+     * `session.surface.nodes.length` read by the caller. The protected-head
+     * guard: `0` means the first `system/message` is not on the log yet, so a
+     * tail append would take surface node 0 and the loader would reject the
+     * log on replay. Omitted (unknown) keeps the legacy behavior — the
+     * production caller always reads the surface, and a host drift there
+     * throws into the pre-step fail-open band, which also skips the hint.
+     */
+    readonly surfaceNodes?: number
   },
 ): Promise<SearchHintOutcome> {
   const now = deps.now ?? Date.now
@@ -163,6 +182,9 @@ export async function planSearchHint(
     return outcome
   }
   if (deps.search === undefined) return record({ action: 'quiet', reason: 'lane-off' })
+  // Correctness gate before every tuning signal: a headless surface must not
+  // be appended to regardless of what the text would have scored.
+  if (input.surfaceNodes === 0) return record({ action: 'quiet', reason: 'surface-headless' }, { surfaceNodes: 0 })
   const text = input.text.trim()
   const minChars = deps.minChars ?? 24
   // A command or one of our own hints is never a prompt, however short: the
