@@ -81,7 +81,7 @@ describe('schema v8 migration', () => {
   it('is the current version and upgrades a v7 store without losing rows', () => {
     const dir = tempDir()
     const store = openStore(dir)
-    expect(SCHEMA_VERSION).toBe(8)
+    expect(SCHEMA_VERSION).toBe(9)
     store.allocateTag('s1', { kind: 'user-message', messageId: 'm1' }, NOW)
     store.saveBaselineState({
       sessionId: 's1',
@@ -131,6 +131,33 @@ describe('schema v8 migration', () => {
     raw.prepare("UPDATE meta SET value = '99' WHERE key = 'schema_version'").run()
     raw.close()
     expect(() => openStores(dir)).toThrow(StoreAheadOfAdapterError)
+  })
+
+  it('carries the v9 candidate metadata through the store API', () => {
+    const store = openStore(tempDir())
+    const domainId = seedDomain(store, 'org', true)
+    const candidate = store.upsertGlobalCandidate(
+      {
+        domainId,
+        content: 'org-level rule',
+        normalizedHash: 'hash-v9',
+        firstIdentity: 'git:a',
+        category: 'CONSTRAINTS',
+        sourceMemoryId: 4242,
+      },
+      NOW,
+    )
+    expect(candidate.category).toBe('CONSTRAINTS')
+    expect(candidate.sourceMemoryId).toBe(4242)
+    // A later sighting that carries no metadata must not erase what is recorded.
+    store.upsertGlobalCandidate(
+      { domainId, content: 'org-level rule', normalizedHash: 'hash-v9', firstIdentity: 'git:b' },
+      NOW + 1,
+    )
+    const reread = store.listGlobalCandidates({ domainId })[0]!
+    expect(reread.category).toBe('CONSTRAINTS')
+    expect(reread.sourceMemoryId).toBe(4242)
+    store.close()
   })
 })
 

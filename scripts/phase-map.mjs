@@ -82,7 +82,9 @@ const PHASE_B = [
 ]
 
 /** Phase C: org/machine domains. Publishing writes the contract — not started. */
-const PHASE_C = []
+const PHASE_C = [
+  'tests/org-domain.spec.ts',
+]
 
 /** Phase D: the operating loop — commands, telemetry, backfill, drill. */
 const PHASE_D = [
@@ -122,8 +124,9 @@ export const PHASES = [
     specs: PHASE_C,
     checks: [],
     blind: [
-      'WP9/WP10 全部未开工：发布共享 memories 是契约写入，等用户放行',
-      '故本阶段没有任何用例——运行器必须报「空阶段」而不是绿',
+      '「发布」未实现：把候选写进共享库的域身份是契约写入，等用户放行',
+      'machine 域（WP10）未开工',
+      '复现检测在真实语料上是空门（1292 行 / 33 项目 / 0 共享 hash）——见 global-domain-source-finding',
     ],
   },
   {

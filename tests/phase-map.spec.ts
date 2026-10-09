@@ -46,12 +46,12 @@ describe('the phase map', () => {
     expect(missing).toEqual([])
   })
 
-  it('declares exactly one phase as not-yet-verified, not an accidental empty one', () => {
-    // Phase C (org/machine) is deliberately empty until the contract writes are
-    // released. Any OTHER empty phase is a mistake, and the runner would fail
-    // loudly on it — this pins which one is intentional.
+  it('has no empty phase — an empty suite has nothing to gate on', () => {
+    // Phase C is now partially verified (candidate detection and the gates),
+    // with publishing listed as blind. Nothing may be empty: the runner treats
+    // an empty phase as a FAILURE, because "no specs" is not "green".
     const empty = PHASES.filter(phase => phase.specs.length === 0).map(phase => phase.id)
-    expect(empty).toEqual(['c'])
+    expect(empty).toEqual([])
   })
 
   it('gives every phase an identity and a blind list', () => {

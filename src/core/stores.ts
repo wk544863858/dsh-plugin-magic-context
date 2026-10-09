@@ -20,7 +20,7 @@ import type { DomainKind } from './domains.ts'
 import { parseShareCategories, serializeShareCategories } from './domains.ts'
 import type { TagRecord, TagTarget, UsageRecord } from './types.ts'
 
-export const SCHEMA_VERSION = 8
+export const SCHEMA_VERSION = 9
 
 /** The m[0]/m[1] baseline identity for one session. */
 export interface BaselineState {
@@ -134,6 +134,10 @@ export interface GlobalCandidateRow {
   /** Distinct project identities that independently observed this candidate. */
   readonly distinctIdentities: number
   readonly observationCount: number
+  /** v9: the category it will be published under; absent for scan-detected rows. */
+  readonly category?: string
+  /** v9: the project memory a human promotion came from. */
+  readonly sourceMemoryId?: number
   readonly state: 'pending' | 'approved' | 'rejected' | 'expired'
   readonly createdAt: number
   readonly updatedAt: number
@@ -289,6 +293,8 @@ export interface AdapterStores {
       sessionId?: string
       compartmentStart?: number
       compartmentEnd?: number
+      category?: string
+      sourceMemoryId?: number
     },
     now: number,
   ): GlobalCandidateRow
@@ -599,6 +605,25 @@ const MIGRATIONS: readonly Migration[] = [
         CREATE INDEX profile_confirmations_state ON profile_confirmations(state);
         ALTER TABLE baseline_state ADD COLUMN profile_watermark INTEGER;
         ALTER TABLE baseline_state ADD COLUMN profile_m0_digest TEXT;
+      `)
+    },
+  },
+  {
+    // v9: what a global candidate will be published AS.
+    //
+    // v8 stored a candidate's content and hash but not its category, because the
+    // only intended source was the historian's recurrence scan. Naming the
+    // category up front matters for two reasons: the category decides whether
+    // the row will be visible at all once published (per-domain allowlist), and
+    // `source_memory_id` keeps the provenance so a reviewer can see which
+    // project memory a candidate came from. Both are nullable: a candidate
+    // created by the recurrence scan has no single source memory, and a human
+    // promotion always has one.
+    version: 9,
+    up: (db) => {
+      db.exec(`
+        ALTER TABLE global_candidates ADD COLUMN category TEXT;
+        ALTER TABLE global_candidates ADD COLUMN source_memory_id INTEGER;
       `)
     },
   },
@@ -1097,6 +1122,7 @@ export function openStores(dataDir: string): AdapterStores {
     id: number; domain_id: string; content: string; normalized_hash: string; first_identity: string
     session_id: string | null; compartment_start: number | null; compartment_end: number | null
     distinct_identities: number; observation_count: number; state: string
+    category: string | null; source_memory_id: number | null
     created_at: number; updated_at: number
   }
 
@@ -1111,6 +1137,8 @@ export function openStores(dataDir: string): AdapterStores {
     ...row.compartment_end === null ? {} : { compartmentEnd: row.compartment_end },
     distinctIdentities: row.distinct_identities,
     observationCount: row.observation_count,
+    ...row.category === null ? {} : { category: row.category },
+    ...row.source_memory_id === null ? {} : { sourceMemoryId: row.source_memory_id },
     state: row.state as GlobalCandidateRow['state'],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -1142,14 +1170,19 @@ export function openStores(dataDir: string): AdapterStores {
       sessionId?: string
       compartmentStart?: number
       compartmentEnd?: number
+      category?: string
+      sourceMemoryId?: number
     },
     now: number,
   ): GlobalCandidateRow => {
     db.prepare(
       'INSERT INTO global_candidates(domain_id, content, normalized_hash, first_identity, session_id, '
-        + 'compartment_start, compartment_end, distinct_identities, observation_count, state, created_at, updated_at) '
-        + "VALUES(?, ?, ?, ?, ?, ?, ?, 0, 0, 'pending', ?, ?) "
+        + 'compartment_start, compartment_end, distinct_identities, observation_count, category, source_memory_id, '
+        + "state, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 'pending', ?, ?) "
         + 'ON CONFLICT(domain_id, normalized_hash) DO UPDATE SET content = excluded.content, '
+        // A later sighting that does not carry the metadata must not erase it.
+        + 'category = COALESCE(excluded.category, global_candidates.category), '
+        + 'source_memory_id = COALESCE(excluded.source_memory_id, global_candidates.source_memory_id), '
         + 'updated_at = excluded.updated_at, '
         + "state = CASE WHEN global_candidates.state = 'expired' THEN 'pending' ELSE global_candidates.state END",
     ).run(
@@ -1160,6 +1193,8 @@ export function openStores(dataDir: string): AdapterStores {
       candidate.sessionId ?? null,
       candidate.compartmentStart ?? null,
       candidate.compartmentEnd ?? null,
+      candidate.category ?? null,
+      candidate.sourceMemoryId ?? null,
       now,
       now,
     )

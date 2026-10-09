@@ -425,8 +425,8 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     // The global-domain surface rides the same gate: with Magic Context's
     // dashboard gone these commands ARE the operating surface for the profile
     // queue and the domains.
-    registerCtxProfileCommand(ctx, { stores })
-    registerCtxGlobalCommand(ctx, { stores })
+    registerCtxProfileCommand(ctx, { stores, ...memoryRecall === undefined ? {} : { contractDbPath: memoryRecall.dbPath } })
+    registerCtxGlobalCommand(ctx, { stores, ...memoryRecall === undefined ? {} : { contractDbPath: memoryRecall.dbPath } })
     ctx.logger.info('magic-context dsh adapter: /ctx-profile and /ctx-global registered')
   }
 

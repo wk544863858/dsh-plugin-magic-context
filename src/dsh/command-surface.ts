@@ -19,9 +19,21 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { AdapterStores } from '../core/stores.ts'
 import { decideConfirmation, listPendingConfirmations } from '../core/profile-confirmation.ts'
+import {
+  ORG_DOMAIN_ID,
+  approvalGate,
+  detectGlobalCandidates,
+  promoteMemoryToCandidate,
+} from '../core/global-domains.ts'
 
 export interface SurfaceDeps {
   readonly stores: AdapterStores
+  /**
+   * The shared store's path, for the two subcommands that have to READ it
+   * (`detect` scans it, `promote` resolves a memory id). Absent when the memory
+   * lane is unavailable, in which case those two say so instead of guessing.
+   */
+  readonly contractDbPath?: string
 }
 
 type CommandResult = { kind: 'success'; text?: string } | { kind: 'error'; text: string }
@@ -39,7 +51,7 @@ type CommandRegistrar = {
 const PROFILE_USAGE = 'list | show <id> | confirm <id> | reject <id>'
 const GLOBAL_USAGE = 'domains | members [<domain>] | enable <domain> | disable <domain> --yes | '
   + 'add <domain> <identity> | remove <domain> <identity> --yes | candidates [<domain>] | '
-  + 'approve <candidateId> | reject-candidate <candidateId> --yes'
+  + 'promote <memoryId> [--domain <domain>] | detect | approve <candidateId> | reject-candidate <candidateId> --yes'
 
 function tokenize(rawInput: string | undefined): string[] {
   return (rawInput ?? '').trim().split(/\s+/).filter(token => token.length > 0)
@@ -128,7 +140,12 @@ function domainLine(store: AdapterStores, domain: ReturnType<AdapterStores['list
     + ` · ${String(members)} member(s)`
 }
 
-export function planGlobalCommand(store: AdapterStores, rawInput: string | undefined, now: number): CommandResult {
+export function planGlobalCommand(
+  store: AdapterStores,
+  rawInput: string | undefined,
+  now: number,
+  contractDbPath?: string,
+): CommandResult {
   const tokens = stripFlags(tokenize(rawInput))
   const verb = tokens[0] ?? 'domains'
 
@@ -200,6 +217,53 @@ export function planGlobalCommand(store: AdapterStores, rawInput: string | undef
     }
   }
 
+  if (verb === 'detect') {
+    if (contractDbPath === undefined) {
+      return { kind: 'error', text: 'Magic Context: the shared store is unavailable, so recurrence cannot be scanned.' }
+    }
+    const scan = detectGlobalCandidates(store, { contractDbPath, now })
+    if (scan.hashes === 0) {
+      return {
+        kind: 'success',
+        text: 'Magic Context: recurrence scan found 0 cross-project candidates.\n'
+          + 'That is the expected result on this corpus (measured 2026-10-10: 1292 active rows across 33 projects, '
+          + 'no normalized hash shared by two projects) — historian facts are project-bound. '
+          + 'Use /ctx-global promote <memoryId> for human-judged organisation knowledge.',
+      }
+    }
+    return {
+      kind: 'success',
+      text: `Magic Context: recurrence scan found ${String(scan.hashes)} hash(es); upserted ${String(scan.upserted)}, `
+        + `skipped ${String(scan.blocked)} credential-shaped.`,
+    }
+  }
+
+  if (verb === 'promote') {
+    const memoryId = parseId(tokens[1])
+    if (memoryId === undefined) {
+      return { kind: 'error', text: `Magic Context: /ctx-global promote needs a memory id. Usage: ${GLOBAL_USAGE}` }
+    }
+    if (contractDbPath === undefined) {
+      return { kind: 'error', text: 'Magic Context: the shared store is unavailable, so a memory cannot be read.' }
+    }
+    const domainFlag = tokens.indexOf('--domain')
+    const domainId = domainFlag >= 0 && tokens[domainFlag + 1] !== undefined ? tokens[domainFlag + 1] : ORG_DOMAIN_ID
+    const promoted = promoteMemoryToCandidate(store, {
+      contractDbPath,
+      memoryId,
+      domainId,
+      now,
+    })
+    if (!promoted.ok) return { kind: 'error', text: `Magic Context: ${promoted.error}` }
+    const candidate = promoted.candidate
+    return {
+      kind: 'success',
+      text: `Magic Context: memory #${String(memoryId)} is now candidate #${String(candidate.id)} for ${domainId}`
+        + `${candidate.category === undefined ? '' : ` (category ${candidate.category})`}.\n`
+        + `It is human-judged, so /ctx-global approve ${String(candidate.id)} does not need the recurrence gate.`,
+    }
+  }
+
   if (verb === 'candidates') {
     const domainId = tokens[1]
     const rows = store.listGlobalCandidates({ state: 'pending', ...domainId === undefined ? {} : { domainId } })
@@ -223,18 +287,20 @@ export function planGlobalCommand(store: AdapterStores, rawInput: string | undef
     }
     const row = store.getGlobalCandidate(id)
     if (row === undefined) return { kind: 'error', text: `Magic Context: no candidate #${String(id)}.` }
-    if (state === 'approved' && row.distinctIdentities < 2) {
-      return {
-        kind: 'error',
-        text: `Magic Context: candidate #${String(id)} was observed by only ${String(row.distinctIdentities)} project(s); `
-          + 'a global promotion needs independent recurrence in at least two.',
-      }
+    if (state === 'approved') {
+      const gate = approvalGate(store, row)
+      if (!gate.ok) return { kind: 'error', text: `Magic Context: ${gate.error}` }
     }
     store.setGlobalCandidateState(id, state, now)
     return {
       kind: 'success',
       text: state === 'approved'
-        ? `Magic Context: candidate #${String(id)} approved. Publishing into ${row.domainId} happens on the next maintenance tick.`
+        ? `Magic Context: candidate #${String(id)} approved for ${row.domainId}.\n`
+          // Saying "publishing happens on the next tick" would be a lie: the
+          // write into the shared store under a domain identity is not
+          // implemented yet (it is the step that awaits a go-ahead).
+          + 'NOT PUBLISHED YET: writing it into the shared store under the domain identity is still ahead, '
+          + 'so nothing is visible to other projects until that lands.'
         : `Magic Context: candidate #${String(id)} rejected.`,
     }
   }
@@ -268,6 +334,6 @@ export function registerCtxGlobalCommand(ctx: Context, deps: SurfaceDeps): void 
     name: 'ctx-global',
     description: 'Magic Context: global domains — inspect, activate, and manage their membership.',
     input: { hint: GLOBAL_USAGE },
-    handler: invocation => planGlobalCommand(deps.stores, invocation.rawInput, Date.now()),
+    handler: invocation => planGlobalCommand(deps.stores, invocation.rawInput, Date.now(), deps.contractDbPath),
   })
 }
