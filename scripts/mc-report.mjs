@@ -732,6 +732,7 @@ function computeMetrics(rows) {
       failures: [],
     },
     emergency: { events: 0, dropped: 0, protected: 0, retried: 0 },
+    wire: { events: 0, swept: 0, remaining: 0 },
     toolCall: { total: 0, byTool: {}, queued: 0, restored: 0, refused: 0, refuseReasons: {}, durations: [] },
     memoryRecall: { total: 0, rows: 0, budgetTokens: 0, usedTokens: 0 },
     engine: { total: 0, byAction: {} },
@@ -1269,6 +1270,13 @@ function renderText(payload) {
     lines.push(
       `  emergency     : ${fmtInt(e.events)} 次，丢弃总数 ${fmtInt(e.dropped)}，保护 ${fmtInt(e.protected)}，重试 ${fmtInt(e.retried)}`,
     )
+
+    if (metrics.wire.events > 0) {
+      const w = metrics.wire
+      lines.push(
+        `  wire-repair   : ${fmtInt(w.events)} 次，清扫 ${fmtInt(w.swept)}，剩余 ${fmtInt(w.remaining)}`,
+      )
+    }
 
     const tc = metrics.toolCall
     lines.push(
