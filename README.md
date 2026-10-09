@@ -135,6 +135,8 @@ fail-open 降级 FTS 车道，journal 有可读 warn，doctor 有裁决。
       level: info          # 设为 warn 只留告警与错误
       retentionDays: 30    # 开库时清理更早的记录
       mirror: true         # 单行文本镜像（超过 5MiB 自动轮转为 .1）
+    tags:
+      retentionDays: 30    # §N§ 注册表行按 created_at 剪枝（挂载时执行；tag_counters 不动，编号保持单调）
 ```
 
 复盘（只读，不动数据库）：

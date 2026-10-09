@@ -149,6 +149,18 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
   const storeDir = config.dataDir ?? defaultDataDir()
   const stores = openStores(storeDir)
   ctx.logger.info(`magic-context dsh adapter: stores at ${stores.dbPath}`)
+  // §N§ registry retention (the tags table only ever grows; the journal's
+  // mount-time prune is the precedent): one DELETE per mount, logged only when
+  // it removed something, and never allowed to break the mount.
+  try {
+    const tagsRetentionDays = liveNumber(config.tags?.retentionDays, 30)
+    const prunedTags = stores.pruneTags(Date.now() - tagsRetentionDays * 24 * 60 * 60_000)
+    if (prunedTags > 0) {
+      ctx.logger.info(`magic-context dsh adapter: pruned ${String(prunedTags)} tag registry rows past ${String(tagsRetentionDays)}d retention`)
+    }
+  } catch (error) {
+    ctx.logger.warn(`magic-context dsh adapter: tag retention prune failed: ${errText(error)}`)
+  }
   // Volatile config leaves arrive as live references (see `Config`), so every
   // consumer reads through the `live*` helpers instead of comparing the raw
   // value: `config.registerCompactionEngine !== false` is TRUE for a reference,
@@ -546,6 +558,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
       route: config.historian === undefined ? 'session-route' : `${config.historian.provider}/${config.historian.model}`,
     },
     journal: { enabled: journal !== undefined, mirror: journal?.mirrorPath, retentionDays: liveNumber(config.journal?.retentionDays, 30) },
+    tagsRetentionDays: liveNumber(config.tags?.retentionDays, 30),
     policy: {
       executeThreshold: policy.executeThreshold,
       forceThreshold: policy.forceThreshold,
@@ -638,6 +651,15 @@ export const Config = z.object({
     level: z.string().default('info').volatile(),
     retentionDays: z.number().default(30).volatile(),
     mirror: z.boolean().default(true).volatile(),
+  }),
+
+  /**
+   * §N§ tag registry retention: one registry row per tagged target, pruned
+   * once per mount. Rows that old belong to compacted spans and the
+   * per-session counters are never touched, so tag numbers stay monotonic.
+   */
+  tags: z.object({
+    retentionDays: z.number().min(1).default(30).volatile(),
   }),
 
   policy: z.object({

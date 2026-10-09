@@ -117,6 +117,10 @@ export interface MagicContextDshConfig {
     /** Write the one-line text mirror (default true). */
     mirror?: boolean
   }
+  /** §N§ tag registry retention (default 30 days; pruned once per mount). */
+  tags?: {
+    retentionDays?: number
+  }
   /** Pressure policy overrides; unset fields keep the defaults. */
   policy?: Partial<PressurePolicy>
 }

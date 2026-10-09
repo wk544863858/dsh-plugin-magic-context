@@ -117,6 +117,14 @@ export interface AdapterStores {
   journalByKind(since?: number, sessionId?: string): Array<{ kind: string; level: JournalLevel; count: number }>
   /** Delete entries older than the cutoff; returns the number removed. */
   pruneJournal(before: number): number
+  /**
+   * Delete §N§ registry rows older than the cutoff; returns the number removed.
+   * The tags table only ever grows (one row per tagged target), so this is its
+   * retention valve. Registry rows that old belong to compacted spans, and
+   * `tag_counters` is never touched — numbers stay monotonic per session, so a
+   * re-tag of a pruned target simply allocates the next fresh number.
+   */
+  pruneTags(before: number): number
   /** Row count plus the oldest/newest timestamps. */
   journalBounds(): { rows: number; oldest?: number; newest?: number }
   close(): void
@@ -755,6 +763,10 @@ export function openStores(dataDir: string): AdapterStores {
     },
     pruneJournal: (before) => {
       const result = db.prepare('DELETE FROM journal WHERE at < ?').run(before)
+      return Number(result.changes)
+    },
+    pruneTags: (before) => {
+      const result = db.prepare('DELETE FROM tags WHERE created_at < ?').run(before)
       return Number(result.changes)
     },
     journalBounds: () => {
