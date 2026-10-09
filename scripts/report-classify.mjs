@@ -175,14 +175,29 @@ function causeClass(cause) {
   return prefix === 'pipeline' || prefix === 'environment' ? prefix : 'other'
 }
 
+/** "MM-DD" in local time — enough to tell a chronic problem from a stale burst. */
+function formatDay(at) {
+  const date = new Date(at)
+  if (Number.isNaN(date.getTime())) return ''
+  return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
 /**
- * "管道（截断 29 · 输出非法 6）· 环境（配额 3 · 超时 9）" for a byCause map.
+ * "管道（截断 23（至 10-06） · 输出非法 6） · 环境（配额 3（至 10-09））" for a
+ * byCause map.
  *
  * Grouped by class rather than one flat sorted list, because the one thing the
  * reader has to take away is which side of the line the bulk sits on: `管道`
  * means a code or capacity change, `环境` means wait or retry.
+ *
+ * @param {Record<string, number>} byCause counts per cause
+ * @param {Record<string, {lastAt: number}>} [lastByCause] when each cause last
+ *   fired. A 7-day count without a date cannot separate a chronic fault from one
+ *   bad afternoon: all 23 truncations in the 2026-10-10 window fell inside a
+ *   single three-minute burst on 10-06 and none has recurred, which the bare
+ *   count made look like the biggest live problem.
  */
-export function describeCauses(byCause) {
+export function describeCauses(byCause, lastByCause) {
   const entries = Object.entries(byCause ?? {})
   if (entries.length === 0) return ''
   const rank = (cause) => {
@@ -203,7 +218,9 @@ export function describeCauses(byCause) {
         .map(([cause, count]) => {
           const key2 = String(cause)
           const label = CAUSE_LABELS[key2] ?? key2.slice(key2.indexOf(':') + 1)
-          return `${label} ${String(count)}`
+          const last = lastByCause === undefined ? undefined : lastByCause[key2]
+          const day = last === undefined ? '' : formatDay(last.lastAt)
+          return `${label} ${String(count)}${day === '' ? '' : `（至 ${day}）`}`
         })
         .join(' · ')
       return `${CLASS_LABELS[key]}（${parts}）`

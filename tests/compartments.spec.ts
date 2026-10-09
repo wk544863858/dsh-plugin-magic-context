@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import {
   BASELINE_CLOSE,
   BASELINE_OPEN,
+  describeJsonImbalance,
   findBaselineRange,
   parseHistorianOutput,
   renderBaseline,
@@ -147,5 +148,66 @@ describe('baseline rendering', () => {
     expect(text.slice(range!.start, range!.end)).toContain('§C9§')
     expect(stripBaseline(text)).toBe('§1§ user words')
     expect(stripBaseline('no baseline here')).toBe('no baseline here')
+  })
+})
+
+/**
+ * The imbalance scan exists because the journal could not answer the question it
+ * was asked. All four live invalid-JSON failures ended at the last character of
+ * the output while their recorded tails were well-formed endings, so the missing
+ * bracket was somewhere in the middle — the one part 120 characters of tail could
+ * never show. These cases pin the four shapes that distinction has to cover.
+ */
+describe('describeJsonImbalance', () => {
+  it('reports nothing for balanced text', () => {
+    expect(describeJsonImbalance('{"a":1,"b":[1,2]}')).toBe('')
+    expect(describeJsonImbalance('')).toBe('')
+  })
+
+  it('names the mismatch the live failures hit — an array closed by a brace', () => {
+    // "expected ',' or ']' after array element" at the FINAL character: the
+    // model writes `"..."}` where `"..."]}` belongs, so the closing `}` meets an
+    // open `[`. Naming the pair is sharper than saying "unclosed".
+    expect(describeJsonImbalance('{"a":["x","y"}')).toBe("'[' closed by '}'")
+  })
+
+  it('reports a closer that never arrived at all', () => {
+    expect(describeJsonImbalance('["x","y"')).toBe("unclosed ']'×1")
+  })
+
+  it('counts several unclosed groups, outermost first', () => {
+    expect(describeJsonImbalance('{"a":[{"b":1}')).toBe("unclosed '}'×1+']'×1")
+  })
+
+  it('ignores brackets inside string literals', () => {
+    expect(describeJsonImbalance('{"a":"}}]","b":"[{","c":1}')).toBe('')
+  })
+
+  it('does not mistake an escaped quote for the end of a string', () => {
+    expect(describeJsonImbalance('{"a":"he said \\"}\\" ok","b":2}')).toBe('')
+  })
+
+  it('reports an unexpected closer and a mismatched pair', () => {
+    expect(describeJsonImbalance('{"a":1}}')).toBe("unexpected '}'")
+    expect(describeJsonImbalance('[}')).toBe("'[' closed by '}'")
+  })
+
+  it('reports an unterminated string', () => {
+    expect(describeJsonImbalance('{"a":"never closed')).toBe('unterminated string')
+  })
+
+  it('rides along in the parse error, so the journal carries the diagnosis', () => {
+    expect(() => parseHistorianOutput('{"summary":["x"}')).toThrow(/closed by '\}'/)
+  })
+
+  it('adds no suffix when the text balances but is still invalid JSON', () => {
+    // A missing comma balances perfectly — the scan must not invent a bracket story.
+    expect(() => parseHistorianOutput('{"a":1 "b":2}')).toThrow(/invalid JSON/)
+    try {
+      parseHistorianOutput('{"a":1 "b":2}')
+    } catch (error) {
+      expect((error as Error).message).not.toContain('unclosed')
+      expect((error as Error).message).not.toContain('unexpected')
+    }
   })
 })

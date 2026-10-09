@@ -742,7 +742,10 @@ export async function callHistorian(
           ? {
             finishReason: lastFinish ?? 'none',
             outputChars: lastText.length,
-            outputTail: lastText.slice(-120),
+            // 400, not the original 120: every live invalid-JSON failure ended at
+            // the LAST character while its recorded tail was well-formed, which
+            // means the defect was in the middle and 120 chars could not show it.
+            outputTail: lastText.slice(-400),
           }
           : {},
       }, input.sessionId)

@@ -495,6 +495,55 @@ function asFactArray(value: unknown): MemoryFact[] {
 }
 
 /**
+ * A one-line description of why a JSON-ish text does not balance, for the
+ * failure journal.
+ *
+ * All four live `invalid-output` failures (2026-10-08..10-10) reported a JSON
+ * syntax error at the LAST character of the output — position = `outputChars - 1`
+ * — while the tail the journal kept was a well-formed ending (`...".` then `}`).
+ * A parser only trips on the final `}` when something earlier never closed, so
+ * the text looked intact at both ends and the defect sat in the middle, exactly
+ * where the journal kept nothing. Counting openers against closers, ignoring
+ * both inside string literals, turns that into a recorded fact instead of a
+ * guess about the model.
+ */
+export function describeJsonImbalance(text: string): string {
+  const stack: string[] = []
+  let inString = false
+  let escaped = false
+  for (const char of text) {
+    if (inString) {
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === '"') inString = false
+      continue
+    }
+    if (char === '"') {
+      inString = true
+      continue
+    }
+    if (char === '{' || char === '[') {
+      stack.push(char)
+      continue
+    }
+    if (char === '}' || char === ']') {
+      const want = char === '}' ? '{' : '['
+      if (stack.length === 0) return `unexpected '${char}'`
+      if (stack[stack.length - 1] !== want) return `'${stack[stack.length - 1] as string}' closed by '${char}'`
+      stack.pop()
+    }
+  }
+  if (inString) return 'unterminated string'
+  if (stack.length === 0) return ''
+  const closers = new Map<string, number>()
+  for (const open of stack) {
+    const close = open === '{' ? '}' : ']'
+    closers.set(close, (closers.get(close) ?? 0) + 1)
+  }
+  return `unclosed ${[...closers.entries()].map(([close, count]) => `'${close}'×${String(count)}`).join('+')}`
+}
+
+/**
  * Parse and validate a historian response. Throws {@link HistorianOutputError}
  * on any contract violation — the run then fails closed (no compartment row,
  * no mutation) rather than storing a half-digest.
@@ -509,7 +558,10 @@ export function parseHistorianOutput(text: string): CompartmentDraft {
   try {
     parsed = JSON.parse(text.slice(open, close + 1))
   } catch (error) {
-    throw new HistorianOutputError(`invalid JSON (${errText(error)})`)
+    const imbalance = describeJsonImbalance(text.slice(open, close + 1))
+    throw new HistorianOutputError(
+      `invalid JSON (${errText(error)})${imbalance === '' ? '' : ` [${imbalance}]`}`,
+    )
   }
   if (parsed === null || typeof parsed !== 'object') {
     throw new HistorianOutputError('response is not a JSON object')

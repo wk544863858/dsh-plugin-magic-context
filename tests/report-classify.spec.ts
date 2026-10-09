@@ -176,6 +176,20 @@ describe('describeCauses / splitByClass', () => {
     expect(describeCauses(undefined)).toBe('')
   })
 
+  it('appends when a cause last fired, so a stale burst cannot pass as a live fault', () => {
+    // All 23 truncations sat inside one three-minute burst on 10-06 and none
+    // recurred; without the date the count alone reads as the biggest live problem.
+    const lastAt = new Date(2026, 9, 6, 17, 52).getTime()
+    expect(describeCauses({ 'pipeline:truncated': 23 }, { 'pipeline:truncated': { lastAt } }))
+      .toBe('管道（截断 23（至 10-06））')
+  })
+
+  it('omits the date when last-seen data is missing or unparsable', () => {
+    expect(describeCauses({ 'pipeline:truncated': 23 }, {})).toBe('管道（截断 23）')
+    expect(describeCauses({ 'pipeline:truncated': 23 }, { 'pipeline:truncated': { lastAt: Number.NaN } }))
+      .toBe('管道（截断 23）')
+  })
+
   it('covers every cause in CAUSE_ORDER with a distinct rank', () => {
     expect(new Set(CAUSE_ORDER).size).toBe(CAUSE_ORDER.length)
     expect(CAUSE_ORDER.length).toBeGreaterThan(0)

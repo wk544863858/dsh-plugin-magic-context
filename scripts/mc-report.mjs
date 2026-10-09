@@ -729,6 +729,8 @@ function computeMetrics(rows) {
       // 失败按"该采取什么行动"分类：配额/网络/超时是环境问题，输出非法才是代码问题。
       // 混在一起报一个 53.4% 会让人以为流水线坏了（实测 47 条里 32 条是账号配额耗尽）。
       byCause: {},
+      byCauseLast: {},
+      quotaRoutes: {},
       quotaResetAt: null,
       durations: [],
       tokens: 0,
@@ -902,8 +904,24 @@ switch (row.kind) {
           const reasonText = toText(d.reason) || toText(d.error)
           const cause = classifyHistorianFailure(kindText, reasonText)
           bump(m.historian.byCause, cause)
-          if (cause === 'environment:quota' && m.historian.quotaResetAt === null) {
-            m.historian.quotaResetAt = extractQuotaReset(reasonText)
+          // When a cause last happened, and on which route. A 7-day count alone
+          // cannot tell a chronic problem from one bad afternoon, and the
+          // 2026-10-06 truncation burst (23 rows, all inside three minutes, none
+          // since) read as the largest live failure class until the dates were
+          // pulled apart. The route matters because a failure is scoped to the
+          // route it ran on: the historian inherits the calling session's route
+          // (src/dsh/historian.ts:492), so a quota cap on one model does not
+          // touch a session running a different one.
+          const routeText = toText(d.route)
+          const seen = m.historian.byCauseLast[cause]
+          if (seen === undefined || row.at >= seen.lastAt) {
+            m.historian.byCauseLast[cause] = { lastAt: row.at, route: routeText }
+          }
+          if (cause === 'environment:quota') {
+            bump(m.historian.quotaRoutes, routeText || 'unknown')
+            if (m.historian.quotaResetAt === null) {
+              m.historian.quotaResetAt = extractQuotaReset(reasonText)
+            }
           }
           m.historian.failures.push({
             at: row.at,
@@ -1190,7 +1208,7 @@ function buildHealth(ctx) {  const { db, opened, dbExists, openError, valid, sch
         push('historian-never-ran', 'historian 从未运行（窗口内没有 phase=start/done/failed 事件）。')
       }
       if (hist.failureRate !== null && hist.failureRate > 0.2) {
-        const causes = describeCauses(hist.byCause)
+        const causes = describeCauses(hist.byCause, hist.byCauseLast)
         const split = splitByClass(hist.byCause)
         push(
           'historian-failure-rate',
@@ -1201,14 +1219,25 @@ function buildHealth(ctx) {  const { db, opened, dbExists, openError, valid, sch
           + `environment（配额/超时/服务端/网络）${fmtInt(split.environment)} 条等待或重试即可。`,
         )
       }
-      // 配额耗尽单独一条：它不是"historian 坏了"，而是**记忆摄取停摆**，而且消息里
-      // 通常带着恢复时间——这是整份报告里最可行动的一个事实。
+      // 配额耗尽单独一条：它不是"historian 坏了"，而是**这条路线上的会话**摄取停摆。
+      // 必须点名路线：historian 沿用调用它的会话当时的路线（src/dsh/historian.ts:492
+      // `deps.route ?? input.route`），所以某个模型的 7 天额度耗尽**不影响**走别的
+      // 路线的会话——实测同一插件在 model-a 上 429、在 model-b
+      // 上照常成功。第一版这条写成了"新记忆不会被产出"，把按路线的限额说成了账号级。
       if (Number(hist.byCause['environment:quota'] ?? 0) > 0) {
+        const routes = Object.entries(hist.quotaRoutes)
+          .sort((left, right) => Number(right[1]) - Number(left[1]))
+          .map(([name, count]) => `${name}×${fmtInt(Number(count))}`)
+          .join('、')
+        const last = hist.byCauseLast['environment:quota']
+        const lastDay = last === undefined ? '' : `，最近一次 ${new Date(last.lastAt).toISOString().slice(0, 10)}`
         push(
           'historian-quota-exhausted',
           `historian 有 ${fmtInt(Number(hist.byCause['environment:quota']))} 次因配额耗尽失败`
+          + `（路线 ${routes}${lastDay}）`
           + `${hist.quotaResetAt === null ? '' : `，provider 声明的恢复时间 ${hist.quotaResetAt}`}`
-          + '：在此期间**新记忆不会被产出**。这不是插件缺陷，但意味着记忆摄取停着。',
+          + '：**只影响走这些路线的会话**，是那一路线的额度，不是账号级限额——'
+          + 'historian 沿用当前会话的路线，换一条路线不受影响。',
         )
       }
       // 记忆车道扳机线（staging 启用条件的三项观测锚点，命中才提示）。
@@ -1573,7 +1602,7 @@ function renderText(payload) {
       + `${h.other > 0 ? ` / 其他 ${fmtInt(h.other)}` : ''}`
       + `；失败率 ${h.failureRate === null ? '-' : `${(h.failureRate * 100).toFixed(1)}%`}`
       + `${h.recovered > 0 ? '（实时失败率，已排除重建补记）' : ''}`
-      + `${Object.keys(h.byCause).length === 0 ? '' : `；成因 ${describeCauses(h.byCause)}`}`,
+      + `${Object.keys(h.byCause).length === 0 ? '' : `；成因 ${describeCauses(h.byCause, h.byCauseLast)}`}`,
     )
     lines.push(
       `    耗时        : 平均 ${fmtDuration(h.avgDurationMs)}，最大 ${fmtDuration(h.maxDurationMs)}（样本 ${h.durations.length}）`
