@@ -750,8 +750,14 @@ function computeMetrics(rows) {
       usageOut: 0,
       usageTicks: 0,
       daily: {},
+      // evidence 核证（融合 v7 stage-2）锚点。
+      evidenceTicks: 0, evidenceMode: '', evidenceRows: 0,
+      evidenceConfirmed: 0, evidenceOverturned: 0, evidenceUncertain: 0,
     },
     memoryLane: { promoteEvents: 0, promotions: 0, seenAgain: 0 },
+    // 融合 v7 运行面锚点：publish guard 与溢出通道（evidence 挂在 maintenance 桶）。
+    guard: { events: 0, drift: 0, noGain: 0, observe: 0, enforce: 0, reclaimedTokens: 0 },
+    overflow: { forceEvents: 0, waits: 0, publishes: 0, published: 0 },
     errors: [],
     otherKinds: {},
   }
@@ -947,6 +953,15 @@ switch (row.kind) {
         if (lagMax !== null) m.maintenance.lagMaxList.push(lagMax)
         const lagAvg = toNum(d.lagAvgH)
         if (lagAvg !== null) m.maintenance.lagAvgList.push(lagAvg)
+        const evidence = d.evidence !== null && typeof d.evidence === 'object' ? d.evidence : null
+        if (evidence !== null) {
+          m.maintenance.evidenceTicks += 1
+          m.maintenance.evidenceMode = toText(evidence.mode)
+          for (const field of ['rows', 'confirmed', 'overturned', 'uncertain']) {
+            const value = toNum(evidence[field])
+            if (value !== null) m.maintenance['evidence' + field[0].toUpperCase() + field.slice(1)] += value
+          }
+        }
         const usage = d.usage !== null && typeof d.usage === 'object' ? d.usage : {}
         const usageIn = toNum(usage.inputTokens) ?? 0
         const usageOut = toNum(usage.outputTokens) ?? 0
@@ -967,6 +982,28 @@ switch (row.kind) {
         m.memoryLane.promoteEvents += 1
         if (Array.isArray(d.inserted)) m.memoryLane.promotions += d.inserted.length
         if (Array.isArray(d.seenAgain)) m.memoryLane.seenAgain += d.seenAgain.length
+        break
+      }
+
+      case 'compartment-guard': {
+        m.guard.events += 1
+        const verdict = toText(d.verdict)
+        if (verdict === 'drift') m.guard.drift += 1
+        else if (verdict === 'no-gain') m.guard.noGain += 1
+        if (toText(d.mode) === 'enforce') m.guard.enforce += 1
+        else m.guard.observe += 1
+        const reclaimed = toNum(d.reclaimedTokens)
+        if (reclaimed !== null) m.guard.reclaimedTokens += reclaimed
+        break
+      }
+
+      case 'force-path': {
+        m.overflow.forceEvents += 1
+        if (toText(d.tier) === 'wait') m.overflow.waits += 1
+        if (toText(d.tier) === 'publish') {
+          m.overflow.publishes += 1
+          if (Array.isArray(d.published)) m.overflow.published += d.published.length
+        }
         break
       }
 
@@ -1006,6 +1043,15 @@ switch (row.kind) {
   m.maintenance.wrongRate = m.maintenance.judged > 0 ? m.maintenance.archived / m.maintenance.judged : null
   m.maintenance.usageTotal = m.maintenance.usageIn + m.maintenance.usageOut
   return m
+}
+
+// S(t) 打分的 sidecar 快照（融合 v7；schema v7 之前的库没有该表，静默跳过）。
+function queryScoringStats(db) {
+  try {
+    return db.prepare(
+      'SELECT COUNT(*) AS rows, COALESCE(SUM(hits), 0) AS hits, COALESCE(SUM(injections), 0) AS injections FROM memory_stats',
+    ).get()
+  } catch { return null }
 }
 
 /** 第 5 节：健康提示（启发式，命中才输出）。 */
@@ -1088,6 +1134,29 @@ function buildHealth(ctx) {
         push(
           'dream-tokens-high',
           `dream（维护 verify）单日 token 耗用峰值 ${fmtInt(dreamDailyMax)} > 5M——批量或路由疑似失控，复核 VERIFY_BATCH 与路由配置。`,
+        )
+      }
+      // 融合 v7 运行面扳机：真实溢出、guard enforce 动作、evidence 推翻占比。
+      if (metrics.overflow.publishes > 0) {
+        push(
+          'context-overflow',
+          `窗口内发生 ${metrics.overflow.publishes} 次真实上下文溢出（force-path publish 兜底生效）`
+            + '——核对触发会话的体积与 policy.forceWaitReadyMs。',
+        )
+      }
+      if (metrics.guard.enforce > 0 && metrics.guard.drift + metrics.guard.noGain >= 5) {
+        push(
+          'publish-guard-acting',
+          `publish guard enforce 动作 ${metrics.guard.enforce} 次（drift/no-gain 共 ${metrics.guard.drift + metrics.guard.noGain}）`
+            + '——分区质量需要复核（或回 observe 观察）。',
+        )
+      }
+      if (metrics.maintenance.evidenceTicks >= 3 && metrics.maintenance.evidenceOverturned > 0
+        && metrics.maintenance.evidenceOverturned >= metrics.maintenance.evidenceConfirmed) {
+        push(
+          'evidence-overrule-high',
+          `evidence 核证推翻 ≥ 确认（overturned ${metrics.maintenance.evidenceOverturned}`
+            + ` vs confirmed ${metrics.maintenance.evidenceConfirmed}）——stage-1 判定可能过激。`,
         )
       }
       if (metrics.errors.length > 0) {
@@ -1418,6 +1487,33 @@ function renderText(payload) {
         + `（seen-again ${fmtInt(lane.seenAgain)}），约 ${fmtFixed(lane.promotions / Math.max(opts.days, 1), 1)} 行/天`,
       )
     }
+    const gd = metrics.guard
+    if (gd.events > 0) {
+      lines.push(
+        `  publish guard : ${fmtInt(gd.events)} 次（drift ${fmtInt(gd.drift)} / no-gain ${fmtInt(gd.noGain)}；`
+        + `observe ${fmtInt(gd.observe)} / enforce ${fmtInt(gd.enforce)}），reclaimed ${fmtInt(gd.reclaimedTokens)} tok`,
+      )
+    }
+    const ov = metrics.overflow
+    if (ov.forceEvents > 0) {
+      lines.push(
+        `  溢出通道      : force-path ${fmtInt(ov.forceEvents)} 次（wait ${fmtInt(ov.waits)} / publish ${fmtInt(ov.publishes)}，`
+        + `落地分区 ${fmtInt(ov.published)}）`,
+      )
+    }
+    if (metrics.maintenance.evidenceTicks > 0) {
+      const evm = metrics.maintenance
+      lines.push(
+        `  evidence 核证 : ${fmtInt(evm.evidenceTicks)} 拍（mode ${evm.evidenceMode || '-'}），rows ${fmtInt(evm.evidenceRows)}：`
+        + `confirmed ${fmtInt(evm.evidenceConfirmed)} / overturned ${fmtInt(evm.evidenceOverturned)} / uncertain ${fmtInt(evm.evidenceUncertain)}`,
+      )
+    }
+    const sc = metrics.scoringStats
+    if (sc && Number(sc.rows) > 0) {
+      lines.push(
+        `  S(t) 打分     : ${fmtInt(Number(sc.rows))} 条在册（hits ${fmtInt(Number(sc.hits))} / injections ${fmtInt(Number(sc.injections))}）`,
+      )
+    }
     if (metrics.engine.total > 0) {
       lines.push(`  engine        : ${fmtInt(metrics.engine.total)} 次；action 分布 ${renderDistribution(metrics.engine.byAction)}`)
     }
@@ -1562,6 +1658,7 @@ function buildReport(opts) {
       windowInfo = loadWindowRows(db, opts, notes)
       summary = summarizeWindow(windowInfo.rows)
       metrics = computeMetrics(windowInfo.rows)
+      metrics.scoringStats = queryScoringStats(db)
       if (windowInfo.atMissing) windowInfo.error = windowInfo.error ?? 'journal 缺少 at 列'
       if (windowInfo.skippedNoAt > 0) notes.push(`有 ${windowInfo.skippedNoAt} 条 journal 行的 at 为空或非法，已跳过。`)
     } catch (error) {
