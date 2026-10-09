@@ -51,6 +51,7 @@ const MAJOR_KINDS = [
   'emergency-reclaim',
   'memory-recall',
   'profile-recall',
+  'vector-lane',
   'memory-write',
   'memory-promote',
   'project-drift',
@@ -1102,6 +1103,36 @@ function queryDomainStats(db) {
   }
 }
 
+// 语义（向量）车道的激活状态。以前完全不可观测：闸门结果只走 ctx.logger，而 ctx.logger
+// 不写 journal——所以"车道是活着、退化还是死了"从库里看不出来。现在每次进程记录一条
+// vector-lane，这里读最后一条。
+function queryVectorLaneState(db) {
+  const tableExists = (name) => {
+    try {
+      return db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?").get(name) !== undefined
+    } catch { return false }
+  }
+  if (!tableExists('journal')) return null
+  try {
+    const events = Number(db.prepare("SELECT COUNT(*) AS c FROM journal WHERE kind = 'vector-lane'").get()?.c ?? 0)
+    const searches = Number(
+      db.prepare("SELECT COUNT(*) AS c FROM journal WHERE kind = 'tool-call' AND summary LIKE '%search%'").get()?.c ?? 0,
+    )
+    const last = db.prepare("SELECT at, data FROM journal WHERE kind = 'vector-lane' ORDER BY id DESC LIMIT 1").get()
+    if (last === undefined) return { events: 0, searches, outcome: null, at: null, parity: null }
+    let outcome = null
+    let parity = null
+    try {
+      const data = JSON.parse(last.data ?? '{}')
+      outcome = typeof data.outcome === 'string' ? data.outcome : null
+      parity = typeof data.parity === 'number' ? data.parity : null
+    } catch { /* payload is data, not a contract */ }
+    return { events, searches, outcome, at: last.at, parity }
+  } catch {
+    return null
+  }
+}
+
 /** 第 5 节：健康提示（启发式，命中才输出）。 */
 function buildHealth(ctx) {  const { db, opened, dbExists, openError, valid, schemaError, counts, summary, metrics, opts, windowError } = ctx
   const hints = []
@@ -1232,7 +1263,25 @@ function buildHealth(ctx) {  const { db, opened, dbExists, openError, valid, sch
     push('window-read-error', `读取时间窗失败：${windowError}`)
   }
 
-  // 全局域（schema v8）的两条运维扳机。它们不判"故障"，只判"需要人看一眼"：
+  // 语义车道：三种需要人看一眼的状态（关闭 / 从未记录过闸门结果 / 未记录过任何东西但有搜索）。
+  const vl = metrics.vectorLane
+  if (vl !== null && vl !== undefined) {
+    if (vl.outcome === 'gate-closed' || vl.outcome === 'parity-fail' || vl.outcome === 'embed-failed' || vl.outcome === 'embed-empty') {
+      push(
+        'vector-lane-closed',
+        `语义（向量）车道当前关闭：最近一次共享空间闸门结果 = ${vl.outcome}`
+          + `${vl.parity === null ? '' : `（parity ${vl.parity}）`}。`
+          + '搜索仍可用，但只走 FTS；本地 embedder 与缓存里的向量空间不一致时就是这种表现。',
+      )
+    } else if (vl.events === 0 && vl.searches > 0) {
+      push(
+        'vector-lane-unrecorded',
+        `窗口内 ${fmtInt(vl.searches)} 次 ctx_memory search，但 journal 里没有任何 vector-lane 记录：`
+          + '闸门结果以前只写 ctx.logger，无法从库里判断车道是否生效。遥测已补，下一次搜索即见分晓。',
+      )
+    }
+  }
+
   // 域已导入却全停用 ⇒ 跨项目共享仍在走契约回落，接管的最后一步没做完；
   // 确认队列积压 ⇒ 约束型候选在等人回答，没人回答它们就永远不会生效。
   const ds = metrics.domainStats
@@ -1769,6 +1818,7 @@ function buildReport(opts) {
       metrics = computeMetrics(windowInfo.rows)
       metrics.scoringStats = queryScoringStats(db)
       metrics.domainStats = queryDomainStats(db)
+      metrics.vectorLane = queryVectorLaneState(db)
       if (windowInfo.atMissing) windowInfo.error = windowInfo.error ?? 'journal 缺少 at 列'
       if (windowInfo.skippedNoAt > 0) notes.push(`有 ${windowInfo.skippedNoAt} 条 journal 行的 at 为空或非法，已跳过。`)
     } catch (error) {

@@ -42,6 +42,7 @@ export type JournalKind =
   | 'wire-repair'
   | 'memory-recall'
   | 'profile-recall'
+  | 'vector-lane'
   | 'search-hint'
   | 'memory-promote'
   | 'maintenance'

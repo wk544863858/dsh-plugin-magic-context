@@ -257,6 +257,36 @@ if (!existsSync(ADAPTER_DB)) {
 blocks.push({ title: '7. 本地 embedding 车道', lines: [] })
 say(' ', `memory.embedBackfill 缺省 = ${BACKFILL_DEFAULT ? 'true' : 'false'}（后置回填车道）`)
 say(' ', '查询侧向量车道始终可用；共享向量读取前需要余弦 ≥0.99 的一致性证明')
+// 真实覆盖率。以前这一节只看 activity.log 里"模型加载过没有"，看不出车道已经退化了多少：
+// 召回永远"能用"，只是邻居变少——静默退化必须用数字盯。
+if (existsSync(MC_STORE)) {
+  const { measureVectorLane, planBackfill } = await import('../src/core/vector-lane.ts')
+  const lane = measureVectorLane(MC_STORE)
+  if (lane === undefined) {
+    say('⚠', '向量车道不可读（缺 memories / memory_embeddings 表）')
+  } else {
+    say(lane.coverage >= 0.95 ? '✓' : '⚠', `覆盖率 ${(lane.coverage * 100).toFixed(1)}%：active ${lane.active} / 已嵌入 ${lane.embedded} / 缺 ${lane.missing}`)
+    if (lane.frontier.unembeddedAboveFrontier > 0) {
+      say('⚠', `前沿之后有 ${lane.frontier.unembeddedAboveFrontier} 条从未嵌入`
+        + `（最新已嵌入 active id ${lane.frontier.newestEmbeddedMemoryId}，最新 active id ${lane.frontier.newestMemoryId}）`
+        + '——回填车道无人值守，MC 停摆后没有写者')
+    }
+    if (lane.gapsBelowFrontier > 0) {
+      say(' ', `前沿之下还有 ${lane.gapsBelowFrontier} 条缺口（内容变更会删掉 embedding，属正常churn）`)
+    }
+    for (const space of lane.spaces) {
+      say(' ', `空间 ${space.modelId} ${space.rows} 行 / ${space.memories} 条（${(space.share * 100).toFixed(0)}%）`)
+    }
+    if (lane.spaces.length > 1) {
+      say(' ', `存在 ${lane.spaces.length} 个空间：回填只能写 dominant（${lane.dominantModelId ?? '未知'}），`
+        + '写进别的空间不会报错，只会对另一个空间的读者永久不可见')
+    }
+    const plan = planBackfill(MC_STORE, { limit: 1 })
+    if (plan !== undefined && plan.total > 0) {
+      say(' ', `待回填 ${plan.total} 条（WP11 未实现：写 memory_embeddings 属契约写入，等放行）`)
+    }
+  }
+}
 if (existsSync(ACTIVITY_LOG)) {
   const tail = readFileSync(ACTIVITY_LOG, 'utf8').split('\n').filter((l) => /embedder/i.test(l))
   const last = tail.at(-1)

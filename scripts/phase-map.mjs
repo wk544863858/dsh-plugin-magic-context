@@ -89,6 +89,7 @@ const PHASE_C = [
 /** Phase D: the operating loop — commands, telemetry, backfill, drill. */
 const PHASE_D = [
   'tests/command-surface.spec.ts',
+  'tests/vector-lane.spec.ts',
 ]
 
 export const PHASES = [

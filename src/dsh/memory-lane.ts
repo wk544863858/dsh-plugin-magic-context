@@ -9,6 +9,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { AdapterStores } from '../core/stores.ts'
 import type { Journal } from '../core/journal.ts'
+import { errText } from '../core/types.ts'
 import type { PressurePolicy } from '../core/policy.ts'
 import { openMemoryBridge, DEFAULT_SHARE_CATEGORIES, defaultMemoryDbPath, resolveIdentitySpec } from '../core/memory-bridge.ts'
 import { openMemoryWriter, type MemoryWriter } from '../core/memory-write.ts'
@@ -156,25 +157,54 @@ export function openMemoryLane(
    * configuration produced most rows — parity is verified, never assumed.
    */
   let sharedSpacePromise: Promise<{ modelId: string | null }> | undefined
+  // Captured when the tool registration hands over the journal (this closure is
+  // only ever reached through the tool, so that always happens first). Keeping
+  // it here avoids widening openMemoryLane's signature for one log line.
+  let laneJournal: Journal | undefined
   const resolveSharedSpace = (): Promise<{ modelId: string | null }> => {
     if (memorySearch === undefined || embedder === undefined) return Promise.resolve({ modelId: null })
     if (sharedSpacePromise === undefined) {
       sharedSpacePromise = (async () => {
+        // The gate's outcome used to be observable ONLY through ctx.logger,
+        // which does not reach the journal — so whether the semantic lane is
+        // live, degraded or dead was unknowable from the store. Every exit is
+        // journaled once per process now: `vector-lane` answers the question
+        // permanently, and a silent permanent degradation (the failure this
+        // lane is most prone to) shows up as a repeated parity-fail/embed-failed.
+        const record = (
+          outcome: string,
+          modelId: string | null,
+          detail: Record<string, unknown> = {},
+        ): { modelId: string | null } => {
+          laneJournal?.info('vector-lane', `shared-space gate: ${outcome}`, { outcome, ...detail })
+          return { modelId }
+        }
         const dominant = memorySearch.dominantEmbeddingModel()
-        if (dominant === undefined || dominant.dims !== embedder.dims) return { modelId: null }
+        if (dominant === undefined || dominant.dims !== embedder.dims) {
+          return record('gate-closed', null, {
+            reason: dominant === undefined ? 'no dominant embedding space' : 'dims mismatch',
+            ...dominant === undefined ? {} : { dominantDims: dominant.dims, embedderDims: embedder.dims },
+          })
+        }
         const sample = memorySearch.paritySample(dominant.modelId)
-        if (sample === undefined) return { modelId: dominant.modelId }
+        if (sample === undefined) {
+          // Dims agree and there is nothing to compare against: the lane is used
+          // on the strength of the dimension match alone, and that is recorded.
+          return record('no-sample', dominant.modelId, { modelId: dominant.modelId })
+        }
         try {
           const [vector] = await embedder.embed([sample.content])
-          if (vector === undefined) return { modelId: null }
+          if (vector === undefined) return record('embed-empty', null, { modelId: dominant.modelId })
           const parity = cosineSimilarity(vector, sample.embedding)
           ctx.logger.info(
             `magic-context memory search: shared-space parity ${parity.toFixed(4)} `
               + `against ${dominant.modelId.slice(0, 48)}`,
           )
-          return parity >= 0.99 ? { modelId: dominant.modelId } : { modelId: null }
-        } catch {
-          return { modelId: null }
+          return parity >= 0.99
+            ? record('parity-pass', dominant.modelId, { modelId: dominant.modelId, parity: Number(parity.toFixed(6)) })
+            : record('parity-fail', null, { modelId: dominant.modelId, parity: Number(parity.toFixed(6)) })
+        } catch (error) {
+          return record('embed-failed', null, { modelId: dominant.modelId, error: errText(error) })
         }
       })()
     }
@@ -357,6 +387,9 @@ export function openMemoryLane(
     memoryScoring,
     describeMemoryWrite,
     ctxMemoryRegistration: ({ activePolicy, defineTool, journal }) => {
+      // The shared-space gate runs inside the search closure below, so it needs
+      // the journal this registration carries.
+      laneJournal = journal
       // The registration is only reached when the bridge opened (index.ts wires
       // it behind the same condition); narrowing here keeps the closures below
       // reading a defined bridge instead of re-testing it three times.
