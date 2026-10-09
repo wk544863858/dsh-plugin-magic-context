@@ -98,6 +98,7 @@ const PHASE_D = [
   'tests/vector-lane.spec.ts',
   'tests/vector-backfill.spec.ts',
   'tests/report-classify.spec.ts',
+  'tests/strip-drill.spec.ts',
 ]
 
 export const PHASES = [
@@ -135,7 +136,6 @@ export const PHASES = [
       '三个域都有实现与用例，但真库上只导入过 org 成员（machine 默认 off，user 写侧默认 off）',
       '复现检测在真实语料上是空门（1292 行 / 33 项目 / 0 共享 hash）——见 global-domain-source-finding',
       '真库上尚未发布过任何域行（可见性/退役/改写均在合成契约库上验证）',
-      'D-5 剥离演练（全流程脱离 MC 组件）尚未做',
     ],
   },
   {
@@ -144,8 +144,12 @@ export const PHASES = [
     specs: PHASE_D,
     checks: [],
     blind: [
-      'WP11 向量回填：写 memory_embeddings，等用户放行',
-      'D-5 剥离演练需要真机多会话，尚未执行',
+      'D-5 剥离演练已做（tests/strip-drill.spec.ts + docs/strip-drill-report-2026-10-10.md）；'
+      + '其白名单=org 域闭环（建域→候选→批准→注入→退役）+ user 域采集→评审→注入',
+      'user 域的"退役画像行"没有命令路径 ⇒ 演练在 user 域停在注入（报告盲区 1）',
+      '发布是"复制"而非"镜像"：源行后续改写不传播到域行（报告盲区 2）',
+      '四个写开关默认全 off ⇒ 演练证明的是能力闭环，不是线上已开启',
+      'WP11 向量回填的真写未执行（开关默认 off）；真库 dry-run 已做（parity 1.000000 PASS）',
       'doctor / mc-report 的域检查是真库实测，无 hermetic 用例',
     ],
   },
