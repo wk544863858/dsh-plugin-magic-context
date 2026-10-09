@@ -252,22 +252,28 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
 
   // ── Emergency reclaim + retry on provider-confirmed overflow ──────────────
   on(DSH_EVENTS.requestError, async (payload: RequestErrorPayload, next: () => Promise<WaterfallDecision>) => {
-    if (payload.failure.code !== CONTEXT_WINDOW_EXCEEDED_CODE || payload.signal.aborted) return next()
-    const sessionId = payload.agent.session.id
-    const before = payload.agent.session.surface.replaceGeneration
+    // Shape-tolerant guard: these reads sit BEFORE the band try/catch below, so
+    // a drifted payload shape would throw into the host's request-error
+    // waterfall. Degrade to pass-through instead — the emergency lane simply
+    // stays idle, and the doctor heartbeat is what surfaces the drift.
+    if (payload?.failure?.code !== CONTEXT_WINDOW_EXCEEDED_CODE || payload?.signal?.aborted) return next()
+    const session = payload.agent?.session
+    const sessionId = session?.id
+    if (session === undefined || sessionId === undefined) return next()
+    const before = session.surface.replaceGeneration
     try {
-      const nodes = enumerateSurfaceToolResults(payload.agent.session, callId =>
+      const nodes = enumerateSurfaceToolResults(session, callId =>
         stores.getTag(sessionId, { kind: 'tool-result', callId }))
       // C1: the token window scales with the route's context window.
-      const context = requestContextOf(payload.agent.session)
-      const reclaim = reclaimForEmergency(payload.agent.session, nodes, policy, context.contextWindow)
+      const context = requestContextOf(session)
+      const reclaim = reclaimForEmergency(session, nodes, policy, context.contextWindow)
       journal?.warn('emergency-reclaim', `provider rejected the request as too long; dropped ${String(reclaim.dropped.length)} tool output(s)`, {
         dropped: reclaim.dropped.length,
         protected: reclaim.protectedCount,
         reason: 'context-window-exceeded',
         generationBefore: before,
-        generationAfter: payload.agent.session.surface.replaceGeneration,
-        retried: payload.agent.session.surface.replaceGeneration > before,
+        generationAfter: session.surface.replaceGeneration,
+        retried: session.surface.replaceGeneration > before,
       }, sessionId)
       ctx.logger.warn(
         `magic-context: emergency reclaim dropped ${String(reclaim.dropped.length)} tool outputs `
@@ -283,7 +289,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     }
     // Durable surface progress is the retry proof (compaction-basic pattern):
     // a retry re-derives the request from the shrunken surface.
-    if (!payload.signal.aborted && payload.agent.session.surface.replaceGeneration > before) {
+    if (!payload?.signal?.aborted && session.surface.replaceGeneration > before) {
       return { kind: 'retry' }
     }
     return next()

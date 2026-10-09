@@ -105,11 +105,26 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
   const { memoryRecall, memoryWriter, visibleMemoryIdsBySession } = lane
   /** Consecutive defers per session, keyed by reason, to log transitions only. */
   const deferStreak = new Map<string, { reason: string; count: number }>()
+  /** One-shot flag: a drifted pre-step payload must warn once, not every step. */
+  let payloadDriftWarned = false
 
   return async (payload: PreStepPayload, next): Promise<PreStepEnterDecision | { kind: 'reject' }> => {
     const decision = await next()
     if (decision.kind !== 'enter') return decision
-    const sessionId = payload.agent.session.id
+    // Shape-tolerant identity read: this line sits BEFORE every fail-open band
+    // below, so a host refactor that drops `agent` from the pre-step payload
+    // (the agent dispatcher injects it today) would otherwise throw into the
+    // host's waterfall and fail the whole turn. Skipping this step's adapter
+    // work degrades to "adapter idle" instead; the doctor heartbeat is what
+    // surfaces the drift durably.
+    const sessionId = payload.agent?.session?.id
+    if (sessionId === undefined) {
+      if (!payloadDriftWarned) {
+        payloadDriftWarned = true
+        journal?.error('error', 'pre-step payload has no agent.session.id — adapter bands skipped this step (host payload drift?)', { scope: 'pre-step' })
+      }
+      return decision
+    }
     // Admission stamps NOTHING — deliberately. The reclaim lanes (ctx_reduce /
     // ctx_expand, drop landing, emergency reclaim) resolve tags against surface
     // TOOL RESULTS only, so a handle on a user message or on a host-injected

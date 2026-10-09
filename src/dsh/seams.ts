@@ -232,6 +232,21 @@ export function requestContextOf(session: Session): {
   }
 }
 
+/** Structural view used for the tolerant reads below (same pattern as `contentOf`). */
+interface AssistantUsageEventData {
+  readonly data?: {
+    readonly turn?: number
+    readonly step?: number
+    readonly message?: { readonly source?: { readonly provider: string; readonly model: string } }
+    readonly usage?: {
+      readonly inputTokens?: number
+      readonly outputTokens?: number
+      readonly cacheReadTokens?: number
+      readonly cacheWriteTokens?: number
+    }
+  }
+}
+
 /** Neutral usage fields read from an `assistant/message` durable event. */
 export function readUsageFields(event: SessionEvent): {
   seq: number
@@ -245,12 +260,18 @@ export function readUsageFields(event: SessionEvent): {
   cacheWriteTokens?: number
 } | undefined {
   if (event.type !== 'assistant/message') return undefined
-  const source = event.data.message.source
-  const usage = event.data.usage
+  // Tolerant reads: this helper runs in the `session/event` listener, which the
+  // host emits on EVERY append (the user's own messages included). A drift in
+  // the assistant event shape must skip the usage row (fail-open; the next
+  // assistant message anchors a fresh one), not throw into that emission.
+  const data = (event as unknown as AssistantUsageEventData).data
+  const source = data?.message?.source
+  const usage = data?.usage
+  if (source === undefined) return undefined
   return {
     seq: event.seq,
-    turn: event.data.turn,
-    step: event.data.step,
+    turn: data?.turn ?? 0,
+    step: data?.step ?? 0,
     provider: source.provider,
     model: source.model,
     inputTokens: usage?.inputTokens,
