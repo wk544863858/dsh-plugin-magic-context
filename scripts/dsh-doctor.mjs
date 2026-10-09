@@ -260,7 +260,7 @@ if (existsSync(MC_STORE)) {
     }
     const plan = planBackfill(MC_STORE, { limit: 1 })
     if (plan !== undefined && plan.total > 0) {
-      say(' ', `待回填 ${plan.total} 条（WP11 未实现：写 memory_embeddings 属契约写入，等放行）`)
+      say(' ', `待回填 ${plan.total} 条（车道已实现，开关 memory.vectorBackfill 默认 off ⇒ 无人值守）`)
     }
   }
 }

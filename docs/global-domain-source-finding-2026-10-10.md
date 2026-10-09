@@ -55,9 +55,11 @@
   规则若对它们开火等于封掉几乎所有候选）
 - **以上全部只写适配器自有表**（`global_candidates` / `global_candidate_observations`）
 
-**仍未实现**（写契约，等放行）：把批准的候选**发布**进共享库的域身份
-（`project_path='dir:global:org'`、`scope='universe'`、`shareable=1`、`source_type='user'`）。
-命令面现在会说"NOT PUBLISHED YET"，不再谎称"下一个 tick 发布"。
+**发布已落地（2026-10-10，WP9 / commit 70104f546）**：把批准的候选发布进共享库的域身份
+（`project_path='dir:global:org'`、`scope='universe'`、`shareable=1`、`source_type='user'`），
+按 `UNIQUE(project_path, category, normalized_hash)` 幂等，且发布前校验类别在域白名单内
+（不在 ⇒ 结构化拒绝，而不是发布后静默不可见）。**真库上至今未发布过任何一行**——
+首次真库发布仍要走"备份 → dry-run → 真写"。
 
 ## 5. 产品判据要重新表述
 
