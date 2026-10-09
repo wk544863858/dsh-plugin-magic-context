@@ -20,7 +20,8 @@ upgrade; this file says **where we differ**. Three verdicts are used below:
   cites the host file that constrains it;
 - **intentional** — decided and recorded; do not "fix" these on an upgrade.
 
-When `scripts/dsh-track.mjs --apply <tag>` reports a new upstream tag, walk the
+When a new upstream tag appears (re-clone cortexkit/magic-context as needed —
+`dsh-track` is retired, see `docs/dsh-plugin-upgrade-followup.md` §0), walk the
 numbered entries of §B/§C/§D and re-verify the cited lines: line numbers drift
 with every refactor, the semantics behind them do not.
 

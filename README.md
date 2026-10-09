@@ -200,7 +200,7 @@ epoch 指纹稳定、权威守卫（authority 表空 + privilege 未启用）、
   HARD 基线重建）· 🗑️ 丢弃上下文（应急丢弃 / 丢弃落地）· 🧭 归档已存 · 🧰 维护巡检 · ⚠️ 失败。
   噪声不进列表：`pass defer`、`boot`、`engine`、`context-pressure`、`memory-recall`，
   以及 **SOFT** 基线刷新（只数进节拍行；HARD 重建是 priced cache bust，算记录）。
-  逐条映射规则与两个 node 侧校验脚本见 [主界面遥测契约](https://github.com/cortexkit/magic-context/blob/master/docs/dsh-plugin-ui-telemetry-contract.md) 勘误第 8 条。
+  逐条映射规则与两个 node 侧校验脚本见 [主界面遥测契约]((docs/dsh-plugin-ui-telemetry-contract.md)) 勘误第 8 条。
   （2026-10-07 起对话流内的 turnTail 区块已移除：动作可查性由 `session-notice.ts` 的会话流 notice 承担，
   胶囊面板是实时/遥测面。）
 - **徽标面板自动关闭**：点击面板/徽标之外的任意位置、按 Esc、或窗口失焦即关闭
@@ -211,9 +211,9 @@ epoch 指纹稳定、权威守卫（authority 表空 + privilege 未启用）、
 **安全**：该路由没有 token 鉴权（仅 loopback），因此**只输出计数与单行摘要**——不含消息正文、
 不含文件路径、不含凭据（journal 本身即无正文）。
 
-> 配置界面的机制与坑见 [配置界面契约](https://github.com/cortexkit/magic-context/blob/master/docs/dsh-plugin-config-ui-contract.md)（含
+> 配置界面的机制与坑见 [配置界面契约]((docs/dsh-plugin-config-ui-contract.md))（含
 > "profile patch config 整体替换"与"default export 吞掉 Config"两个实测陷阱）；
-> 遥测通路对比见 [主界面遥测契约](https://github.com/cortexkit/magic-context/blob/master/docs/dsh-plugin-ui-telemetry-contract.md)。
+> 遥测通路对比见 [主界面遥测契约]((docs/dsh-plugin-ui-telemetry-contract.md))。
 
 ## 已实现（阶段 0 + 1 + 2）
 
@@ -241,7 +241,7 @@ epoch 指纹稳定、权威守卫（authority 表空 + privilege 未启用）、
 **同时在线证据**（真实 `dsh --profile mcpoc` 进程写下的 meta）：
 `adapter_version=phase2`、`compaction_engine=magic-context-dsh`、`schema_version=3`。
 
-**未实现 / 已知边界**：memory **写入**（需复刻 MC 的 hash/epoch/mutation-log/authority 不变量，刻意留给 MC 自己的存储层；也因此 `ctx_memory` 目前是**只读**召回，与 MC 的同名写入工具语义不同）；记忆的 m[1] 增量面（`maxMemoryId` 水位 / `memory_mutation_log` → `<memory-updates>`）未实现——写入前必须先有它，否则每次写入都会破坏缓存前缀；historian 触发预算用 chars/4 估算而非真 tokenizer；四层摘要在一次调用内产出（MC 是跨调用累积）。项目级记忆的完整复盘见 [docs/dsh-plugin-project-memory-review-2026-10-06.md](https://github.com/cortexkit/magic-context/blob/master/docs/dsh-plugin-project-memory-review-2026-10-06.md)。
+**未实现 / 已知边界**：memory **写入**（需复刻 MC 的 hash/epoch/mutation-log/authority 不变量，刻意留给 MC 自己的存储层；也因此 `ctx_memory` 目前是**只读**召回，与 MC 的同名写入工具语义不同）；记忆的 m[1] 增量面（`maxMemoryId` 水位 / `memory_mutation_log` → `<memory-updates>`）未实现——写入前必须先有它，否则每次写入都会破坏缓存前缀；historian 触发预算用 chars/4 估算而非真 tokenizer；四层摘要在一次调用内产出（MC 是跨调用累积）。项目级记忆的完整复盘见 [docs/dsh-plugin-project-memory-review-2026-10-06.md](docs/dsh-plugin-project-memory-review-2026-10-06.md)。
 
 ## 生产注入路径（已验证，2026-10-06）
 
@@ -381,7 +381,7 @@ node scripts/dsh-doctor.mjs [--store db] [--json]  # 只读健康报告：fence 
 四个槽位注册项都声明 `locale: 'magic-context'`，文案一律走框架注入的 `t`，切换语言即时生效、无需刷新。
 宿主（node）侧没有 locale 服务，写进会话流、**模型可见**的 `session-notice` 保持英文常量（与其它宿主面
 一致，也避免同一会话中途换语言造成 cached prefix 抖动）。机制与理由见
-[docs/dsh-plugin-ui-telemetry-contract.md 勘误 §7](https://github.com/cortexkit/magic-context/blob/master/docs/dsh-plugin-ui-telemetry-contract.md)。
+[docs/dsh-plugin-ui-telemetry-contract.md 勘误 §7]((docs/dsh-plugin-ui-telemetry-contract.md))。
 
 ## 阶段 1 衔接点（下一步）
 

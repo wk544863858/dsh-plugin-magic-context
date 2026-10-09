@@ -25,6 +25,10 @@
   新 tag 的 diff → 按 §5 对齐面把相关变更移植进插件新家 → 那边 gate 全绿。
 - `packages/dsh-plugin` 目录已从 `dsh` 分支删除；其 60+ 提交的完整历史经
   逐提交重放保留在插件新家的 git 历史里（树曾逐字节验证一致）。
+- **旧仓（`<path>`）已于 2026-10-09 删除**。其全部
+  git 历史（含 `dsh`/`dsh-base` 分支与本组文档）迁入插件新家
+  `refs/old-monorepo/*`；上游跟进前重新 clone cortexkit/magic-context 到任意
+  位置即可（本文档 `<上游 checkout>` 均指该新 clone）。
 
 ---
 
@@ -32,7 +36,7 @@
 
 | 项 | 值 | 变化时的影响 |
 |---|---|---|
-| MC 版本 | **v0.46.0**（tag `651c105a9`，2026-10-08 发布 = 本地 `dsh-base`） | MC 升级 → 先跑 `dsh-track --check --fetch` |
+| MC 版本 | **v0.46.0**（tag `651c105a9`，2026-10-08 发布） | MC 升级 → 重新 clone 上游后按 §4 对齐命令 diff |
 | MC 存储契约 | **schema v95**（`MEMORY_SCHEMA_MAX_VERSION = 95`，`memory-bridge.ts`） | MC 迁移 >95 → fence 只读降级（见 §3.3） |
 | DSH Desktop | **0.2.0-rc.2**（packaged app） | DSH 升级 → 查 §3 接缝 |
 | 适配器自有库 | schema **v6**（adapter store，`stores.ts` SCHEMA_VERSION） | 适配器内部，自洽 |
@@ -99,7 +103,7 @@
 对齐命令（MC 新版本后）：
 
 ```bash
-git -C <path> log v0.45.0..<NEW> --oneline -- \
+git -C <上游 checkout> log v0.45.0..<NEW> --oneline -- \
   packages/plugin/src/features/magic-context packages/plugin/src/hooks/magic-context crates/mc-module/src
 ```
 
@@ -118,16 +122,9 @@ git -C <path> log v0.45.0..<NEW> --oneline -- \
 
 ## 6. 跟进流程（每次 MC/DSH 升级后执行）
 
-0. **跟踪（一条命令，只读）**：
-   ```powershell
-   node packages/dsh-plugin/scripts/dsh-track.mjs --check --fetch
-   ```
-   报告有无新 tag、上游推进量与本地增量数，并断言本地增量只落在
-   `packages/dsh-plugin/**`、`docs/dsh-*`、`.gitignore` 之内。退出码：`0` 无事、
-   `3` 有新 tag、`1` 越界或测试红、`2` 前置不满足。确认后用
-   `node scripts/dsh-track.mjs --apply <tag>` 完成重放（`--onto <tag> dsh-base`）
-   + 移动 `dsh-base` + 全量门禁 + 打印本节 §1 锚点该改成什么；重放冲突会
-   `--abort` 并复原 `dsh-base`（预期冲突只可能出现在 `.gitignore`）。
+0. **跟踪（已退役）**：`dsh-track --check/--apply` 随单插件模式退役（见 §0）。
+   上游跟进改为：重新 clone cortexkit/magic-context（或复用已有 clone）→ 直接按
+   §4 的对齐命令取"文件 → 提交数"表，跳过重放。
 
 1. **MC 侧**：§4 的 diff 命令 → 逐条核对到适配器文件；schema >94 时改
    `MEMORY_SCHEMA_MAX_VERSION` 并核对迁移。
@@ -136,26 +133,18 @@ git -C <path> log v0.45.0..<NEW> --oneline -- \
 3. **回归（一条命令）**：
    ```powershell
    cd <path>
-   node scripts/mc-test.mjs --full      # --quick = 只跑一致性 + 套件
+   node scripts/mc-test.mjs --full      # --quick = 只跑 typecheck + 套件
    ```
-   `--full` 依次等于旧五件套（逐步 PASS/FAIL 汇总在末尾）：
-   - `sync-specs --check` — 两侧逐字节一致；漂移或 host-only 均 exit 1
-   - `vitest run packages/test-support/mc-dsh-poc/tests` — 在解析到的宿主内执行
-   - `tsc -p tsconfig.build.json` + `copy-client.mjs` — 构建（写 `lib/` 会热重载 live
-     实例；勿在他人在途时执行）
-   - `mc-acceptance.mjs` — 0 FAIL
-   - `mc-memory-audit.mjs --json` — exit 0 = 无 HARD 违规
-   - `mc-records-check.mjs` — 面板记录分类/计数/噪声折叠 ALL PASS
-   - `mc-records-check` 之外还有一条**只在重放后需要**的检查：
-     `node scripts/build-reference-seeds.mjs`（`npm run build:seeds`）从上游
-     `reference-seeds.generated.ts` 重抽 historian 校准锚点，`--check` 判定本包
-     `src/core/reference-seeds.ts` 是否已随上游更新（漂移则 exit 1）。
-   宿主解析顺序（`scripts/test-host.mjs`）：`MC_DSH_CHECKOUT`/`DSH_TESTHOST` →
-   项目内 `<tmp>/deepseek-harness-master`（默认，gitignored）→ 旧
-   `%TEMP%\dsh-src\deepseek-harness-master`。宿主缺失或未装依赖时跑
-   `node scripts/bootstrap-testhost.mjs --install` 重建。
-4. **套件单源**：canonical = `packages/dsh-plugin/tests/`（含 `helpers/`），
-   checkout 侧由 `node scripts/sync-specs.mjs` 生成，两侧逐字节一致。
+   `--full` = typecheck + vitest 套件（自包含 devDependencies，无需宿主
+   checkout）+ 构建 + acceptance + memory audit + records check（逐步
+   PASS/FAIL 汇总在末尾）。构建写 `lib/` 会热重载 live 实例；勿在他人在途时
+   执行。另有**只在移植上游锚点后需要**的一条：
+   `node scripts/build-reference-seeds.mjs`（`npm run build:seeds`，需
+   `--upstream <上游 checkout>`）从上游 `reference-seeds.generated.ts` 重抽
+   historian 校准锚点，`--check` 判定本包 `src/core/reference-seeds.ts` 是否
+   已随上游更新（漂移则 exit 1）。
+4. **套件单源**：canonical = 插件新家 `tests/`（含 `helpers/`）；旧 monorepo 的
+   `sync-specs.mjs` 镜像流程已随单仓收敛退役。
    模拟库 DDL 一律 `tests/helpers/memory-db.ts`，LLM 替身一律
    `tests/helpers/llm-fake.ts`——不在 spec 内联 `CREATE TABLE memories`，
    不手搓 llm 假件（形状宽松的替身是两个真实缺陷的藏身处）。
