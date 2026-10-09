@@ -127,6 +127,21 @@ export interface MagicContextDshConfig {
          */
         review?: boolean
       }
+      machine?: {
+        /**
+         * Share knowledge between every project on THIS machine. Default FALSE:
+         * switching it on widens what every local project can read, so it is an
+         * operator decision, not a default.
+         */
+        enabled?: boolean
+        /**
+         * Projects kept OUT of the machine domain, even while it is on. Names
+         * are `git:`/`dir:` identities, exactly as they appear in `ctx-status`.
+         * An excluded project neither sees machine rows nor joins the domain;
+         * excluding never deletes anything else (see planMachineDomain).
+         */
+        excludeProjects?: readonly string[]
+      }
     }
     /**
      * Workspace root for the evidence pass (schema v7): its greps run here.

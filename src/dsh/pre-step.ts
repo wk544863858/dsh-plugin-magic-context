@@ -31,6 +31,7 @@ import {
   wireStrandedResults,
 } from './seams.ts'
 import { runManagementPass } from './management-pass.ts'
+import { syncMachineDomain } from '../core/machine-domain.ts'
 import type { HistorianLlm } from './historian.ts'
 import {
   buildChannel1Reminder,
@@ -301,6 +302,24 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
               if (oldest !== undefined) sessionIdentity.delete(oldest)
             }
           }
+        }
+        // WP10: keep the machine domain's membership in step with the projects
+        // this process has actually served, BEFORE the recall resolves peers —
+        // otherwise a project's first pass would read the domain without being
+        // in it. Idempotent, and a no-op until `memory.global.machine.enabled`.
+        if (memoryRecall !== undefined) {
+          syncMachineDomain(stores, {
+            identities: [...seenIdentities],
+            config: {
+              ...config.memory?.global?.machine?.enabled === undefined
+                ? {}
+                : { enabled: liveBoolean(config.memory?.global?.machine?.enabled, false) },
+              ...config.memory?.global?.machine?.excludeProjects === undefined
+                ? {}
+                : { excludeProjects: config.memory.global.machine.excludeProjects },
+            },
+            now: Date.now(),
+          })
         }
         const memories = memoryRecall?.recall({
           ...projectSpec === undefined ? {} : { project: projectSpec },

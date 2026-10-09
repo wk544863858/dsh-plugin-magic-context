@@ -89,6 +89,7 @@ const PHASE_B = [
 const PHASE_C = [
   'tests/org-domain.spec.ts',
   'tests/domain-publish.spec.ts',
+  'tests/machine-domain.spec.ts',
 ]
 
 /** Phase D: the operating loop — commands, telemetry, backfill, drill. */
@@ -130,9 +131,10 @@ export const PHASES = [
     specs: PHASE_C,
     checks: [],
     blind: [
-      'machine 域（WP10）未开工',
+      '三个域都有实现与用例，但真库上只导入过 org 成员（machine 默认 off，user 写侧默认 off）',
       '复现检测在真实语料上是空门（1292 行 / 33 项目 / 0 共享 hash）——见 global-domain-source-finding',
-      '真库上尚未发布过任何 org 行（合成契约库已验证可见性与退役）',
+      '真库上尚未发布过任何域行（可见性/退役/改写均在合成契约库上验证）',
+      'D-5 剥离演练（全流程脱离 MC 组件）尚未做',
     ],
   },
   {

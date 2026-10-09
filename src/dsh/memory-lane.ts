@@ -11,7 +11,7 @@ import type { AdapterStores } from '../core/stores.ts'
 import type { Journal } from '../core/journal.ts'
 import { errText } from '../core/types.ts'
 import type { PressurePolicy } from '../core/policy.ts'
-import { openMemoryBridge, DEFAULT_SHARE_CATEGORIES, defaultMemoryDbPath, resolveIdentitySpec } from '../core/memory-bridge.ts'
+import { openMemoryBridge, DEFAULT_SHARE_CATEGORIES, defaultMemoryDbPath, resolveIdentitySpec, type ActivePeerDomain } from '../core/memory-bridge.ts'
 import { openMemoryWriter, type MemoryWriter } from '../core/memory-write.ts'
 import { openProfileWriter, type ProfileWriter } from '../core/profile-write.ts'
 import { openMemorySearch, type MemorySearch, type MemorySearchHit } from '../core/memory-search.ts'
@@ -70,6 +70,30 @@ export interface MemoryLane {
   }): Parameters<typeof defineCtxMemoryTool>[0]
 }
 
+/**
+ * WP3 — THE activation function, exported so the lane and its tests cannot drift
+ * apart. Answers which domains a reader is inside, reading the adapter's own
+ * tables; `undefined` means "nothing is configured yet", which the bridge reads
+ * as "fall back to the contract's workspace membership" rather than as "no peers"
+ * (the distinction that kept cross-project sharing alive through the migration).
+ */
+export function makeDomainResolver(
+  stores: AdapterStores,
+): (identity: string) => readonly ActivePeerDomain[] | undefined {
+  return (identity: string) => {
+    const domains = stores.activeDomainIdentities(identity)
+    // Nothing configured yet (the pre-import state): answer `undefined` so the
+    // bridge keeps reading the contract's workspace membership instead of
+    // concluding "no peers" and silently ending cross-project sharing.
+    if (stores.listDomains().every(domain => !domain.enabled)) return undefined
+    return domains.map(domain => ({
+      identity: domain.identity,
+      shareCategories: stores.getDomain(domain.domainId)?.shareCategories ?? [],
+      kind: domain.kind,
+    }))
+  }
+}
+
 export function openMemoryLane(
   ctx: Context,
   config: MagicContextDshConfig,
@@ -89,20 +113,7 @@ export function openMemoryLane(
     : openMemoryBridge({
       ...memorySettings?.dbPath === undefined ? {} : { dbPath: memorySettings.dbPath },
       logger: ctx.logger,
-      ...domainSource === 'contract' ? {} : {
-        domainResolver: (identity: string) => {
-          const domains = stores.activeDomainIdentities(identity)
-          // Nothing configured yet (the pre-import state): answer `undefined` so
-          // the bridge keeps reading the contract's workspace membership instead
-          // of concluding "no peers" and silently ending cross-project sharing.
-          if (stores.listDomains().every(domain => !domain.enabled)) return undefined
-          return domains.map(domain => ({
-            identity: domain.identity,
-            shareCategories: stores.getDomain(domain.domainId)?.shareCategories ?? [],
-            kind: domain.kind,
-          }))
-        },
-      },
+      ...domainSource === 'contract' ? {} : { domainResolver: makeDomainResolver(stores) },
     })
   if (memoryRecall !== undefined) {
     ctx.logger.info(
