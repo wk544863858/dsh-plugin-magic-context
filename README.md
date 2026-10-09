@@ -372,7 +372,7 @@ specs 驱动真实 agent loop（mock adapter）完成一次工具调用回合，
 ```sh
 node scripts/mc-i18n-check.mjs                 # 多语言：宿主 notice 英文 + 字典键对齐 + 槽位接线
 node scripts/mc-records-check.mjs [adapterDb]  # 用真实 journal 验证面板分类（需库文件）
-node scripts/dsh-doctor.mjs [--store db] [--json]  # 只读健康报告：fence 余量裁决 / 悬空 run / 失败尾部 / embedding 车道
+node scripts/dsh-doctor.mjs [--store db] [--json]  # 只读健康报告：fence 余量裁决 / 事件车道心跳 / 悬空 run / 失败尾部 / embedding 车道
 ```
 
 ## 多语言（2026-10-07）

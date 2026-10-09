@@ -13,6 +13,12 @@
  *   3. 最近的错误及其原因（上游查宿主日志的近期错误）；
  *   4. 本地 embedding 运行时是否真的可用（上游查 native/WASM 回退）。
  *
+ * 另有一条本仓自有的检查：
+ *
+ *   5. 事件车道心跳：宿主改名事件字符串不会报错，只会让各车道永久安静；
+ *      "挂载过却长期零 journal/usage 活动"是离线可观测的特征（启发式，只
+ *      WARN 不阻断——DSH 没人用时同样安静）。
+ *
  * `mc-memory-audit.mjs` 已经报了 adapter schema、MC 库 schema 与写模式等**原始值**；
  * 本脚本不重复那些数字，只补上面四类**裁决**与“下一步动作”。
  *
@@ -114,8 +120,41 @@ if (!existsSync(ADAPTER_DB)) {
   if (existsSync(ACTIVITY_LOG)) say(' ', `activity.log ${(statSync(ACTIVITY_LOG).size / 1024).toFixed(0)} KB`)
 }
 
-// ── 3. 进行中的 run（镜像 recoverOrphanHistorianRuns 的配对规则） ──
-open('3. 进行中的 run')
+// ── 3. 事件车道心跳（静默失效检测；启发式，只 WARN 不阻断） ──
+// 宿主改掉事件字符串（agent/pre-step 等）不会让适配器报错：监听器只是永远
+// 不触发。可离线观测的特征是"挂载过，但 journal 与 usage 车道此后再无任何
+// 行"。DSH 没人用时同样安静——所以只 WARN，请结合"DSH 是否真的在用"判读。
+open('3. 事件车道心跳')
+if (!existsSync(ADAPTER_DB)) {
+  say(' ', '（自有库不存在，跳过）')
+} else {
+  try {
+    const db = readOnly(ADAPTER_DB)
+    const lastBoot = db.prepare("SELECT MAX(at) AS at FROM journal WHERE kind='boot'").get()?.at
+    const lastJournal = db.prepare('SELECT MAX(at) AS at FROM journal').get()?.at
+    const lastUsage = db.prepare('SELECT MAX(recorded_at) AS at FROM usage_records').get()?.at
+    db.close()
+    if (lastBoot === undefined) {
+      say(' ', 'journal 无 boot 行（适配器从未挂载，或库是旧版本建的）')
+    } else {
+      say(' ', `最近挂载 ${age(lastBoot)} · 最近 journal 行 ${lastJournal === undefined ? '-' : age(lastJournal)} · 最近 usage 行 ${lastUsage === undefined ? '-' : age(lastUsage)}`)
+      const DAY = 86_400_000
+      const quiet = (lastJournal === undefined || Date.now() - lastJournal > DAY)
+        && (lastUsage === undefined || Date.now() - lastUsage > DAY)
+      if (quiet && Date.now() - lastBoot > DAY) {
+        say('⚠', '挂载已超过 24h，之后 journal 与 usage 车道零活动——若 DSH 此期间确实在用，这是事件接缝静默失效的特征（宿主改名事件字符串？）')
+        say(' ', '动作：对照 docs/dsh-plugin-upgrade-followup.md §3 逐条冒烟（preStep 注入 / postToolExecute 打标 / requestError 应急 / ctx.llm 流 / client 座位）')
+      } else {
+        say('✓', '车道有近期活动，事件接缝看起来连通')
+      }
+    }
+  } catch (error) {
+    say('⚠', `心跳读取失败：${error.message}`)
+  }
+}
+
+// ── 4. 进行中的 run（镜像 recoverOrphanHistorianRuns 的配对规则） ──
+open('4. 进行中的 run')
 if (existsSync(ADAPTER_DB)) {
   try {
     const db = readOnly(ADAPTER_DB)
@@ -151,8 +190,8 @@ if (existsSync(ADAPTER_DB)) {
     }
     say(' ', `近 24h 的挂载自愈（adapter-remount）：${recovered}`)
 
-    // ── 4. 失败尾部（上游 doctor 查"近期错误"，这里查适配器自己的 journal） ──
-    blocks.push({ title: '4. 失败尾部（最近 8 条 error）', lines: [] })
+    // ── 5. 失败尾部（上游 doctor 查"近期错误"，这里查适配器自己的 journal） ──
+    blocks.push({ title: '5. 失败尾部（最近 8 条 error）', lines: [] })
     if (recentErrors.length === 0) say('✓', 'journal 无 error 行')
     else {
       for (const row of recentErrors) {
@@ -171,8 +210,8 @@ if (existsSync(ADAPTER_DB)) {
   }
 }
 
-// ── 5. embedding 车道 ──
-blocks.push({ title: '5. 本地 embedding 车道', lines: [] })
+// ── 6. embedding 车道 ──
+blocks.push({ title: '6. 本地 embedding 车道', lines: [] })
 say(' ', `memory.embedBackfill 缺省 = ${BACKFILL_DEFAULT ? 'true' : 'false'}（后置回填车道）`)
 say(' ', '查询侧向量车道始终可用；共享向量读取前需要余弦 ≥0.99 的一致性证明')
 if (existsSync(ACTIVITY_LOG)) {
