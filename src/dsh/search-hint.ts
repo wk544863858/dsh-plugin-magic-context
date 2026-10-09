@@ -11,21 +11,24 @@
  *
  * Two deliberate differences from upstream:
  *
- * - **Carrier.** Upstream appends the hint to the user message itself. DSH has one
- *   surface shared by the model and the UI, so editing the user's message would
- *   rewrite what they typed; the adapter appends a separate magic-context entry at
- *   the tail instead (`appendMagicContextEntry`). The cache property is the same —
- *   a node appended for this turn is not in the provider's cached prefix.
- * - **Headless-surface guard.** The tail append happens inside the `agent/pre-step`
- *   waterfall, which on a fresh session's first step runs BEFORE the host writes
- *   `step/start` and the first `system/message` (host agent-loop: waterfall →
- *   turn/start → step/start → system commits → admitted batch). The hint would
- *   become surface node 0, and the loader's `foldSurface` then rejects the whole
- *   log ("requires a protected first surface head") on every later replay — the
- *   2026-10-09 corruption incident, 10/10 logs with the hint as the early node.
- *   `planSearchHint` therefore refuses to append while the surface is still empty
- *   (`surfaceNodes === 0`); any non-empty surface has the head as node 0 and a
- *   tail append is safe forever after.
+ * - **Carrier.** Upstream appends the hint to the user message itself; the
+ *   adapter never edits the user's text (one durable surface, and the title
+ *   derives from the first `source: 'user'` message). The hint instead travels
+ *   as its own user-role message INSIDE the admitted batch: `planSearchHint`
+ *   returns the built message and the pre-step listener appends it to
+ *   `decision.messages`, which the host persists verbatim after its own
+ *   system-prompt commits (host agent-loop `step()`: system commits first, then
+ *   `for (const message of decision.messages) session.append('user/message',
+ *   message)`). That ordering is the fix for the 2026-10-09 corruption
+ *   incident: the previous carrier appended directly from inside the
+ *   `agent/pre-step` waterfall, which on a fresh session's first step ran
+ *   BEFORE the host wrote `step/start` and the first `system/message`, making
+ *   the hint surface node 0 — the loader's `foldSurface` then rejected the log
+ *   on every replay ("requires a protected first surface head"; 10/10 corrupt
+ *   logs had the hint as the early node). Inside the batch, the host's own
+ *   commits always precede the hint, the hint still rides the request it was
+ *   computed for (the request is built from the surface after the batch lands),
+ *   and the transcript renders the same collapsed `source.kind` row as before.
  * - **FTS-only search.** `lane.searchForSession` skips the embedding request, so a
  *   cold local model cannot delay the turn the hint is meant to inform. The
  *   stored-vector lane remains available to `ctx_search`, where the agent asked
@@ -33,9 +36,10 @@
  *
  * Fail-open everywhere: a hint is an optimisation, and no turn may fail over it.
  */
+import { randomUUID } from 'node:crypto'
 import type { MemorySearchHit } from '../core/memory-search.ts'
 import type { Journal } from '../core/journal.ts'
-import { appendMagicContextEntry, type SessionNoticeSession } from './session-notice.ts'
+import { magicContextSource, type UserMessage } from './seams.ts'
 
 /** Upstream's limits (auto-search-hint.ts). */
 export const HINT_MAX_FRAGMENTS = 3
@@ -125,9 +129,9 @@ export interface SearchHintDeps {
 }
 
 export type SearchHintOutcome =
-  | { readonly action: 'hinted'; readonly hits: number; readonly text: string }
-  | { readonly action: 'quiet'; readonly reason: 'too-short' | 'not-a-prompt' | 'already-hinted' | 'no-hits' | 'lane-off' | 'surface-headless' }
-  | { readonly action: 'failed'; readonly reason: 'timeout' | 'search-failed' | 'append-failed' }
+  | { readonly action: 'hinted'; readonly hits: number; readonly text: string; readonly message: UserMessage }
+  | { readonly action: 'quiet'; readonly reason: 'too-short' | 'not-a-prompt' | 'already-hinted' | 'no-hits' | 'lane-off' }
+  | { readonly action: 'failed'; readonly reason: 'timeout' | 'search-failed' }
 
 /** Bound a promise so a slow search can never hold the turn. */
 async function withDeadline<T>(work: Promise<T>, timeoutMs: number): Promise<T | undefined> {
@@ -145,30 +149,47 @@ async function withDeadline<T>(work: Promise<T>, timeoutMs: number): Promise<T |
 }
 
 /**
- * Decide whether this turn gets a hint, and append it when it does.
+ * Build the hint's durable message: the exact shape the direct-append carrier
+ * used (`appendMagicContextEntry`), now delivered inside the admitted batch.
+ * Structural, not host-typed on purpose: the host persists batch messages
+ * verbatim (`session.append('user/message', message)`), so the producer source
+ * round-trips without a declared kind in the host's `MessageSourceMap`.
+ */
+export function buildHintMessage(hint: string, hits: number): UserMessage {
+  return {
+    id: randomUUID(),
+    role: 'user',
+    content: [{ type: 'text', text: hint }],
+    source: magicContextSource(
+      `Magic Context · ${String(hits)} possible memory match(es) — ctx_search for full context`,
+    ),
+  } as unknown as UserMessage
+}
+
+/**
+ * Decide whether this turn gets a hint, and build its message when it does.
+ * The caller carries the message inside `decision.messages` — the hint never
+ * appends to the session directly from here (protected-head incident,
+ * 2026-10-09; see the carrier note in the header).
  *
  * Every outcome is journaled as `search-hint` so the thresholds can be tuned from
  * telemetry rather than guessed at.
  * @param deps - the search closure, journal, and knobs.
- * @param input - the session, the user's text, and this turn's key.
+ * @param input - the user's text and this turn's key.
  * @returns what happened, for callers that want to log or assert.
  */
 export async function planSearchHint(
   deps: SearchHintDeps,
   input: {
     readonly sessionId: string
-    readonly session: SessionNoticeSession
+    /**
+     * The opaque session handle, ONLY for the search lane's identity resolution
+     * (`lane.searchForSession(session, …)`). Since the batch carrier the hint is
+     * never appended here, this is never handed a surface mutation.
+     */
+    readonly session: unknown
     readonly text: string
     readonly turnKey: string
-    /**
-     * `session.surface.nodes.length` read by the caller. The protected-head
-     * guard: `0` means the first `system/message` is not on the log yet, so a
-     * tail append would take surface node 0 and the loader would reject the
-     * log on replay. Omitted (unknown) keeps the legacy behavior — the
-     * production caller always reads the surface, and a host drift there
-     * throws into the pre-step fail-open band, which also skips the hint.
-     */
-    readonly surfaceNodes?: number
   },
 ): Promise<SearchHintOutcome> {
   const now = deps.now ?? Date.now
@@ -182,9 +203,6 @@ export async function planSearchHint(
     return outcome
   }
   if (deps.search === undefined) return record({ action: 'quiet', reason: 'lane-off' })
-  // Correctness gate before every tuning signal: a headless surface must not
-  // be appended to regardless of what the text would have scored.
-  if (input.surfaceNodes === 0) return record({ action: 'quiet', reason: 'surface-headless' }, { surfaceNodes: 0 })
   const text = input.text.trim()
   const minChars = deps.minChars ?? 24
   // A command or one of our own hints is never a prompt, however short: the
@@ -211,13 +229,8 @@ export async function planSearchHint(
   }
   const hint = buildSearchHint(hits)
   if (hint === null) return record({ action: 'quiet', reason: 'no-hits' }, { ms: now() - started })
-  const appended = appendMagicContextEntry(
-    input.session,
-    hint,
-    `Magic Context · ${String(hits.length)} possible memory match(es) — ctx_search for full context`,
+  return record(
+    { action: 'hinted', hits: hits.length, text: hint, message: buildHintMessage(hint, hits.length) },
+    { ms: now() - started, chars: hint.length },
   )
-  if (!appended.ok) {
-    return record({ action: 'failed', reason: 'append-failed' }, { detail: appended.detail })
-  }
-  return record({ action: 'hinted', hits: hits.length, text: hint }, { ms: now() - started, chars: hint.length })
 }

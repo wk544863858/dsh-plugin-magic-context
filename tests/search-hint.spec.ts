@@ -85,7 +85,6 @@ describe('planSearchHint', () => {
       search?: unknown
       tracker?: SearchHintTracker
       timeoutMs?: number
-      surfaceNodes?: number
       kinds?: string[]
     } = {},
   ) => {
@@ -103,21 +102,25 @@ describe('planSearchHint', () => {
       },
       {
         sessionId: 's1',
-        session: stub.session as never,
+        session: stub.session,
         text: options.text ?? PROMPT,
         turnKey: 'turn-1',
-        ...options.surfaceNodes === undefined ? {} : { surfaceNodes: options.surfaceNodes },
       },
     )
     return { outcome, stub, kinds }
   }
 
-  it('appends one magic-context entry and journals the decision', async () => {
+  it('returns the hint as an admitted-batch message, never touching the session', async () => {
     const { outcome, stub, kinds } = await run({ hits: [hit(1, 'PROJECT_RULES', 'fail closed on tenant')] })
     expect(outcome.action).toBe('hinted')
-    expect(stub.appended).toHaveLength(1)
-    expect(stub.appended[0]?.type).toBe('user/message')
-    expect(stub.appended[0]?.text).toContain('<ctx-search-hint>')
+    // The carrier is the returned message, not a session append — the stub has
+    // no append consumer here, and it must stay empty.
+    expect(stub.appended).toHaveLength(0)
+    const message = outcome.action === 'hinted' ? outcome.message : undefined
+    expect(message?.role).toBe('user')
+    expect(message?.id).toEqual(expect.any(String))
+    expect(message?.source).toMatchObject({ kind: 'magic-context', form: 'notice' })
+    expect((message?.content as Array<{ text: string }>)[0]?.text).toContain('<ctx-search-hint>')
     expect(kinds).toContain('search-hint')
   })
 
@@ -135,21 +138,6 @@ describe('planSearchHint', () => {
     expect((await run({ text: '/ctx-status now please' })).outcome).toMatchObject({ action: 'quiet', reason: 'not-a-prompt' })
     expect((await run({ hits: [] })).outcome).toMatchObject({ action: 'quiet', reason: 'no-hits' })
     expect((await run({ search: undefined })).outcome).toMatchObject({ action: 'quiet', reason: 'lane-off' })
-  })
-
-  it('refuses to append on a headless surface (protected-head guard)', async () => {
-    // 2026-10-09 incident: the tail append inside the pre-step waterfall became
-    // surface node 0 on a fresh session, and the loader rejected the whole log.
-    const headless = await run({ hits: [hit(1, 'PROJECT_RULES', 'fail closed')], surfaceNodes: 0 })
-    expect(headless.outcome).toMatchObject({ action: 'quiet', reason: 'surface-headless' })
-    expect(headless.stub.appended).toHaveLength(0)
-    expect(headless.kinds).toContain('search-hint')
-    // The guard is a correctness gate: it fires before the tuning signals.
-    expect((await run({ text: 'hi', surfaceNodes: 0 })).outcome).toMatchObject({ action: 'quiet', reason: 'surface-headless' })
-    // Any non-empty surface has the head as node 0 — the hint is safe again.
-    const resumed = await run({ hits: [hit(1, 'PROJECT_RULES', 'fail closed')], surfaceNodes: 7 })
-    expect(resumed.outcome.action).toBe('hinted')
-    expect(resumed.stub.appended).toHaveLength(1)
   })
 
   it('never lets a slow or failing search reach the turn', async () => {

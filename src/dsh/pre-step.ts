@@ -25,6 +25,7 @@ import {
   type PreStepEnterDecision,
   type PreStepPayload,
   type Session,
+  type UserMessage,
   enumerateSurfaceToolResults,
   requestContextOf,
   wireStrandedResults,
@@ -154,38 +155,33 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
     }
 
     // Auto-search hint (upstream `auto-search-runner`): one hint per user turn,
-    // built from the user's own words and appended to the tail. Awaited, because
-    // the hint has to ride the request it was computed for, but every path is
-    // fail-open and the search carries its own deadline.
+    // built from the user's own words. Awaited, because the hint has to ride
+    // the request it was computed for, but every path is fail-open and the
+    // search carries its own deadline.
     //
-    // The surface read below is the protected-head guard (2026-10-09 incident):
-    // this waterfall band runs BEFORE the host writes step/start and the first
-    // system/message, so on a fresh session's first step a tail append here took
-    // surface node 0 and the loader rejected the log on every replay (10/10
-    // corrupt logs had the hint as the early node). `surface.nodes.length === 0`
-    // means the head is not on the log yet — skip the hint this step; any
-    // non-empty surface has the head as node 0 and a tail append is safe. A host
-    // drift that removes the `surface` getter throws into the catch below, which
-    // also skips the hint.
+    // The hint does NOT append to the session here. This waterfall band runs
+    // BEFORE the host writes step/start and the first system/message, so a
+    // direct append on a fresh session's first step took surface node 0 and the
+    // loader rejected the log on replay (the 2026-10-09 protected-head
+    // incident). The hint instead travels inside the admitted batch: the
+    // appendix below joins `decision.messages`, which the host persists after
+    // its own system-prompt commits — the head always lands first, on every
+    // turn, and the hint still rides this request. First-half stopgap (skip
+    // while the surface was headless) retired by this carrier change.
+    let hintAppendix: UserMessage | undefined
     if (deps.searchHints !== undefined && liveBoolean(config.searchHint, true)) {
       try {
-        const surfaceNodes = payload.agent.session.surface.nodes.length
         const prompt = latestUserPromptText(messages)
         if (prompt !== undefined) {
-          await planSearchHint(
+          const outcome = await planSearchHint(
             {
               search: lane.searchForSession,
               tracker: deps.searchHints,
               ...journal === undefined ? {} : { journal },
             },
-            {
-              sessionId,
-              session: payload.agent.session as never,
-              text: prompt.text,
-              turnKey: prompt.turnKey,
-              surfaceNodes,
-            },
+            { sessionId, session: payload.agent.session, text: prompt.text, turnKey: prompt.turnKey },
           )
+          if (outcome.action === 'hinted') hintAppendix = outcome.message
         }
       } catch {
         // a hint is an optimisation; never fail the turn for it
@@ -510,7 +506,7 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
       ctx.logger.warn(`magic-context: management pass failed (continuing): ${detail}`)
     }
 
-    return { ...decision, messages }
+    return { ...decision, messages: hintAppendix === undefined ? messages : [...messages, hintAppendix] }
   }
 }
 
