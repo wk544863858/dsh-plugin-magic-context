@@ -250,16 +250,19 @@ if (dsh) {
       // 显式 update/archive 会合法地改动 importance/updated_at，这类行只校验不可变字段。
       let mutationByType = [];
       let mutatedIds = new Set();
+      let archivedIds = new Set();
       try {
         mutationByType = mc.prepare(`SELECT target_memory_id, mutation_type, COUNT(*) AS n FROM memory_mutation_log
           WHERE target_memory_id IN (${placeholders}) GROUP BY target_memory_id, mutation_type`).all(...ids);
         mutatedIds = new Set(mutationByType.map((m) => Number(m.target_memory_id)));
+        archivedIds = new Set(mutationByType.filter((m) => m.mutation_type === 'archive').map((m) => Number(m.target_memory_id)));
       } catch { /* 老库可能没有 memory_mutation_log */ }
       const rows = mc.prepare(`SELECT id, project_path, category, importance, scope, shareable, source_type, status,
         verification_status, seen_count, retrieval_count, created_at, updated_at, last_seen_at, expires_at
         FROM memories WHERE id IN (${placeholders})`).all(...ids);
       const bad = [];
       let touchedAfter = 0;
+      let archivedAfter = 0;
       for (const r of rows) {
         const problems = [];
         const wasUpdated = mutatedIds.has(Number(r.id));
@@ -268,11 +271,16 @@ if (dsh) {
         const deduped = Number(r.seen_count) > 1;
         const touched = wasUpdated || deduped;
         if (touched) touchedAfter++;
+        if (r.status === 'archived' && archivedIds.has(Number(r.id))) archivedAfter++;
         if (r.source_type !== 'historian') problems.push(`source_type=${r.source_type}`);
         if (!wasUpdated && Number(r.importance) !== 50) problems.push(`importance=${r.importance}`);
         if (r.scope !== 'project') problems.push(`scope=${r.scope}`);
         if (Number(r.shareable) !== 0) problems.push(`shareable=${r.shareable}`);
-        if (r.status !== 'active') problems.push(`status=${r.status}`);
+        // Maintenance verify (wrong→archiveMemory) is the designed lifecycle end
+        // for a promoted row; it is contract-clean only when the archive went
+        // through the contract lane and left its mutation-log entry — an
+        // out-of-contract archive still fails here.
+        if (r.status !== 'active' && !(r.status === 'archived' && archivedIds.has(Number(r.id)))) problems.push(`status=${r.status}`);
         // Promotion writes 'unverified' by contract; the maintenance sweep then
         // legitimately moves the row to 'verified' (§9). Both are the designed
         // lifecycle, so only a value outside it is a violation.
@@ -284,7 +292,7 @@ if (dsh) {
       }
       const missing = ids.length - rows.length;
       add(bad.length === 0 && missing === 0 ? 'PASS' : 'FAIL', 'promotion.contract',
-        `窗口内提升 ${ids.length} 行；库里命中 ${rows.length}；此后被更新/去重触碰 ${touchedAfter} 行（相应放宽 importance/时间戳校验）；字段偏差 ${bad.length}${missing ? `；缺失 ${missing}` : ''}${bad.length ? ': ' + bad.slice(0, 4).join(' ') : ''}`);
+        `窗口内提升 ${ids.length} 行；库里命中 ${rows.length}；此后被更新/去重触碰 ${touchedAfter} 行（相应放宽 importance/时间戳校验）；契约归档 ${archivedAfter} 行；字段偏差 ${bad.length}${missing ? `；缺失 ${missing}` : ''}${bad.length ? ': ' + bad.slice(0, 4).join(' ') : ''}`);
 
       // 纯追加：不得有 insert/delete 类变更日志；update 类必须与显式 ctx_memory update 调用对应
       const agg = new Map();
