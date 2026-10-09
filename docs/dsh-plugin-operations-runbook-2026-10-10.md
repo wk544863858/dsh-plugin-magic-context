@@ -168,6 +168,9 @@ node -e 'const {DatabaseSync}=require("node:sqlite"); const p=process.env.USERPR
 5. **向量覆盖率下降** ⇒ `memory.vectorBackfill` 默认 off；真库 dry-run 结论是
    parity 1.000000 PASS。开启前先确认主导空间：
    **只允许写 dominant `model_id`**，写错就是第三个空间（见 §7）。
+   本地模型的缓存在**适配器库同级的 `models/`**（`defaultEmbeddingCacheDir`），~87 MB；
+   若在**别处**（例如仓库根）看到 `models/`，说明某次运行用了相对适配器路径
+   （`dirname('.')`）——那是缓存副本，删掉只会让下次重新下载，不影响任何数据。
 6. **会话日志被判定损坏** ⇒ 见 PROJECT_RULES 的两条禁令（§7 第 3 条）：先确认该会话不在
    运行中，再修，且只修 loader 致命项。修复工具不接受"看起来不对"就改。
 

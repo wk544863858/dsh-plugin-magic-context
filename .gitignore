@@ -15,6 +15,15 @@ coverage/
 # Upstream Magic Context source, pulled for read-only analysis (never committed)
 .upstream/
 
+# The local embedder's model cache (~87 MB of onnx/tokenizer assets). The real
+# cache lives beside the adapter store under defaultEmbeddingCacheDir(); a copy
+# lands HERE whenever a run opens a relative adapter path (`dirname('.')`),
+# which is how 87 MB of duplicate weights appeared in the repo root on
+# 2026-10-10. Verified NOT recreated by `npm run gate` (mtime unchanged across a
+# full run) — but a single `git add -A` would have committed all of it.
+# Anchored, for the same reason `/lib/` is.
+/models/
+
 # Logs
 *.log
 npm-debug.log*
