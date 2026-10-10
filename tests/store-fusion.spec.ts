@@ -107,10 +107,8 @@ describe('schema v7: the memory_stats sidecar', () => {
       // Identities are isolated; narrow reads omit unknown ids.
       expect(stores.listMemoryStats('other')).toEqual([])
       expect(stores.listMemoryStats('proj', [1, 99]).map(row => row.memoryId)).toEqual([1])
-
-      // The adapter-local archive flips without touching any shared store.
-      stores.setMemoryLocalArchived('proj', 2, true, 140)
-      expect(stores.listMemoryStats('proj', [2])[0]?.localArchived).toBe(true)
+      // (setMemoryLocalArchived was deleted 2026-10-10: zero production callers
+      //  from birth — retirement is computed live at recall and in the report.)
 
       // The orphan sweep removes exactly the ids that left the known pool.
       expect(stores.pruneMemoryStats('proj', [1])).toBe(1)

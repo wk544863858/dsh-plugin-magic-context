@@ -27,7 +27,7 @@ import { homedir } from 'node:os'
 import { classifyHistorianFailure, describeCauses, extractQuotaReset, splitByClass } from './report-classify.mjs'
 import { DOMAIN_HIT_WINDOW_DAYS, extractDomainHits, extractQuotaSkips, formatDomainHitLine } from './report-hits.mjs'
 import {
-  baselineEventSummary, dilutionSummary, entryRate, formatDilutionLine, formatFoldLine, pendingFoldCounts,
+  baselineEventSummary, dilutionSummary, entryRate, formatDilutionLine, formatFoldLine, pendingFoldCounts, retiredSummary,
 } from './report-dilution.mjs'
 
 // ─────────────────────────── 常量 ───────────────────────────
@@ -1193,29 +1193,36 @@ function queryDilutionState(adapterDb, now) {
     const since14d = now - 14 * 86_400_000
     const baselineEvents = safeAll(adapterDb, "SELECT at, data FROM journal WHERE kind = 'baseline' AND at > ?", [since14d]) ?? []
     const statRows = tableExists(adapterDb, 'memory_stats')
-      ? safeAll(adapterDb, 'SELECT memory_id, hits, injections, last_injected_at, local_archived, updated_at FROM memory_stats') ?? []
+      ? safeAll(adapterDb, 'SELECT memory_id, hits, injections, last_hit_at, last_injected_at, local_archived, updated_at FROM memory_stats') ?? []
       : []
     const state = tableExists(adapterDb, 'baseline_state')
       ? safeGet(adapterDb, 'SELECT MAX(max_memory_id) AS m, MAX(max_memory_mutation_id) AS mut, MAX(profile_watermark) AS p FROM baseline_state') ?? {}
       : {}
-    // 契约库（只读，缺席即降级）：max id 对照与近 30 天新行。
+    // 契约库（只读，缺席即降级）：max id 对照、近 30 天新行、活跃池行（S(t)
+    // 退役现场计算的输入）、TTL 行数。一次打开全部取齐。
     const contractPath = join(homedir(), '.local', 'share', 'cortexkit', 'magic-context', 'context.db')
     let contract = {}
+    let poolRows = []
+    let recentIdList = []
     if (existsSync(contractPath)) {
       const cdb = new DatabaseSync(contractPath, { readOnly: true })
       try {
         const maxMem = safeGet(cdb, 'SELECT MAX(id) AS v FROM memories')
         const maxProfile = safeGet(cdb, 'SELECT MAX(id) AS v FROM user_memories')
         const maxMut = safeGet(cdb, 'SELECT MAX(id) AS v FROM memory_mutation_log')
-        const recentIds = safeGet(cdb, 'SELECT COUNT(*) AS n FROM memories WHERE created_at > ?', [now - 30 * 86_400_000])
         const activeCount = safeGet(cdb, "SELECT COUNT(*) AS n FROM memories WHERE status = 'active'")
+        const ttlRows = safeGet(cdb, 'SELECT COUNT(*) AS n FROM memories WHERE expires_at IS NOT NULL')
+        const ttlExpired = safeGet(cdb, 'SELECT COUNT(*) AS n FROM memories WHERE expires_at IS NOT NULL AND expires_at <= ?', [now])
         contract = {
           maxMemoryId: maxMem === null ? undefined : Number(maxMem.v),
           maxProfileId: maxProfile === null ? undefined : Number(maxProfile.v),
           maxMutationId: maxMut === null ? undefined : Number(maxMut.v),
-          recentCreated: recentIds === null ? 0 : Number(recentIds.n),
           activeCount: activeCount === null ? undefined : Number(activeCount.n),
+          ttl: ttlRows === null ? undefined : { rows: Number(ttlRows.n), expired: Number(ttlExpired?.n ?? 0) },
         }
+        poolRows = (safeAll(cdb, "SELECT id, category, importance FROM memories WHERE status IN ('active','permanent')") ?? [])
+          .map(row => ({ id: Number(row.id), category: row.category, importance: row.importance }))
+        recentIdList = (safeAll(cdb, 'SELECT id FROM memories WHERE created_at > ?', [now - 30 * 86_400_000]) ?? []).map(r => Number(r.id))
       } finally { cdb.close() }
     }
     const toNumber = (v) => (Number.isFinite(Number(v)) ? Number(v) : undefined)
@@ -1237,14 +1244,18 @@ function queryDilutionState(adapterDb, now) {
         stateMaxMutationId: toNumber(state.mut),
       }),
       dilution: dilutionSummary(statRows, { now }),
-      // 近 30 天新行的 id 列表上限在几千行级，直接取 id 数组算进入率。
-      entry: entryRate(statRows, (() => {
-        if (!existsSync(contractPath)) return []
-        const cdb = new DatabaseSync(contractPath, { readOnly: true })
-        try {
-          return (safeAll(cdb, 'SELECT id FROM memories WHERE created_at > ?', [now - 30 * 86_400_000]) ?? []).map(r => Number(r.id))
-        } finally { cdb.close() }
-      })()),
+      // S(t) 退役：与 recall 的 pick() 同一公式、同一 sidecar 数据，现场计算。
+      // （memory_id 全局唯一；同一共享行在两个身份下的 stats 罕见，Map 取后者，仪表精度可接受。）
+      retired: retiredSummary(poolRows, new Map(statRows.map(row => {
+        const stat = {
+          hits: Number(row.hits) || 0,
+          ...(Number(row.last_hit_at) > 0 ? { lastHitAt: Number(row.last_hit_at) } : {}),
+          localArchived: Number(row.local_archived) === 1,
+        }
+        return [Number(row.memory_id), stat]
+      })), { now }),
+      ttl: contract.ttl,
+      entry: entryRate(statRows, recentIdList),
       activeCount: contract.activeCount,
       contractAvailable: existsSync(contractPath),
     }
@@ -1852,7 +1863,7 @@ function renderText(payload) {
       if (du) {
         lines.push(`  基线/fold(14d): ${formatFoldLine(du.baseline, du.pending)}`)
         const activeSuffix = du.activeCount === undefined ? '' : `；契约活跃池 ${fmtInt(du.activeCount)}`
-        lines.push(`  稀释(30d)    : ${formatDilutionLine(du.dilution, du.entry)}${activeSuffix}`)
+        lines.push(`  稀释(30d)    : ${formatDilutionLine(du.dilution, du.entry, du.retired, du.ttl)}${activeSuffix}`)
       }
       const conf = ds.confirmations
       lines.push(

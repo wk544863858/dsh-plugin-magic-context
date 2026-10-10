@@ -255,8 +255,6 @@ export interface AdapterStores {
   recordMemoryEvent(projectIdentity: string, memoryId: number, kind: 'hit' | 'injection', now: number): void
   /** S(t) sidecar rows for one identity, narrowed to `memoryIds` when given. */
   listMemoryStats(projectIdentity: string, memoryIds?: readonly number[]): MemoryStatRow[]
-  /** Flip the adapter-local injection-retirement flag (never the shared store). */
-  setMemoryLocalArchived(projectIdentity: string, memoryId: number, archived: boolean, now: number): void
   /** Delete sidecar rows whose memory id is no longer known; returns rows removed. */
   pruneMemoryStats(projectIdentity: string, keepIds: readonly number[]): number
   /** Row count plus the oldest/newest timestamps. */
@@ -1509,13 +1507,10 @@ export function openStores(dataDir: string): AdapterStores {
       }
       return out
     },
-    setMemoryLocalArchived: (projectIdentity, memoryId, archived, now) => {
-      db.prepare(
-        'INSERT INTO memory_stats(project_identity, memory_id, local_archived, updated_at) VALUES(?, ?, ?, ?) '
-          + 'ON CONFLICT(project_identity, memory_id) DO UPDATE SET '
-          + 'local_archived = excluded.local_archived, updated_at = excluded.updated_at',
-      ).run(projectIdentity, memoryId, archived ? 1 : 0, now)
-    },
+    // NOTE: no setter for `local_archived` any more — it had zero production
+    // callers from birth (2026-10-10 TTL 排查定案), and S(t) retirement is
+    // computed live at recall (memory-bridge pick) and live in the report
+    // meter. The column + the read in pick() stay as a manual-retire hook.
     pruneMemoryStats: (projectIdentity, keepIds) => {
       // One statement: orphans are rows whose memory_id left the known pool.
       // keepIds is the project's whole visible pool (memoryLimit-bounded

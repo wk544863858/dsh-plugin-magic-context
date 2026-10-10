@@ -11,6 +11,7 @@ import {
   formatDilutionLine,
   formatFoldLine,
   pendingFoldCounts,
+  retiredSummary,
 } from '../scripts/report-dilution.mjs'
 import { classifyDeparted } from '../scripts/score-diff.mjs'
 import { DEFAULT_MEMORY_SCORING, scoreMemory } from '../src/core/memory-scoring.ts'
@@ -66,23 +67,44 @@ describe('dilutionSummary', () => {
     { memory_id: 1, hits: 10, injections: 100, last_injected_at: NOW - 1000, local_archived: 0, updated_at: NOW - 1000 },
     { memory_id: 2, hits: 0, injections: 50, last_injected_at: NOW - 40 * DAY, local_archived: 0, updated_at: NOW - DAY },
     { memory_id: 3, hits: 0, injections: 0, last_injected_at: null, local_archived: 0, updated_at: NOW - DAY },
-    { memory_id: 4, hits: 0, injections: 5, last_injected_at: NOW - 1000, local_archived: 1, updated_at: NOW - 2 * DAY },
   ]
 
-  it('counts active rows, ever/recent injections, top-N concentration, archive liveness', () => {
+  it('counts active rows, ever/recent injections, top-N concentration', () => {
     const d = dilutionSummary(rows, { now: NOW, topN: 2 })
-    expect(d.rows).toBe(3)                                   // archived row excluded from the pool view
+    expect(d.rows).toBe(3)
     expect(d.injectedEver).toBe(2)
     expect(d.injectedRecent).toBe(1)
     expect(d.totalInjections).toBe(150)
     expect(d.topSharePct).toBe(100)                           // (100+50)/150：前三名拿走全部
-    expect(d.archived).toBe(1)
-    expect(d.archivedRecent).toBe(1)
   })
 
   it('n/a concentration when nothing was ever injected', () => {
     const d = dilutionSummary([rows[2]], { now: NOW })
     expect(d.topSharePct).toBeNull()
+  })
+})
+
+describe('retiredSummary — 与 recall pick() 同一公式的现场计算', () => {
+  const config = { ...DEFAULT_MEMORY_SCORING, enabled: true }
+
+  it('retires decayed and localArchived rows, keeps immortal unhit rules in the pool', () => {
+    const statsById = new Map([
+      [1, { hits: 0, lastHitAt: NOW - 200 * DAY, localArchived: false }],  // USER_PREFERENCES 14d 半衰 → 衰减退役
+      [2, { hits: 0, localArchived: true }],                               // 手动退役钩子
+    ])
+    const pool = [
+      { id: 1, category: 'USER_PREFERENCES', importance: 50 },
+      { id: 2, category: 'PROJECT_RULES', importance: 80 },
+      { id: 3, category: 'PROJECT_RULES', importance: 80 },                 // 永生类别且无衰减 → 在池
+    ]
+    const r = retiredSummary(pool, statsById, { config, now: NOW })
+    expect(r).toEqual({ pool: 3, retired: 2 })
+  })
+
+  it('empty pool and missing stats degrade to zero retirement over the pool size', () => {
+    expect(retiredSummary([], new Map(), { config, now: NOW })).toEqual({ pool: 0, retired: 0 })
+    expect(retiredSummary([{ id: 9, category: 'ARCHITECTURE', importance: 70 }], new Map(), { config, now: NOW }))
+      .toEqual({ pool: 1, retired: 0 })
   })
 })
 
@@ -112,8 +134,14 @@ describe('format lines', () => {
     const d = formatDilutionLine(
       dilutionSummary([], { now: NOW }),
       entryRate([], [1, 2]),
+      retiredSummary([{ id: 1, category: 'USER_PREFERENCES', importance: 50 }],
+        new Map([[1, { hits: 0, lastHitAt: NOW - 200 * DAY, localArchived: false }]]),
+        { config: { ...DEFAULT_MEMORY_SCORING, enabled: true }, now: NOW }),
+      { rows: 0, expired: 0 },
     )
     expect(d).toContain('top40 集中度 n/a')
+    expect(d).toContain('S(t) 退役 1/1')
+    expect(d).toContain('TTL 行 0（到期 0')
     expect(d).toContain('新行进入率 0%（0/2）')
   })
 })

@@ -1,14 +1,22 @@
 /**
  * 稀释与 fold 仪表的纯聚合（2026-10-10，架构挑战报告风险 1/2 的"先可测"落地）。
  *
- * 两个风险（docs/memory-architecture-challenge-2026-10-10.md §3）：
+ * 两个风险（docs/memory-architecture-challenge-2026-10-10.md §C3/C5）：
  * ① 稀释——固定 8000 tok / 40 行窗口下，库增长劣化的是选择质量不是上下文大小；
- * ② fold 峰值——m[1] 有 25% 硬顶，真正的问题是"截断丢信息 + fold 不及时"。
+ * ② fold 峰值——m[1] 有 25% 硬顶，真正的问题是"截断丢信息 + fold 不及时"
+ *    （实测不存在：刷新 382 次/14d，泄压阀按 YAGNI 不做）。
+ *
+ * 退役口径（2026-10-10 TTL 排查定案）：契约 TTL 阀门工作正常但进料为零——
+ * CATEGORY_DEFAULT_TTL 只管 WORKFLOW_RULES/KNOWN_ISSUES 两个 legacy 类别，
+ * 真库 1399 行里这两个类别为 0，所以 expired 恒 0 是数据现实不是缺陷。
+ * sidecar 的 local_archived 从出生起就没有写者（setter 已删）——真正的退役
+ * 机制是 S(t) 在 recall 现场计算（score < archiveThreshold 即不注入），
+ * 仪表按同一公式现场重算，单一事实来源。
  *
  * 本模块只做纯聚合；SQL 装载在 mc-report.mjs（tolerant，契约库缺席时降级）。
- * 数据源全部现成：journal kind='baseline'（fold 事件）、memory_stats sidecar
- * （注入/归档活性）、baseline_state 水位（未折叠增量）、契约库 max(id)。
  */
+
+import { DEFAULT_MEMORY_SCORING, scoreMemory } from '../src/core/memory-scoring.ts'
 
 /** 稀释指标的新近窗口：30 天。 */
 export const DILUTION_RECENT_MS = 30 * 86_400_000
@@ -73,7 +81,7 @@ export function pendingFoldCounts({
 }
 
 /**
- * 稀释核心指标（全部来自 memory_stats sidecar，不碰契约库）。
+ * 稀释核心指标（来自 memory_stats sidecar，不碰契约库）。
  *
  * @param {Array<{memory_id: number, hits: number, injections: number, last_injected_at: number|null, local_archived: 0|1, updated_at: number}>} statRows
  */
@@ -91,20 +99,39 @@ export function dilutionSummary(statRows, { now, recentMs = DILUTION_RECENT_MS, 
   const byInjections = [...rows].sort((left, right) => (Number(right.injections) || 0) - (Number(left.injections) || 0))
   const topRows = byInjections.slice(0, topN)
   const topInjections = topRows.reduce((sum, row) => sum + (Number(row.injections) || 0), 0)
-  const archived = statRows.filter(row => Number(row.local_archived) === 1)
-  let archivedRecent = 0
-  for (const row of archived) {
-    if (Number.isFinite(row.updated_at) && now - Number(row.updated_at) < recentMs) archivedRecent += 1
-  }
   return {
     rows: rows.length,
     injectedEver,
     injectedRecent,
     totalInjections,
     topSharePct: totalInjections > 0 ? Math.round((topInjections / totalInjections) * 100) : null,
-    archived: archived.length,
-    archivedRecent,
   }
+}
+
+/**
+ * S(t) 退役的现场计算（与 memory-bridge pick() 同一公式、同一 sidecar 数据：
+ * localArchived 或 score < archiveThreshold 的行不再注入、仍可检索）。
+ *
+ * @param {Array<{id: number, category: string, importance: number|null}>} poolRows 契约库活跃池
+ * @param {Map<number, {hits: number, lastHitAt?: number, localArchived: boolean}>} statsById
+ */
+export function retiredSummary(poolRows, statsById, { config = DEFAULT_MEMORY_SCORING, now } = {}) {
+  let retired = 0
+  for (const row of poolRows) {
+    const stat = statsById.get(Number(row.id))
+    const score = scoreMemory(
+      {
+        importance: Number(row.importance),
+        category: String(row.category),
+        hits: stat?.hits ?? 0,
+        ...(stat?.lastHitAt === undefined ? {} : { lastHitAt: stat.lastHitAt }),
+      },
+      config,
+      now,
+    )
+    if (stat?.localArchived === true || score < config.archiveThreshold) retired += 1
+  }
+  return { pool: poolRows.length, retired }
 }
 
 /**
@@ -143,12 +170,13 @@ export function formatFoldLine(summary, pending) {
   return parts.join('；')
 }
 
-export function formatDilutionLine(dilution, entry) {
+export function formatDilutionLine(dilution, entry, retired, ttl) {
   const parts = [
     `注入在册 ${dilution.rows} 行（注入过 ${dilution.injectedEver} / 近30d ${dilution.injectedRecent}）`,
     dilution.topSharePct === null ? 'top40 集中度 n/a' : `top40 集中度 ${dilution.topSharePct}%`,
   ]
+  if (retired.pool > 0) parts.push(`S(t) 退役 ${retired.retired}/${retired.pool}（现场计算，仍可检索）`)
+  if (ttl !== undefined) parts.push(`TTL 行 ${ttl.rows}（到期 ${ttl.expired}；只管 WORKFLOW_RULES/KNOWN_ISSUES 两类）`)
   if (entry.ratePct !== null) parts.push(`近30d 新行进入率 ${entry.ratePct}%（${entry.entered}/${entry.created}）`)
-  parts.push(`归档 ${dilution.archived}（近30d +${dilution.archivedRecent}）`)
   return parts.join('；')
 }
