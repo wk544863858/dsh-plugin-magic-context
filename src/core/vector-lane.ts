@@ -194,11 +194,15 @@ export function planBackfill(contractDbPath: string, options: { limit?: number }
     }
     const memoryColumns = columnNames(db, 'memories')
     const activeFilter = memoryColumns.has('status') ? "AND m.status = 'active'" : ''
+    // Newest first (2026-10-10). The rows a session is most likely to search for
+    // are the ones written most recently, so the lane closes the frontier gap
+    // before it grinds through the older churn holes. The order is a policy:
+    // tests/vector-lane.spec.ts pins it, and flipping it back is the rollback.
     const missing = db.prepare(
       `SELECT m.id AS id FROM memories m
         WHERE NOT EXISTS (SELECT 1 FROM memory_embeddings e WHERE e.memory_id = m.id AND e.model_id = ?)
         ${activeFilter}
-        ORDER BY m.id`,
+        ORDER BY m.id DESC`,
     ).all(dominant) as unknown as Array<{ id: number }>
     const ids = missing.map(row => Number(row.id))
     return {

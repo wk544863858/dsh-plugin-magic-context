@@ -166,8 +166,30 @@ describe('planning the backfill', () => {
     // id 3 has an embedding, but only in the space a reader will not use; id 4
     // has none at all. Both need a row in the dominant space. The archived id 5
     // does not.
-    expect(plan.candidates).toEqual([3, 4])
+    expect(plan.candidates).toEqual([4, 3])
     expect(plan.total).toBe(2)
+  })
+
+  it('plans the newest memories first, so the working set is searchable before the backlog', () => {
+    // A reader searches for what was written recently; the old holes are churn
+    // left behind. Ordering is therefore a policy, not an implementation detail.
+    const plan = planBackfill(makeStore([
+      { id: 1 },
+      { id: 2 },
+      { id: 3, spaces: [MODEL_B] },
+      { id: 4, spaces: [MODEL_A] },
+      { id: 5 },
+    ]))!
+    expect(plan.candidates).toEqual([5, 3, 2, 1])
+
+    // Negative control: had the row with the highest id already been embedded in
+    // the dominant space it would NOT be first — the boundary is "missing in the
+    // dominant space", not "newest id wins".
+    const withNewestEmbedded = planBackfill(makeStore([
+      { id: 1 },
+      { id: 5, spaces: [MODEL_A] },
+    ]))!
+    expect(withNewestEmbedded.candidates).toEqual([1])
   })
 
   it('bounds the candidate list without hiding the total', () => {
@@ -175,7 +197,7 @@ describe('planning the backfill', () => {
     seeds.push({ id: 11, spaces: [] as const })
     seeds.push({ id: 12, spaces: [] as const })
     const plan = planBackfill(makeStore(seeds), { limit: 1 })!
-    expect(plan.candidates).toEqual([11])
+    expect(plan.candidates).toEqual([12])
     expect(plan.total).toBe(2)
   })
 
