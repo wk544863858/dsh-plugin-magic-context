@@ -29,6 +29,7 @@ import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { MockAdapter, textResponse } from './helpers/mock-adapter.ts'
 import mcDshPlugin from '../src/index.ts'
 import { resolveIdentitySpec } from '../src/core/memory-bridge.ts'
+import { ROUTE_QUOTA_HOLD_MS } from '../src/core/route-health.ts'
 import { makeMemoryDb as makeBareMemoryDb } from './helpers/memory-db'
 
 const tempDirs: string[] = []
@@ -79,15 +80,19 @@ interface Booted {
 }
 
 /** Boot the real plugin with fake timers already installed, so the 60s first
- * sweep and the interval are ours to drive. */
+ * sweep and the interval are ours to drive. `route` pins maintenance's route;
+ * pass the session's own route to exercise the quota-skip rule (which only ever
+ * suppresses the main conversation's exact route). */
 async function boot(options: {
   memoryDbPath: string
   cwd: string
   maintenance: boolean
+  route?: { provider: string; model: string }
 }): Promise<Booted> {
   const dataDir = tempDir('mc-maint-data-')
+  const route = options.route ?? VERIFY_ROUTE
   const maintenance = options.maintenance
-    ? { maintenance: { intervalMs: 60_000, verifyProvider: VERIFY_ROUTE.provider, verifyModel: VERIFY_ROUTE.model } }
+    ? { maintenance: { intervalMs: 60_000, verifyProvider: route.provider, verifyModel: route.model } }
     : {}
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
@@ -221,6 +226,67 @@ describe('maintenance sweep wiring (real plugin, fake clock)', () => {
       // writes nothing (the shape that made the live failure silent).
       await vi.advanceTimersByTimeAsync(60_000)
       expect(maintenanceRows(journalPath)).toHaveLength(0)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  /**
+   * The quota hold, end to end on the real wiring. `route-health.spec.ts` proves
+   * the arithmetic; this proves the CHAIN: real traffic's `agent/request-error`
+   * reaches the observation, the observation suppresses the tick's LLM steps,
+   * and the lane re-opens by itself once the hold expires. Until now only the
+   * arithmetic and the reporting side had tests — the wiring between them is
+   * where the live behaviour actually lives.
+   */
+  it('holds the LLM steps while the tick route is quota-exhausted, and re-opens after the hold', async () => {
+    vi.useFakeTimers()
+    const cwd = tempDir('mc-maint-cwd4-')
+    const identity = resolveIdentitySpec(cwd)!
+    const store = makeMemoryDb(identity)
+    // The tick is pinned to the SESSION's own route on purpose: the skip rule
+    // only ever suppresses the main conversation's exact route (a provider-keyed
+    // skip once stalled a live sibling model).
+    const { ctx, agent, journalPath } = await boot({
+      memoryDbPath: store.path,
+      cwd,
+      maintenance: true,
+      route: { provider: 'mock', model: 'mock' },
+    })
+    const adapter = new MockAdapter([
+      textResponse('quiet answer'),
+      textResponse('second quiet answer'),
+      textResponse(JSON.stringify({ verdicts: [{ id: store.id, verdict: 'verified' }] })),
+    ])
+    ctx.llm.registerAdapter(['mock'], adapter)
+    try {
+      // TWO quiet turns: the session's request context is only readable once a
+      // request has been logged, and pre-step is what notes the route — so the
+      // first turn is what makes the route known, the second what records it.
+      await driveTurn(ctx, agent, 'one small question')
+      await driveTurn(ctx, agent, 'and one more')
+      expect(adapter.requests).toHaveLength(2)
+
+      // Real traffic reports the route exhausted. This event is the ONLY way an
+      // observation enters, so feeding it here is what makes the test live.
+      await ctx.waterfall(
+        'agent/request-error',
+        { provider: 'mock', failure: { code: 'QUOTA', message: 'insufficient quota' } },
+        async () => ({ kind: 'passthrough' }),
+      )
+
+      // First tick inside the hold: one info line, and NOT ONE model request.
+      await vi.advanceTimersByTimeAsync(60_000)
+      const held = maintenanceRows(journalPath)
+      expect(held.some(row => row.summary.startsWith('LLM steps skipped: mock/mock observed quota-exhausted'))).toBe(true)
+      expect(adapter.requests).toHaveLength(2)
+      expect(rowSnapshot(store.path, store.id)).toMatchObject({ verificationStatus: 'unverified' })
+
+      // past the hold the lane re-opens with no restart and no durable state
+      await vi.advanceTimersByTimeAsync(ROUTE_QUOTA_HOLD_MS)
+      expect(adapter.requests).toHaveLength(3)
+      expect(maintenanceRows(journalPath).some(row => row.data.verified === 1)).toBe(true)
+      expect(rowSnapshot(store.path, store.id)).toMatchObject({ verificationStatus: 'verified' })
     } finally {
       await ctx.fiber.dispose()
     }
