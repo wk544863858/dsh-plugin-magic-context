@@ -101,6 +101,7 @@ const PHASE_D = [
   'tests/domain-checks.spec.ts',
   'tests/cli-flags.spec.ts',
   'tests/route-health.spec.ts',
+  'tests/report-hits.spec.ts',
   'tests/strip-drill.spec.ts',
 ]
 

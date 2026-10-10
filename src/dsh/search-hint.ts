@@ -31,8 +31,8 @@
  *   and the transcript renders the same collapsed `source.kind` row as before.
  * - **FTS-only search.** `lane.searchForSession` skips the embedding request, so a
  *   cold local model cannot delay the turn the hint is meant to inform. The
- *   stored-vector lane remains available to `ctx_search`, where the agent asked
- *   for it.
+ *   stored-vector lane remains available to `ctx_memory` (`action:"search"`),
+ *   where the agent asked for it.
  *
  * Fail-open everywhere: a hint is an optimisation, and no turn may fail over it.
  */
@@ -78,8 +78,8 @@ export function buildSearchHint(
   const header = lines.length === 1
     ? 'Your memory may contain 1 related fragment:'
     : `Your memory may contain ${String(lines.length)} related fragments:`
-  const footer = 'If the fragments above seem relevant to the current request, you may run ctx_search '
-    + 'to retrieve full context. Otherwise ignore.'
+  const footer = 'If the fragments above seem relevant to the current request, you may run ctx_memory '
+    + 'with action "search" to retrieve full context. Otherwise ignore.'
   const body = [header, ...lines.map(line => `- ${line}`), footer].join('\n')
   const wrapped = `<ctx-search-hint>\n${body}\n</ctx-search-hint>`
   if (wrapped.length <= HINT_MAX_CHARS) return wrapped
@@ -161,7 +161,7 @@ export function buildHintMessage(hint: string, hits: number): UserMessage {
     role: 'user',
     content: [{ type: 'text', text: hint }],
     source: magicContextSource(
-      `Magic Context · ${String(hits)} possible memory match(es) — ctx_search for full context`,
+      `Magic Context · ${String(hits)} possible memory match(es) — ctx_memory (action "search") for full context`,
     ),
   } as unknown as UserMessage
 }

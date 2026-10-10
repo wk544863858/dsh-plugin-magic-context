@@ -49,7 +49,7 @@ describe('buildSearchHint', () => {
     expect(hint).toContain('<ctx-search-hint>')
     expect(hint).toContain('Your memory may contain 2 related fragments:')
     expect(hint).toContain('- [PROJECT_RULES] tenant checks fail closed')
-    expect(hint).toContain('run ctx_search')
+    expect(hint).toContain('run ctx_memory')
     expect(hint?.endsWith('</ctx-search-hint>')).toBe(true)
   })
 

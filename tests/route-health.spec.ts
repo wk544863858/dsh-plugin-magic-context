@@ -16,6 +16,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   isQuotaExhaustedDetail,
+  quotaSkipSince,
   resolveMaintenanceRoute,
   ROUTE_QUOTA_HOLD_MS,
   RouteHealth,
@@ -82,6 +83,37 @@ describe('RouteHealth', () => {
     health.observeQuotaFailure('q', T0 - 5 * ROUTE_QUOTA_HOLD_MS)
     expect(health.snapshot(T0 + 1).has('p')).toBe(true)
     expect(health.snapshot(T0 + 1).has('q')).toBe(false)
+  })
+})
+
+describe('quotaSkipSince — the skip only ever hits the main conversation\'s own route', () => {
+  const glmFlash = { provider: 'provider-a', model: 'model-a' }
+  const deepseek = { provider: 'provider-a', model: 'model-b' }
+
+  it('skips when the tick is about to ride the exact route whose provider failed', () => {
+    const health = new RouteHealth()
+    health.observeQuotaFailure('provider-a', T0)
+    expect(quotaSkipSince(health, glmFlash, glmFlash, T0 + 5 * 60_000)).toBe(5 * 60_000)
+  })
+
+  it('never skips a pinned divergent route — the 2026-10-09 live shape', () => {
+    // model-a was quota-dead while model-b verified normally
+    // under the SAME provider. A provider-keyed skip would have stalled the
+    // live route; the exact-route rule must not.
+    const health = new RouteHealth()
+    health.observeQuotaFailure('provider-a', T0)
+    expect(quotaSkipSince(health, deepseek, glmFlash, T0 + 5 * 60_000)).toBeUndefined()
+    // Same guard in the other direction: main on the live model, pin on the dead one.
+    expect(quotaSkipSince(health, glmFlash, deepseek, T0 + 5 * 60_000)).toBeUndefined()
+  })
+
+  it('does not skip without an observation, an expired one, or a route at all', () => {
+    const health = new RouteHealth()
+    expect(quotaSkipSince(health, glmFlash, glmFlash, T0)).toBeUndefined()
+    health.observeQuotaFailure('provider-a', T0)
+    expect(quotaSkipSince(health, glmFlash, glmFlash, T0 + ROUTE_QUOTA_HOLD_MS)).toBeUndefined()
+    expect(quotaSkipSince(health, undefined, glmFlash, T0 + 1_000)).toBeUndefined()
+    expect(quotaSkipSince(health, glmFlash, undefined, T0 + 1_000)).toBeUndefined()
   })
 })
 

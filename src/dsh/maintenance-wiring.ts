@@ -23,7 +23,7 @@ import type { Journal } from '../core/journal.ts'
 import { runMaintenanceTick, type MaintenanceLlm } from '../core/maintenance.ts'
 import { PROFILE_REVIEW_META_KEY, runProfileReview, type ProfileReviewLlm, type ProfileReviewOutcome } from '../core/profile-review.ts'
 import type { VectorBackfillOutcome } from '../core/vector-backfill.ts'
-import { resolveMaintenanceRoute, ROUTE_QUOTA_HOLD_MS, RouteHealth, type RouteChoice } from '../core/route-health.ts'
+import { quotaSkipSince, resolveMaintenanceRoute, ROUTE_QUOTA_HOLD_MS, RouteHealth, type RouteChoice } from '../core/route-health.ts'
 
 /** WP11 default batch: how many vectors one maintenance tick may add. */
 export const VECTOR_BACKFILL_DEFAULT_LIMIT = 24
@@ -106,9 +106,12 @@ export function wireMaintenance(input: {
       const evidenceMaxRows = liveNumber(config.maintenance?.evidenceVerify?.maxRows, 4)
       // The route every LLM step of this tick uses, resolved ONCE: the explicit
       // pin wins (rollback lever), otherwise the main conversation's latest
-      // route. A quota-exhausted observation inside the hold skips the LLM steps
-      // entirely — one info line, zero requests — instead of joining the main
-      // conversation's failure noise. The observation is volatile and owned by
+      // route. A quota observation skips the LLM steps ONLY when the tick is
+      // about to ride the main conversation's own exact route — the event
+      // carries a provider but no model, and quotas are route-scoped, so a
+      // provider-keyed skip would stall a live sibling model (2026-10-09:
+      // model-a exhausted while model-b verified normally).
+      // One info line, zero requests; the observation is volatile and owned by
       // real traffic, so an externally reset quota re-opens the lane within one
       // hold at the cost of one cheap probe.
       const pinnedProvider = liveString(config.maintenance?.verifyProvider, '')
@@ -117,7 +120,7 @@ export function wireMaintenance(input: {
         pinnedProvider.length > 0 && pinnedModel.length > 0 ? { provider: pinnedProvider, model: pinnedModel } : undefined,
         lastSessionRoute(),
       )
-      const tickQuotaAge = tickRoute === undefined ? undefined : routeHealth.quotaSince(tickRoute.provider, Date.now())
+      const tickQuotaAge = quotaSkipSince(routeHealth, tickRoute, lastSessionRoute(), Date.now())
       if (tickRoute !== undefined && tickQuotaAge !== undefined) {
         journal.info(
           'maintenance',

@@ -25,6 +25,7 @@ import { existsSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { classifyHistorianFailure, describeCauses, extractQuotaReset, splitByClass } from './report-classify.mjs'
+import { DOMAIN_HIT_WINDOW_DAYS, extractDomainHits, extractQuotaSkips, formatDomainHitLine } from './report-hits.mjs'
 
 // ─────────────────────────── 常量 ───────────────────────────
 
@@ -1134,6 +1135,40 @@ function queryDomainStats(db) {
   }
 }
 
+// 域命中（C-7 产品判据埋点）与配额跳过（route-health 可见性）。纯聚合在
+// report-hits.mjs（有独立用例）；这里只做 14 天窗口的 SQL 装载，沿用
+// queryVectorLaneState 的直查先例。data 是数据不是契约，解析全部容错。
+function queryDomainHits(db, now) {
+  const tableExists = (name) => {
+    try {
+      return db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?").get(name) !== undefined
+    } catch { return false }
+  }
+  if (!tableExists('journal')) return null
+  try {
+    const since = now - DOMAIN_HIT_WINDOW_DAYS * 86_400_000
+    const recalls = db
+      .prepare("SELECT at, session_id, data FROM journal WHERE kind = 'memory-recall' AND at > ?")
+      .all(since)
+      .map(row => {
+        let data = {}
+        try { data = JSON.parse(row.data ?? '{}') } catch { /* payload is data, not a contract */ }
+        return { at: row.at, sessionId: row.session_id, data }
+      })
+    const skips = db
+      .prepare("SELECT at, summary, data FROM journal WHERE kind = 'maintenance' AND at > ?")
+      .all(since)
+      .map(row => {
+        let data = {}
+        try { data = JSON.parse(row.data ?? '{}') } catch { /* payload is data, not a contract */ }
+        return { at: row.at, summary: row.summary, data }
+      })
+    return { hits: extractDomainHits(recalls), quotaSkips: extractQuotaSkips(skips) }
+  } catch {
+    return null
+  }
+}
+
 // 语义（向量）车道的激活状态。以前完全不可观测：闸门结果只走 ctx.logger，而 ctx.logger
 // 不写 journal——所以"车道是活着、退化还是死了"从库里看不出来。现在每次进程记录一条
 // vector-lane，这里读最后一条。
@@ -1720,6 +1755,15 @@ function renderText(payload) {
       lines.push(
         `  全局域        : ${fmtInt(ds.domains.length)} 个（启用 ${fmtInt(ds.enabledDomains)}）— ${domainText}`,
       )
+      const dh = metrics.domainHits
+      if (dh) {
+        lines.push(`  域命中(14d)   : ${formatDomainHitLine(dh.hits, { now })}`)
+        if (dh.quotaSkips.count > 0) {
+          lines.push(
+            `  配额跳过(14d) : ${fmtInt(dh.quotaSkips.count)} 次（${dh.quotaSkips.routes.join('、') || '路线未记录'}；最近 ${fmtLocal(dh.quotaSkips.lastAt)}）— 正常行为，额度恢复或换路线后 ≤45m 自动重开`,
+          )
+        }
+      }
       const conf = ds.confirmations
       lines.push(
         `  画像确认队列  : 待确认 ${fmtInt(conf.pending)}（approved ${fmtInt(conf.approved)} / rejected ${fmtInt(conf.rejected)}）`,
@@ -1877,6 +1921,7 @@ function buildReport(opts) {
       metrics.scoringStats = queryScoringStats(db)
       metrics.domainStats = queryDomainStats(db)
       metrics.vectorLane = queryVectorLaneState(db)
+      metrics.domainHits = queryDomainHits(db, now)
       if (windowInfo.atMissing) windowInfo.error = windowInfo.error ?? 'journal 缺少 at 列'
       if (windowInfo.skippedNoAt > 0) notes.push(`有 ${windowInfo.skippedNoAt} 条 journal 行的 at 为空或非法，已跳过。`)
     } catch (error) {

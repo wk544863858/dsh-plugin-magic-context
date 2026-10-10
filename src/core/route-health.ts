@@ -79,6 +79,30 @@ export class RouteHealth {
 }
 
 /**
+ * The skip decision the maintenance tick actually uses — deliberately narrower
+ * than the observation. The event carries a provider but no model, while a
+ * quota is route-scoped (provider/model): the live 2026-10-09 incident had
+ * provider-a/model-a exhausted while provider-a/model-b
+ * verified normally, and a provider-keyed skip would have suppressed the live
+ * route. So an observation may only suppress the main conversation's OWN
+ * exact route: the tick route must equal the last session route in provider
+ * AND model, and the observation must be for that provider. A pinned route
+ * that diverges from the main conversation never skips — one cheap rejected
+ * request beats silently stalling a working route.
+ */
+export function quotaSkipSince(
+  health: RouteHealth,
+  tickRoute: RouteChoice | undefined,
+  lastSessionRoute: RouteChoice | undefined,
+  now: number,
+  holdMs: number = ROUTE_QUOTA_HOLD_MS,
+): number | undefined {
+  if (tickRoute === undefined || lastSessionRoute === undefined) return undefined
+  if (tickRoute.provider !== lastSessionRoute.provider || tickRoute.model !== lastSessionRoute.model) return undefined
+  return health.quotaSince(tickRoute.provider, now, holdMs)
+}
+
+/**
  * The maintenance lane's route, resolved once per tick.
  *
  * Priority is explicit over following: a pinned `maintenance.verifyProvider`
