@@ -92,15 +92,18 @@ acceptance 的 `domain.*` 是**域车道的存活性检查**（7 条，判定逻
 |---|---|---|
 | 域 cap 打满 | doctor 的 `cap N` 与 `mc-report` 的域行数 | **强制整理**：合并同义条目、退役失效条目（`/ctx-global` 成员/候选面 + `/ctx-profile retire <id> --yes`）。不整理 ⇒ 域退化为噪声池，cap 会拒收新条目 |
 | 确认队列积压 | acceptance `domain.confirmation-backlog`（>5 条 WARN） | 清队列；**约束型内容未确认就不会生效**，堆积等于白采集 |
-| 候选积压 | acceptance `domain.candidate-backlog`（>10 条 WARN） | 复核或拒绝；`promote` 只造候选，不发布 |
+| 候选积压 | acceptance `domain.candidate-backlog`（>10 条 WARN = 提前提醒） | 复核或拒绝；`promote` 只造候选，不发布 |
+| 候选越红线 | acceptance `domain.candidate-redline`（**>50 条 且 最老 >7 天 ⇒ FAIL**，设计 v2 §7） | **必须处理**：复核/拒绝，或退役该域。判据是"深**且**旧"，只满足一条不报 |
 | 契约冻结 FAIL | `mc-contract-freeze.mjs verify` | **停止写入**，先定位漂移来源 |
 | historian 失败率异常 | `mc-report` 的成因行（带"至 MM-DD"） | 看成因：`配额`=某条路线 7 天上限（换路线或等）；`截断`=容量；`invalid-output`=输出形状（已加配平诊断） |
 | 维护 tick 跳过 LLM | journal `maintenance` 行 `LLM steps skipped: <route> observed quota-exhausted Nm ago (hold 45m)` | **无需动作**：维护车道跟随主对话路线（2026-10-10 起未钉 verifyProvider 时）；该路线额度恢复或主对话换路线后，≤45 分钟自动重开。观察是易失的（不落盘），外部重置额度不会被旧状态困住 |
 
-> ⚠️ **两套阈值不同源，这是个待裁决项**：代码里的 WARN 阈值是"提前提醒"
-> （确认 5 条 / 候选 10 条，`scripts/domain-checks.mjs` 的 `BACKLOG_WARN`），
-> 设计 v2 §7 写的红线是"候选 >50 且 >7 天未处理"。两者不冲突（一个早提醒、一个必处理），
-> 但**必须知道自己看的是哪一个**。是否统一见 §9。
+> ✅ **两层阈值已统一到一份常量，且都在 acceptance 里**（2026-10-10 定案）：`scripts/domain-checks.mjs`
+> 的 `BACKLOG_THRESHOLDS` = `early`（确认 5 条 / 候选 10 条 ⇒ `domain.confirmation-backlog` /
+> `domain.candidate-backlog` 报 WARN，提前提醒）+ `redLine`（候选 >50 条 **且** 最老 >7 天未处理
+> ⇒ `domain.candidate-redline` 报 **FAIL**，即设计 v2 §7 的必处理线）。两者不冲突：早提醒先响，红线只在
+> "深且旧"时响 —— 深但不旧、旧但不深、恰好等于阈值三种情况都有负向对照
+> （`tests/domain-checks.spec.ts`）。读报告只需认 id，不必再猜自己看的是哪一层。
 
 ---
 
@@ -211,7 +214,9 @@ npm run phase d          # 含 domain-checks / report-classify / strip-drill / �
 
 ## 9. 未决
 
-1. 队列 WARN 阈值（代码 5/10）与设计 §7 红线（候选 >50 且 >7 天）是否统一。
+1. ~~队列 WARN 阈值（代码 5/10）与设计 §7 红线（候选 >50 且 >7 天）是否统一。~~
+   **已定案 2026-10-10**：统一为一份常量 `BACKLOG_THRESHOLDS`（`early` + `redLine`），两层都进 acceptance，
+   红线判据是"深且旧"双条件；见 §3 阈值注。
 2. 每次接受的 `writer` 与 `profileWriter` 是两个句柄，但排队/发布共用一条 maintenance tick：
    域多起来后是否需要按域限流。
 3. `mc-report` 的域命中目前每个域一行；第三个域上线后需要"按域 × 按项目"的二维视图。

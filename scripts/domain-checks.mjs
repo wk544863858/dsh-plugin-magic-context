@@ -44,12 +44,14 @@ function count(db, table, where = '') {
  * This reads the **adapter** store only. The profile pool lives in the contract
  * store, which is a different database — see `readProfilePool`.
  */
-export function readDomainSummary(db) {
+export function readDomainSummary(db, now = Date.now()) {
   const summary = {
     present: hasTable(db, 'domains'),
     domains: [],
     pendingConfirmations: 0,
     pendingCandidates: 0,
+    /** Age of the OLDEST pending candidate in days; null when the queue is empty. */
+    pendingCandidateAgeDays: null,
   }
   if (!summary.present) return summary
   try {
@@ -74,6 +76,19 @@ export function readDomainSummary(db) {
   }
   summary.pendingConfirmations = count(db, 'profile_confirmations', "state='pending'")
   summary.pendingCandidates = count(db, 'global_candidates', "state='pending'")
+  if (summary.pendingCandidates > 0) {
+    // `created_at` is when the candidate was first seen (the upsert refreshes
+    // `updated_at`, never this one), so ">N days unhandled" is an age, not a
+    // last-touch. An unreadable timestamp yields null, which the red line reads
+    // as "not proven old" — a failed read must never manufacture an alarm.
+    try {
+      const row = db.prepare("SELECT MIN(created_at) AS oldest FROM global_candidates WHERE state='pending'").get()
+      const oldest = Number(row?.oldest ?? 0)
+      if (oldest > 0) summary.pendingCandidateAgeDays = Math.floor((now - oldest) / 86_400_000)
+    } catch {
+      summary.pendingCandidateAgeDays = null
+    }
+  }
   return summary
 }
 
@@ -133,8 +148,21 @@ export function doctorDomainFindings(db) {
   return findings
 }
 
-/** Backlog thresholds: a queue this deep means nobody is draining it. */
-export const BACKLOG_WARN = { confirmations: 5, candidates: 10 }
+/**
+ * Backlog thresholds — ONE source for both tiers, because two constants that
+ * disagree is exactly how a reader stops knowing which line they are looking at.
+ *
+ * - `early`: a queue this deep means nobody is draining it. A nudge, not a verdict.
+ * - `redLine`: the design's own trigger (platform-takeover §7) — candidates past
+ *   this depth AND past this age are "must handle", not "watch".
+ *
+ * They do not conflict: the early tier fires long before the red line, and a
+ * deep-but-FRESH queue is precisely the case the red line must not fire on.
+ */
+export const BACKLOG_THRESHOLDS = {
+  early: { confirmations: 5, candidates: 10 },
+  redLine: { candidates: 50, ageDays: 7 },
+}
 
 /**
  * Acceptance items for the domain lane. Each one is a claim that can fail, and
@@ -144,8 +172,8 @@ export const BACKLOG_WARN = { confirmations: 5, candidates: 10 }
  * profile pool (a different database). When the contract handle is missing the
  * profile item says so rather than answering from the wrong store.
  */
-export function acceptanceDomainItems(adapterDb, contractDb = null) {
-  const summary = readDomainSummary(adapterDb)
+export function acceptanceDomainItems(adapterDb, contractDb = null, now = Date.now()) {
+  const summary = readDomainSummary(adapterDb, now)
   const pool = readProfilePool(contractDb)
   const items = []
   const add = (level, id, detail, evidence) => items.push({ level, id, detail, evidence })
@@ -189,24 +217,41 @@ export function acceptanceDomainItems(adapterDb, contractDb = null) {
     { domains: orphaned.map((d) => d.id) },
   )
 
+  const early = BACKLOG_THRESHOLDS.early
   const backlog = summary.pendingConfirmations
   add(
-    backlog > BACKLOG_WARN.confirmations ? 'WARN' : 'PASS',
+    backlog > early.confirmations ? 'WARN' : 'PASS',
     'domain.confirmation-backlog',
-    backlog > BACKLOG_WARN.confirmations
-      ? `画像确认队列积压 ${String(backlog)} 条（>${String(BACKLOG_WARN.confirmations)}）：约束型内容未确认就不会生效，堆积等于白采集（/ctx-profile list）`
+    backlog > early.confirmations
+      ? `画像确认队列积压 ${String(backlog)} 条（>${String(early.confirmations)}）：约束型内容未确认就不会生效，堆积等于白采集（/ctx-profile list）`
       : `画像确认队列 ${String(backlog)} 条，未积压`,
-    { pending: backlog, threshold: BACKLOG_WARN.confirmations },
+    { pending: backlog, threshold: early.confirmations },
   )
 
   const candidates = summary.pendingCandidates
   add(
-    candidates > BACKLOG_WARN.candidates ? 'WARN' : 'PASS',
+    candidates > early.candidates ? 'WARN' : 'PASS',
     'domain.candidate-backlog',
-    candidates > BACKLOG_WARN.candidates
-      ? `全局候选积压 ${String(candidates)} 条（>${String(BACKLOG_WARN.candidates)}）：复核通道没有在推进（/ctx-global candidates）`
+    candidates > early.candidates
+      ? `全局候选积压 ${String(candidates)} 条（>${String(early.candidates)}，提前提醒）：复核通道没有在推进（/ctx-global candidates）`
       : `全局候选 ${String(candidates)} 条，未积压`,
-    { pending: candidates, threshold: BACKLOG_WARN.candidates },
+    { pending: candidates, threshold: early.candidates },
+  )
+
+  // The design's own red line, and a TWO-axis one on purpose: depth alone is a
+  // queue being filled faster than it drains, age alone is one stubborn item.
+  // Only "deep AND old" means the lane must be handled (or retired) now.
+  const redLine = BACKLOG_THRESHOLDS.redLine
+  const age = summary.pendingCandidateAgeDays
+  const overRedLine = candidates > redLine.candidates && age !== null && age > redLine.ageDays
+  const ageText = age === null ? '无（队列空或时间戳不可读）' : `${String(age)} 天`
+  add(
+    overRedLine ? 'FAIL' : 'PASS',
+    'domain.candidate-redline',
+    overRedLine
+      ? `全局候选越过设计红线：${String(candidates)} 条（>${String(redLine.candidates)}）且最老 ${ageText}（>${String(redLine.ageDays)} 天）——必须处理：复核/拒绝，或退役该域（/ctx-global candidates）`
+      : `全局候选 ${String(candidates)} 条 · 最老 ${ageText}：未越红线（需同时 >${String(redLine.candidates)} 条且 >${String(redLine.ageDays)} 天）`,
+    { pending: candidates, oldestDays: age, thresholds: redLine },
   )
 
   if (pool === null) {

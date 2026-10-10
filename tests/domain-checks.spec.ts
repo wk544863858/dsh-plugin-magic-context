@@ -18,7 +18,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   acceptanceDomainItems,
-  BACKLOG_WARN,
+  BACKLOG_THRESHOLDS,
   doctorDomainFindings,
   enabledDomainsWithoutMembers,
   readDomainSummary,
@@ -62,6 +62,8 @@ type Seed = {
   readonly members?: number
   readonly confirmations?: number
   readonly candidates?: number
+  /** How old the seeded pending candidates are, in days (drives the red line). */
+  readonly candidateAgeDays?: number
   readonly profiles?: number
   readonly withUserTable?: boolean
 }
@@ -94,11 +96,12 @@ function adapterDb(seed: Seed = {}): DatabaseSync {
          VALUES (?, ?, ?, 'pending', ?)`,
       ).run(1000 + i, `rule ${String(i)}`, `confirm ${String(i)}?`, NOW)
     }
+    const candidateCreatedAt = NOW - (seed.candidateAgeDays ?? 0) * 86_400_000
     for (let i = 0; i < (seed.candidates ?? 0); i += 1) {
       db.prepare(
         `INSERT INTO global_candidates (domain_id, content, normalized_hash, first_identity, state, created_at, updated_at)
          VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
-      ).run(ORG, `candidate ${String(i)}`, `hash-${String(i)}`, 'git:member0', NOW, NOW)
+      ).run(ORG, `candidate ${String(i)}`, `hash-${String(i)}`, 'git:member0', candidateCreatedAt, NOW)
     }
     if (seed.withUserTable !== false) {
       // The contract's table, simulated where the judges can see it.
@@ -311,27 +314,76 @@ describe('acceptanceDomainItems — paired positive and negative for each claim'
     healthy.close()
   })
 
-  it('warns about backlogs strictly above the thresholds', () => {
+  it('warns about backlogs strictly above the early thresholds', () => {
     const atThreshold = adapterDb({
       members: 1,
-      confirmations: BACKLOG_WARN.confirmations,
-      candidates: BACKLOG_WARN.candidates,
+      confirmations: BACKLOG_THRESHOLDS.early.confirmations,
+      candidates: BACKLOG_THRESHOLDS.early.candidates,
     })
-    const items = acceptanceDomainItems(atThreshold)
+    const items = acceptanceDomainItems(atThreshold, null, NOW)
     expect(itemOf(items, 'domain.confirmation-backlog')?.level).toBe('PASS')
     expect(itemOf(items, 'domain.candidate-backlog')?.level).toBe('PASS')
     atThreshold.close()
 
     const over = adapterDb({
       members: 1,
-      confirmations: BACKLOG_WARN.confirmations + 1,
-      candidates: BACKLOG_WARN.candidates + 1,
+      confirmations: BACKLOG_THRESHOLDS.early.confirmations + 1,
+      candidates: BACKLOG_THRESHOLDS.early.candidates + 1,
     })
-    const overItems = acceptanceDomainItems(over)
+    const overItems = acceptanceDomainItems(over, null, NOW)
     expect(itemOf(overItems, 'domain.confirmation-backlog')?.level).toBe('WARN')
     expect(itemOf(overItems, 'domain.candidate-backlog')?.level).toBe('WARN')
     expect(itemOf(overItems, 'domain.confirmation-backlog')?.detail).toContain('/ctx-profile list')
     expect(itemOf(overItems, 'domain.candidate-backlog')?.detail).toContain('/ctx-global candidates')
+    // A deep-but-careless queue is still only a nudge: depth alone never trips the red line.
+    expect(itemOf(overItems, 'domain.candidate-redline')?.level).toBe('PASS')
+    over.close()
+  })
+
+  it('reads the age of the OLDEST pending candidate, and null when there is none', () => {
+    const empty = adapterDb({ members: 1 })
+    expect(readDomainSummary(empty, NOW).pendingCandidateAgeDays).toBeNull()
+    empty.close()
+
+    // Three rows seeded 9 days back: the age is the OLDEST, not the newest.
+    const aged = adapterDb({ members: 1, candidates: 3, candidateAgeDays: 9 })
+    expect(readDomainSummary(aged, NOW).pendingCandidateAgeDays).toBe(9)
+    aged.close()
+
+    // A fresh queue is 0 days old, not "no data": 0 must not read as null.
+    const fresh = adapterDb({ members: 1, candidates: 1 })
+    expect(readDomainSummary(fresh, NOW).pendingCandidateAgeDays).toBe(0)
+    fresh.close()
+  })
+
+  it('fires the design red line only on deep AND old — both axes carry a negative control', () => {
+    const redLine = BACKLOG_THRESHOLDS.redLine
+
+    // deep but fresh: a queue filling faster than it drains, nobody stuck
+    const deepFresh = adapterDb({ members: 1, candidates: redLine.candidates + 1, candidateAgeDays: redLine.ageDays - 1 })
+    const deepFreshItem = itemOf(acceptanceDomainItems(deepFresh, null, NOW), 'domain.candidate-redline')
+    expect(deepFreshItem?.level).toBe('PASS')
+    expect(deepFreshItem?.detail).toContain('未越红线')
+    deepFresh.close()
+
+    // old but shallow: one stubborn item, not a degenerating pool
+    const oldShallow = adapterDb({ members: 1, candidates: 30, candidateAgeDays: 30 })
+    expect(itemOf(acceptanceDomainItems(oldShallow, null, NOW), 'domain.candidate-redline')?.level).toBe('PASS')
+    oldShallow.close()
+
+    // exactly at the depth threshold is still PASS: the comparison is strict
+    const atDepth = adapterDb({ members: 1, candidates: redLine.candidates, candidateAgeDays: 30 })
+    expect(itemOf(acceptanceDomainItems(atDepth, null, NOW), 'domain.candidate-redline')?.level).toBe('PASS')
+    atDepth.close()
+
+    // deep AND old: "must handle", and the detail says so plus how to drain it
+    const over = adapterDb({ members: 1, candidates: redLine.candidates + 1, candidateAgeDays: redLine.ageDays + 1 })
+    const overItems = acceptanceDomainItems(over, null, NOW)
+    const overItem = itemOf(overItems, 'domain.candidate-redline')
+    expect(overItem?.level).toBe('FAIL')
+    expect(overItem?.detail).toContain('必须处理')
+    expect(overItem?.detail).toContain('/ctx-global candidates')
+    expect(overItem?.evidence).toMatchObject({ pending: redLine.candidates + 1, oldestDays: redLine.ageDays + 1 })
     over.close()
   })
 
