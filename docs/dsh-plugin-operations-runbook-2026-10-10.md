@@ -95,6 +95,7 @@ acceptance 的 `domain.*` 是**域车道的存活性检查**（7 条，判定逻
 | 候选积压 | acceptance `domain.candidate-backlog`（>10 条 WARN） | 复核或拒绝；`promote` 只造候选，不发布 |
 | 契约冻结 FAIL | `mc-contract-freeze.mjs verify` | **停止写入**，先定位漂移来源 |
 | historian 失败率异常 | `mc-report` 的成因行（带"至 MM-DD"） | 看成因：`配额`=某条路线 7 天上限（换路线或等）；`截断`=容量；`invalid-output`=输出形状（已加配平诊断） |
+| 维护 tick 跳过 LLM | journal `maintenance` 行 `LLM steps skipped: <route> observed quota-exhausted Nm ago (hold 45m)` | **无需动作**：维护车道跟随主对话路线（2026-10-10 起未钉 verifyProvider 时）；该路线额度恢复或主对话换路线后，≤45 分钟自动重开。观察是易失的（不落盘），外部重置额度不会被旧状态困住 |
 
 > ⚠️ **两套阈值不同源，这是个待裁决项**：代码里的 WARN 阈值是"提前提醒"
 > （确认 5 条 / 候选 10 条，`scripts/domain-checks.mjs` 的 `BACKLOG_WARN`），

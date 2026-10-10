@@ -68,6 +68,7 @@ import { createTelemetryService } from './dsh/telemetry.ts'
 import { openMemoryLane } from './dsh/memory-lane.ts'
 import { injectReduceGuidance, preStepListener, type PreStepProjects } from './dsh/pre-step.ts'
 import { wireMaintenance } from './dsh/maintenance-wiring.ts'
+import { isQuotaExhaustedDetail, RouteHealth, type RouteChoice } from './core/route-health.ts'
 import type { MagicContextDshConfig, MagicContextDshConfigDefineTool } from './dsh/config.ts'
 import { DEFAULT_POLICY, type PressurePolicy } from './core/policy.ts'
 import z from '@deepseek-ai/schemastery'
@@ -107,9 +108,10 @@ interface PostToolExecuteResult {
   readonly content?: readonly ContentBlock[]
 }
 
-/** `agent/request-error` — only the overflow path reads it. */
+/** `agent/request-error` — the overflow path and the quota feed read it. */
 interface RequestErrorPayload {
-  readonly failure: { readonly code: string }
+  readonly failure: { readonly code: string; readonly message?: string }
+  readonly provider?: string
   readonly signal: { readonly aborted: boolean }
   readonly agent: { readonly session: Session }
 }
@@ -215,6 +217,15 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
   // Auto-search hint state: one hint per user turn (preStep runs per model step).
   const searchHints = new SearchHintTracker()
 
+  // The main conversation's latest route (last-seen-wins across sessions) and
+  // the volatile per-provider quota observations fed from `agent/request-error`.
+  // The maintenance lane follows the route when unpinned, and skips its LLM
+  // steps while the route's latest observation is an exhausted quota — the
+  // signal is owned by real traffic and never persisted, so an externally
+  // reset quota cannot be trapped by a stale guess.
+  let lastSessionRoute: RouteChoice | undefined
+  const routeHealth = new RouteHealth()
+
   // ── §N§ tags + the pressure decision on the admitted user batch ───────────
   on(DSH_EVENTS.preStep, preStepListener({
     ctx,
@@ -228,6 +239,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     seenSessions,
     activePolicy,
     searchHints,
+    noteSessionRoute: route => { lastSessionRoute = route },
   }))
 
   // ── §N§ tags on tool results at landing (Phase 0) ─────────────────────────
@@ -267,6 +279,20 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
 
   // ── Emergency reclaim + retry on provider-confirmed overflow ──────────────
   on(DSH_EVENTS.requestError, async (payload: RequestErrorPayload, next: () => Promise<WaterfallDecision>) => {
+    // Route-health feed, best-effort by design: these reads sit BEFORE the
+    // band try/catch below, so a drifted payload shape would throw into the
+    // host's request-error waterfall. An exhausted-quota wording for a known
+    // provider arms the maintenance lane's skip; anything else is ignored.
+    try {
+      const provider = payload?.provider
+      const failure = payload?.failure
+      if (typeof provider === 'string' && provider.length > 0 && failure !== undefined) {
+        const detail = `${failure.code ?? ''} ${failure.message ?? ''}`
+        if (isQuotaExhaustedDetail(detail)) routeHealth.observeQuotaFailure(provider, Date.now())
+      }
+    } catch (feedError) {
+      ctx.logger.warn(`magic-context: route-health feed failed: ${errText(feedError)}`)
+    }
     // Shape-tolerant guard: these reads sit BEFORE the band try/catch below, so
     // a drifted payload shape would throw into the host's request-error
     // waterfall. Degrade to pass-through instead — the emergency lane simply
@@ -571,6 +597,8 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     writer: memoryWriter,
     profileWriter,
     vectorBackfill: lane.vectorBackfill,
+    routeHealth,
+    lastSessionRoute: () => lastSessionRoute,
     projects,
     disposers,
     isDisposed: () => adapterDisposed,
@@ -633,7 +661,16 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     maintenance: {
       enabled: liveBoolean(config.maintenance?.enabled, true) !== false,
       intervalMs: Math.max(60_000, liveNumber(config.maintenance?.intervalMs, 1_800_000)),
-      verify: llm === undefined ? 'off (no llm)' : `${liveString(config.maintenance?.verifyProvider, '') || '∅'}/${liveString(config.maintenance?.verifyModel, '') || '∅'}`,
+      verify: llm === undefined
+        ? 'off (no llm)'
+        : ((): string => {
+            const provider = liveString(config.maintenance?.verifyProvider, '')
+            const model = liveString(config.maintenance?.verifyModel, '')
+            if (provider.length > 0 && model.length > 0) return `${provider}/${model}`
+            // Unpinned: the tick follows the main conversation's latest route
+            // (last-seen-wins); the per-tick journal rows carry the actual route.
+            return 'follow-session'
+          })(),
     },
     historian: {
       enabled: liveBoolean(config.historianEnabled, true) !== false && llm !== undefined,

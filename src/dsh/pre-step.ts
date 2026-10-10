@@ -71,6 +71,12 @@ export interface PreStepDeps {
   activePolicy: () => PressurePolicy
   /** Auto-search hint state: one hint per user turn, shared across preSteps. */
   searchHints?: SearchHintTracker
+  /**
+   * Records the main conversation's latest provider/model route, so the
+   * maintenance lane can follow it (an explicit pin still wins). Optional so
+   * drift tests and stand-alone constructions stay unchanged.
+   */
+  noteSessionRoute?: (route: { provider: string; model: string }) => void
 }
 
 /**
@@ -268,6 +274,9 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
         input: latest.inputTokens ?? 0,
         cacheRead: latest.cacheReadTokens ?? 0,
         cacheWrite: latest.cacheWriteTokens ?? 0,
+      }
+      if (context.provider !== undefined && context.model !== undefined) {
+        deps.noteSessionRoute?.({ provider: context.provider, model: context.model })
       }
       const basePassData = {
         reason: pass.reason,

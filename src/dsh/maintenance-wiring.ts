@@ -1,9 +1,14 @@
 /**
  * The maintenance tick's schedule (the adapter's slice of MC's dreamer): TTL
- * expiry always runs when the writer is writable; LLM verification needs an
- * explicit `maintenance.verifyProvider/verifyModel` because a tick has no
- * session to inherit a route from. The sweep covers the configured project
- * plus every identity this process resolved for a session (see
+ * expiry always runs when the writer is writable; LLM verification uses the
+ * main conversation's latest route, unless an explicit
+ * `maintenance.verifyProvider/verifyModel` pin overrides it (the rollback
+ * lever). A tick has no session of its own, so "latest" is last-seen-wins
+ * across concurrent sessions — enough for a lane whose only requirement is "a
+ * route the user currently trusts". A route observed quota-exhausted inside
+ * the hold skips the LLM steps with one info line instead of joining the main
+ * conversation's failure noise. The sweep covers the configured project plus
+ * every identity this process resolved for a session (see
  * {@link PreStepProjects}). Fail-open end to end: a broken tick journals and
  * waits for the next one.
  *
@@ -18,6 +23,7 @@ import type { Journal } from '../core/journal.ts'
 import { runMaintenanceTick, type MaintenanceLlm } from '../core/maintenance.ts'
 import { PROFILE_REVIEW_META_KEY, runProfileReview, type ProfileReviewLlm, type ProfileReviewOutcome } from '../core/profile-review.ts'
 import type { VectorBackfillOutcome } from '../core/vector-backfill.ts'
+import { resolveMaintenanceRoute, ROUTE_QUOTA_HOLD_MS, RouteHealth, type RouteChoice } from '../core/route-health.ts'
 
 /** WP11 default batch: how many vectors one maintenance tick may add. */
 export const VECTOR_BACKFILL_DEFAULT_LIMIT = 24
@@ -58,13 +64,17 @@ export function wireMaintenance(input: {
   profileWriter: ProfileWriter | undefined
   /** WP11: the lane's backfill closure; absent when the lane is unusable. */
   vectorBackfill?: (limit: number, journal: Journal) => Promise<VectorBackfillOutcome | undefined>
+  /** Volatile per-provider quota observations, fed from `agent/request-error`. */
+  routeHealth: RouteHealth
+  /** The main conversation's latest route; the tick follows it when unpinned. */
+  lastSessionRoute: () => RouteChoice | undefined
   projects: PreStepProjects
   /** The adapter-level disposer list (timers ride it). */
   disposers: Array<() => void>
   /** The compaction engine sets this when the adapter is disposed. */
   isDisposed: () => boolean
 }): MaintenanceWiring {
-  const { ctx, config, stores, journal, llm, writer, profileWriter, vectorBackfill, projects, disposers, isDisposed } = input
+  const { ctx, config, stores, journal, llm, writer, profileWriter, vectorBackfill, routeHealth, lastSessionRoute, projects, disposers, isDisposed } = input
   const { seenIdentities } = projects
   let maintenanceLast: MaintenanceLast | undefined
   let profileReviewLast: ProfileReviewOutcome | undefined
@@ -94,19 +104,40 @@ export function wireMaintenance(input: {
         return undefined
       })()
       const evidenceMaxRows = liveNumber(config.maintenance?.evidenceVerify?.maxRows, 4)
+      // The route every LLM step of this tick uses, resolved ONCE: the explicit
+      // pin wins (rollback lever), otherwise the main conversation's latest
+      // route. A quota-exhausted observation inside the hold skips the LLM steps
+      // entirely — one info line, zero requests — instead of joining the main
+      // conversation's failure noise. The observation is volatile and owned by
+      // real traffic, so an externally reset quota re-opens the lane within one
+      // hold at the cost of one cheap probe.
+      const pinnedProvider = liveString(config.maintenance?.verifyProvider, '')
+      const pinnedModel = liveString(config.maintenance?.verifyModel, '')
+      const tickRoute = resolveMaintenanceRoute(
+        pinnedProvider.length > 0 && pinnedModel.length > 0 ? { provider: pinnedProvider, model: pinnedModel } : undefined,
+        lastSessionRoute(),
+      )
+      const tickQuotaAge = tickRoute === undefined ? undefined : routeHealth.quotaSince(tickRoute.provider, Date.now())
+      if (tickRoute !== undefined && tickQuotaAge !== undefined) {
+        journal.info(
+          'maintenance',
+          `LLM steps skipped: ${tickRoute.provider}/${tickRoute.model} observed quota-exhausted ${String(Math.round(tickQuotaAge / 60_000))}m ago (hold ${String(Math.round(ROUTE_QUOTA_HOLD_MS / 60_000))}m)`,
+          { provider: tickRoute.provider, model: tickRoute.model, quotaAgeMs: tickQuotaAge, route: `${tickRoute.provider}/${tickRoute.model}` },
+        )
+      }
+      const tickLlmReady = llm !== undefined && tickRoute !== undefined && tickQuotaAge === undefined
       const identities = new Set<string>()
       if (config.memory?.project !== undefined) identities.add(config.memory.project)
       for (const identity of seenIdentities) identities.add(identity)
       for (const identity of identities) {
-        const verifyProvider = liveString(config.maintenance?.verifyProvider, '')
-        const verifyModel = liveString(config.maintenance?.verifyModel, '')
-        const routeReady = verifyProvider.length > 0 && verifyModel.length > 0
         const outcome = await runMaintenanceTick({
           writer,
           identity,
           sessionId: 'mc-maintenance',
           journal,
-          ...(llm === undefined || !routeReady ? {} : { llm: llm as unknown as MaintenanceLlm, route: { provider: verifyProvider, model: verifyModel } }),
+          ...(tickLlmReady && tickRoute !== undefined && llm !== undefined
+            ? { llm: llm as unknown as MaintenanceLlm, route: tickRoute }
+            : {}),
           ...(evidenceMode !== undefined && evidenceRoot !== undefined
             ? { evidence: { mode: evidenceMode, root: evidenceRoot, maxRows: evidenceMaxRows } }
             : {}),
@@ -133,17 +164,14 @@ export function wireMaintenance(input: {
       // review actually RAN, so a failed call is retried on the next tick
       // instead of being silenced for a day by its own failure.
       if (liveBoolean(config.memory?.global?.user?.review, false) && profileWriter !== undefined) {
-        const reviewProvider = liveString(config.maintenance?.verifyProvider, '')
-        const reviewModel = liveString(config.maintenance?.verifyModel, '')
-        const reviewRouteReady = reviewProvider.length > 0 && reviewModel.length > 0
         const lastReviewRaw = Number(stores.getMeta(PROFILE_REVIEW_META_KEY) ?? '')
         const review = await runProfileReview({
           writer: profileWriter,
           sessionId: 'mc-maintenance',
           journal,
-          ...(llm === undefined || !reviewRouteReady
-            ? {}
-            : { llm: llm as unknown as ProfileReviewLlm, route: { provider: reviewProvider, model: reviewModel } }),
+          ...(tickLlmReady && tickRoute !== undefined && llm !== undefined
+            ? { llm: llm as unknown as ProfileReviewLlm, route: tickRoute }
+            : {}),
           ...(Number.isFinite(lastReviewRaw) && lastReviewRaw > 0 ? { lastReviewAt: lastReviewRaw } : {}),
         })
         if (review.ran) stores.setMeta(PROFILE_REVIEW_META_KEY, String(Date.now()))
