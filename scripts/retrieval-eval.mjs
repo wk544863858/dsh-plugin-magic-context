@@ -31,7 +31,7 @@ const CONFIGS = [
   { name: 'pure-fts 0/1.0 (ref)', sem: 0.0, fts: 1.0 },
 ]
 
-function loadQueries() {
+export function loadQueries() {
   const db = new DatabaseSync(ADAPTER, { readOnly: true })
   const rows = db.prepare("SELECT data FROM journal WHERE kind='tool-call' AND summary LIKE '%search%' ORDER BY id DESC").all()
   db.close()
@@ -49,14 +49,14 @@ function loadQueries() {
   return queries
 }
 
-function termsOf(query) {
+export function termsOf(query) {
   return query.split(/\s+/)
     .map(term => term.trim().toLowerCase())
     .filter(term => (/[^\x00-\x7f]/.test(term) && term.length >= 2) || (/^[a-z0-9-]+$/.test(term) && term.length >= 3))
 }
 
 /** 必要词：最长的 CJK 连续段（≥3 字）；无则最长拉丁词。oracle 用它收紧相关性。 */
-function requiredTermOf(terms) {
+export function requiredTermOf(terms) {
   const cjk = terms.filter(term => /[^\x00-\x7f]/.test(term)).sort((left, right) => right.length - left.length)
   if (cjk.length > 0) return cjk[0]
   return [...terms].sort((left, right) => right.length - left.length)[0] ?? null
