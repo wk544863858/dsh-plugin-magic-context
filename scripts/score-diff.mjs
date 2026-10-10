@@ -13,7 +13,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { openMemoryBridge, resolveIdentitySpec, resolveProjectIdentity } from '../src/core/memory-bridge.ts'
-import { DEFAULT_MEMORY_SCORING, scoreMemory } from '../src/core/memory-scoring.ts'
+import { DEFAULT_MEMORY_SCORING, halfLifeFor, scoreMemory } from '../src/core/memory-scoring.ts'
 import { parseFlags, stringFlag } from './cli-flags.mjs'
 
 const ADAPTER_DB = join(homedir(), '.local', 'share', 'cortexkit', 'magic-context-dsh-poc', 'dsh-magic-context.db')
@@ -60,22 +60,114 @@ function loadStatsById() {
   return statsById
 }
 
+/**
+ * 阈值扫描（P1 校准数据件）：对全池按真实 scoreMemory 打分，按
+ * 「永生/会衰减 × hits=0/hits≥1」四群体给出分布与多阈值退役计数。
+ */
+export function sweepScores(poolRows, statsById, config, now) {
+  return poolRows.map(row => {
+    const stat = statsById.get(Number(row.id))
+    const hits = stat?.hits ?? 0
+    const score = scoreMemory(
+      {
+        importance: Number(row.importance),
+        category: String(row.category),
+        hits,
+        ...(stat?.lastHitAt === undefined ? {} : { lastHitAt: stat.lastHitAt }),
+      },
+      config,
+      now,
+    )
+    return {
+      id: Number(row.id),
+      category: String(row.category),
+      importance: Number(row.importance),
+      hits,
+      score,
+      decayable: halfLifeFor(config, String(row.category)) !== null,
+    }
+  })
+}
+
+export function sweepSummary(scored, thresholds) {
+  const pct = (values, p) => {
+    if (values.length === 0) return null
+    const sorted = [...values].sort((left, right) => left - right)
+    return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))]
+  }
+  const cohorts = {}
+  for (const key of ['immortal-used', 'immortal-unused', 'decayable-used', 'decayable-unused']) cohorts[key] = []
+  for (const row of scored) {
+    const cohort = `${row.decayable ? 'decayable' : 'immortal'}-${row.hits > 0 ? 'used' : 'unused'}`
+    cohorts[cohort].push(row.score)
+  }
+  const distribution = Object.fromEntries(Object.entries(cohorts).map(([key, scores]) => [key, {
+    n: scores.length,
+    p25: pct(scores, 0.25), p50: pct(scores, 0.5), p75: pct(scores, 0.75),
+  }]))
+  const byThreshold = thresholds.map(threshold => {
+    const retired = scored.filter(row => row.score < threshold)
+    return {
+      threshold,
+      retired: retired.length,
+      retiredDecayableUnused: retired.filter(row => row.decayable && row.hits === 0).length,
+      retiredImmortalUsed: retired.filter(row => !row.decayable && row.hits > 0).length,
+    }
+  })
+  const decayableUnused = cohorts['decayable-unused'].length
+  return { distribution, byThreshold, decayableUnused }
+}
+
 function fmtRow(row) {
   return `  #${String(row.id)} [${row.category}] importance ${row.importance === null || row.importance === undefined ? '?' : String(row.importance)}`
     + ` · hits ${String(row.hits ?? 0)} · score ${row.score === undefined ? '?' : row.score.toFixed(1)}`
     + `${row.retired === true ? ' · 退役(阈值)' : ''}`
 }
 
+function runThresholdSweep() {
+  const now = Date.now()
+  const config = DEFAULT_MEMORY_SCORING
+  const statsById = loadStatsById()
+  const contractPath = join(homedir(), '.local', 'share', 'cortexkit', 'magic-context', 'context.db')
+  const cdb = new DatabaseSync(contractPath, { readOnly: true })
+  const poolRows = cdb.prepare("SELECT id, category, importance FROM memories WHERE status IN ('active','permanent')").all()
+  cdb.close()
+  const scored = sweepScores(poolRows, statsById, config, now)
+  const thresholds = [2, 10, 20, 30, 40, 50, 60, 70]
+  const summary = sweepSummary(scored, thresholds)
+
+  console.log(`S(t) 阈值扫描（池 ${String(scored.length)} 行 · sidecar ${String(statsById.size)} 行 · archiveThreshold 现值 ${String(config.archiveThreshold)}）`)
+  console.log('  群体分布（score p25/p50/p75）：')
+  for (const [key, dist] of Object.entries(summary.distribution)) {
+    console.log(`    ${key.padEnd(16)} n=${String(dist.n).padStart(4)}  ${dist.p25 === null ? '-' : dist.p25.toFixed(1)} / ${dist.p50 === null ? '-' : dist.p50.toFixed(1)} / ${dist.p75 === null ? '-' : dist.p75.toFixed(1)}`)
+  }
+  console.log('  阈值 → 退役数（总 / 会衰减且未用 / 永生且在用[应为0]）：')
+  for (const row of summary.byThreshold) {
+    console.log(`    < ${String(row.threshold).padStart(2)}   ${String(row.retired).padStart(4)} / ${String(row.retiredDecayableUnused).padStart(4)} / ${String(row.retiredImmortalUsed)}`)
+  }
+  const target = Math.ceil(summary.decayableUnused * 0.25)
+  const suggested = summary.byThreshold.find(row => row.retiredDecayableUnused >= target && row.retiredImmortalUsed === 0)
+  if (suggested === undefined) {
+    console.log(`  结论：没有阈值能退役 ≥25%（${String(target)} 行）的"会衰减且未用"群体而不伤永生在用行 —— 维持现状。`)
+  } else {
+    console.log(`  建议阈值 ${String(suggested.threshold)}：退役会衰减未用 ${String(suggested.retiredDecayableUnused)}/${String(summary.decayableUnused)}（目标 ≥${String(target)}），永生在用 0。样本：`)
+    for (const row of scored.filter(r => r.score < suggested.threshold).slice(0, 10)) {
+      console.log(`    #${String(row.id)} [${row.category}] importance ${String(row.importance)} · hits ${String(row.hits)} · score ${row.score.toFixed(1)}`)
+    }
+  }
+}
+
 function main() {
-  const parsed = parseFlags(process.argv.slice(2), ['project', 'budget', 'limit', 'json'])
+  const parsed = parseFlags(process.argv.slice(2), ['project', 'budget', 'limit', 'json', 'threshold-sweep'])
   if (parsed.unknown.length > 0) {
     console.error(`未知参数: ${parsed.unknown.join(', ')}；--help 查看用法`)
     process.exit(2)
   }
   if (parsed.help) {
-    console.log('用法: node scripts/score-diff.mjs [--project <identity|dir>] [--budget 8000] [--limit 40] [--json]')
+    console.log('用法: node scripts/score-diff.mjs [--project <identity|dir>] [--budget 8000] [--limit 40] [--json] [--threshold-sweep]')
     process.exit(0)
   }
+  if (parsed.flags.has('threshold-sweep')) return runThresholdSweep()
   const projectSpec = stringFlag(parsed.flags, 'project')
   const project = (projectSpec !== undefined ? resolveIdentitySpec(projectSpec) : undefined)
     || resolveProjectIdentity(process.cwd())

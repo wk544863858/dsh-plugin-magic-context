@@ -13,7 +13,7 @@ import {
   pendingFoldCounts,
   retiredSummary,
 } from '../scripts/report-dilution.mjs'
-import { classifyDeparted } from '../scripts/score-diff.mjs'
+import { classifyDeparted, sweepScores, sweepSummary } from '../scripts/score-diff.mjs'
 import { DEFAULT_MEMORY_SCORING, scoreMemory } from '../src/core/memory-scoring.ts'
 
 const NOW = 1_800_000_000_000
@@ -143,6 +143,41 @@ describe('format lines', () => {
     expect(d).toContain('S(t) 退役 1/1')
     expect(d).toContain('TTL 行 0（到期 0')
     expect(d).toContain('新行进入率 0%（0/2）')
+  })
+})
+
+describe('sweepScores / sweepSummary —— 阈值扫描的群体与计数', () => {
+  const config = { ...DEFAULT_MEMORY_SCORING, enabled: true }
+  const pool = [
+    { id: 1, category: 'PROJECT_RULES', importance: 50 },     // 永生未用：score 冻结在 50
+    { id: 2, category: 'CONFIG_VALUES', importance: 50 },     // 会衰减未用（无 stats ⇒ 冷启动不衰减，同样冻结 50）
+    { id: 3, category: 'CONFIG_VALUES', importance: 90 },     // 会衰减在用，200d 未再命中 ⇒ 深度衰减
+  ]
+  const statsById = new Map([
+    [3, { hits: 2, lastHitAt: NOW - 200 * DAY, localArchived: false }],
+  ])
+  const scored = sweepScores(pool, statsById, config, NOW)
+
+  it('classifies decayable cohorts and freezes cold rows at importance', () => {
+    const cold = scored.find(row => row.id === 2)
+    const immortal = scored.find(row => row.id === 1)
+    const decayed = scored.find(row => row.id === 3)
+    expect(cold?.decayable).toBe(true)
+    expect(cold?.score).toBe(50)
+    expect(immortal?.decayable).toBe(false)
+    expect(immortal?.score).toBe(50)
+    expect(decayed?.score).toBeLessThan(50)
+  })
+
+  it('counts retirement per threshold and splits cohorts', () => {
+    const summary = sweepSummary(scored, [2, 50, 70])
+    const at50 = summary.byThreshold.find(row => row.threshold === 50)
+    expect(at50?.retired).toBe(1)                                  // 只有衰减行 < 50
+    expect(at50?.retiredDecayableUnused).toBe(0)                   // 冷冻行不在 50 以下退役
+    expect(at50?.retiredImmortalUsed).toBe(0)
+    const at70 = summary.byThreshold.find(row => row.threshold === 70)
+    expect(at70?.retired).toBe(3)
+    expect(summary.distribution['immortal-unused'].n).toBe(1)
   })
 })
 
