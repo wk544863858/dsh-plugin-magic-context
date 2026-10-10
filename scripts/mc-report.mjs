@@ -26,6 +26,9 @@ import { join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { classifyHistorianFailure, describeCauses, extractQuotaReset, splitByClass } from './report-classify.mjs'
 import { DOMAIN_HIT_WINDOW_DAYS, extractDomainHits, extractQuotaSkips, formatDomainHitLine } from './report-hits.mjs'
+import {
+  baselineEventSummary, dilutionSummary, entryRate, formatDilutionLine, formatFoldLine, pendingFoldCounts,
+} from './report-dilution.mjs'
 
 // ─────────────────────────── 常量 ───────────────────────────
 
@@ -1169,6 +1172,87 @@ function queryDomainHits(db, now) {
   }
 }
 
+// 稀释与 fold 仪表（挑战报告风险 1/2 的"先可测"）。适配器侧三源（journal
+// kind='baseline'、memory_stats sidecar、baseline_state 水位）+ 契约库 max(id)
+// 对照（tolerant：契约库缺席只降级对应字段，不猜 0）。水位取全库 MAX——
+// 多会话共享适配器库时这是"折叠得最远"的下界，未折叠增量按 ≥ 读。
+function queryDilutionState(adapterDb, now) {
+  const tableExists = (db, name) => {
+    try {
+      return db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?").get(name) !== undefined
+    } catch { return false }
+  }
+  const safeAll = (db, sql, params = []) => {
+    try { return db.prepare(sql).all(...params) } catch { return null }
+  }
+  const safeGet = (db, sql, params = []) => {
+    try { return db.prepare(sql).get(...params) } catch { return null }
+  }
+  if (!tableExists(adapterDb, 'journal')) return null
+  try {
+    const since14d = now - 14 * 86_400_000
+    const baselineEvents = safeAll(adapterDb, "SELECT at, data FROM journal WHERE kind = 'baseline' AND at > ?", [since14d]) ?? []
+    const statRows = tableExists(adapterDb, 'memory_stats')
+      ? safeAll(adapterDb, 'SELECT memory_id, hits, injections, last_injected_at, local_archived, updated_at FROM memory_stats') ?? []
+      : []
+    const state = tableExists(adapterDb, 'baseline_state')
+      ? safeGet(adapterDb, 'SELECT MAX(max_memory_id) AS m, MAX(max_memory_mutation_id) AS mut, MAX(profile_watermark) AS p FROM baseline_state') ?? {}
+      : {}
+    // 契约库（只读，缺席即降级）：max id 对照与近 30 天新行。
+    const contractPath = join(homedir(), '.local', 'share', 'cortexkit', 'magic-context', 'context.db')
+    let contract = {}
+    if (existsSync(contractPath)) {
+      const cdb = new DatabaseSync(contractPath, { readOnly: true })
+      try {
+        const maxMem = safeGet(cdb, 'SELECT MAX(id) AS v FROM memories')
+        const maxProfile = safeGet(cdb, 'SELECT MAX(id) AS v FROM user_memories')
+        const maxMut = safeGet(cdb, 'SELECT MAX(id) AS v FROM memory_mutation_log')
+        const recentIds = safeGet(cdb, 'SELECT COUNT(*) AS n FROM memories WHERE created_at > ?', [now - 30 * 86_400_000])
+        const activeCount = safeGet(cdb, "SELECT COUNT(*) AS n FROM memories WHERE status = 'active'")
+        contract = {
+          maxMemoryId: maxMem === null ? undefined : Number(maxMem.v),
+          maxProfileId: maxProfile === null ? undefined : Number(maxProfile.v),
+          maxMutationId: maxMut === null ? undefined : Number(maxMut.v),
+          recentCreated: recentIds === null ? 0 : Number(recentIds.n),
+          activeCount: activeCount === null ? undefined : Number(activeCount.n),
+        }
+      } finally { cdb.close() }
+    }
+    const toNumber = (v) => (Number.isFinite(Number(v)) ? Number(v) : undefined)
+    return {
+      baseline: baselineEventSummary(
+        baselineEvents.map(row => {
+          let data = {}
+          try { data = JSON.parse(row.data ?? '{}') } catch { /* payload is data, not a contract */ }
+          return { at: row.at, data }
+        }),
+        { now },
+      ),
+      pending: pendingFoldCounts({
+        contractMaxMemoryId: contract.maxMemoryId,
+        stateMaxMemoryId: toNumber(state.m),
+        contractMaxProfileId: contract.maxProfileId,
+        stateProfileWatermark: toNumber(state.p),
+        contractMaxMutationId: contract.maxMutationId,
+        stateMaxMutationId: toNumber(state.mut),
+      }),
+      dilution: dilutionSummary(statRows, { now }),
+      // 近 30 天新行的 id 列表上限在几千行级，直接取 id 数组算进入率。
+      entry: entryRate(statRows, (() => {
+        if (!existsSync(contractPath)) return []
+        const cdb = new DatabaseSync(contractPath, { readOnly: true })
+        try {
+          return (safeAll(cdb, 'SELECT id FROM memories WHERE created_at > ?', [now - 30 * 86_400_000]) ?? []).map(r => Number(r.id))
+        } finally { cdb.close() }
+      })()),
+      activeCount: contract.activeCount,
+      contractAvailable: existsSync(contractPath),
+    }
+  } catch {
+    return null
+  }
+}
+
 // 语义（向量）车道的激活状态。以前完全不可观测：闸门结果只走 ctx.logger，而 ctx.logger
 // 不写 journal——所以"车道是活着、退化还是死了"从库里看不出来。现在每次进程记录一条
 // vector-lane，这里读最后一条。
@@ -1764,6 +1848,12 @@ function renderText(payload) {
           )
         }
       }
+      const du = metrics.dilutionState
+      if (du) {
+        lines.push(`  基线/fold(14d): ${formatFoldLine(du.baseline, du.pending)}`)
+        const activeSuffix = du.activeCount === undefined ? '' : `；契约活跃池 ${fmtInt(du.activeCount)}`
+        lines.push(`  稀释(30d)    : ${formatDilutionLine(du.dilution, du.entry)}${activeSuffix}`)
+      }
       const conf = ds.confirmations
       lines.push(
         `  画像确认队列  : 待确认 ${fmtInt(conf.pending)}（approved ${fmtInt(conf.approved)} / rejected ${fmtInt(conf.rejected)}）`,
@@ -1922,6 +2012,7 @@ function buildReport(opts) {
       metrics.domainStats = queryDomainStats(db)
       metrics.vectorLane = queryVectorLaneState(db)
       metrics.domainHits = queryDomainHits(db, now)
+      metrics.dilutionState = queryDilutionState(db, now)
       if (windowInfo.atMissing) windowInfo.error = windowInfo.error ?? 'journal 缺少 at 列'
       if (windowInfo.skippedNoAt > 0) notes.push(`有 ${windowInfo.skippedNoAt} 条 journal 行的 at 为空或非法，已跳过。`)
     } catch (error) {
