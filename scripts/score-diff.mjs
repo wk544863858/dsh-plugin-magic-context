@@ -12,7 +12,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { openMemoryBridge, resolveProjectIdentity } from '../src/core/memory-bridge.ts'
+import { openMemoryBridge, resolveIdentitySpec, resolveProjectIdentity } from '../src/core/memory-bridge.ts'
 import { DEFAULT_MEMORY_SCORING, scoreMemory } from '../src/core/memory-scoring.ts'
 import { parseFlags, stringFlag } from './cli-flags.mjs'
 
@@ -76,7 +76,9 @@ function main() {
     console.log('用法: node scripts/score-diff.mjs [--project <identity|dir>] [--budget 8000] [--limit 40] [--json]')
     process.exit(0)
   }
-  const project = stringFlag(parsed.flags, 'project') || resolveProjectIdentity(process.cwd())
+  const projectSpec = stringFlag(parsed.flags, 'project')
+  const project = (projectSpec !== undefined ? resolveIdentitySpec(projectSpec) : undefined)
+    || resolveProjectIdentity(process.cwd())
   if (project === undefined || project.length === 0) {
     console.error('无法解析项目身份（cwd 无 git remote 且未给 --project）')
     process.exit(2)
