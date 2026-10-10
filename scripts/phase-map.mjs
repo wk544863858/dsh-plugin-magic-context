@@ -68,6 +68,7 @@ const PHASE_A = [
   'tests/store-schema-v8.spec.ts',
   'tests/domain-import.spec.ts',
   'tests/domain-visibility.spec.ts',
+  'tests/domain-source-parity.spec.ts',
   'tests/memory-delta.spec.ts',
   'tests/memory-sharing.spec.ts',
 ]
@@ -123,9 +124,9 @@ export const PHASES = [
     checks: [{ label: 'contract freeze', script: 'scripts/mc-contract-freeze.mjs', args: ['verify', '--allow-missing'] }],
     blind: [
       'WP4 共享属性维护已在合成库验证；真库首次共享行更新尚未执行',
-      'A-7 双源对照（memory.domains.source=contract 与 adapter 的召回/水位结果一致）**无用例**：'
-      + '两条路径都已实现（memory-lane 的 domainSource 分支），但没有测试证明它们等价，'
-      + '所以"回滚杠杆"目前只是代码存在而非经过验证',
+      'A-7 双源对照已证明（tests/domain-source-parity.spec.ts）：同一契约库上 contract 与 adapter 两源的'
+      + '召回集合/digest/水位/searchSpace/epoch 指纹全等，且带分叉敏感度负向对照；'
+      + '回滚杠杆=纯配置切换——线上尚未演练过切换动作本身（只动 profile 配置，无代码路径）',
     ],
   },
   {
@@ -162,7 +163,8 @@ export const PHASES = [
     blind: [
       'D-5 剥离演练已做（tests/strip-drill.spec.ts + docs/strip-drill-report-2026-10-10.md）；'
       + '白名单=两条闭环都走完 5 步：org 域（建域→候选→批准→注入→退役）+ user 域（采集→评审→注入→退役）',
-      '发布是"复制"而非"镜像"：源行后续改写不传播到域行（报告盲区 2，尚无对账 verify）',
+      '发布是"复制"而非"镜像"：源行改写不传播到域行——对账用例已钉（tests/domain-source-parity.spec.ts：'
+      + '改写/归档源行后域行逐字节不变）；因此域行更新只能走产品路径（新候选→发布→归档旧行），没有镜像修复',
       '写开关线上实况（2026-10-10）：user.collect=on、vectorBackfill=on（已收口）、user.review=off、'
       + 'machine.enabled=off——演练与线上的差距收窄到"画像评审注入"与"machine 域"两段未开',
       'WP11 向量回填已真写并收口（2026-10-10 09:52 开启 → 15:19 dominant 100%）；'

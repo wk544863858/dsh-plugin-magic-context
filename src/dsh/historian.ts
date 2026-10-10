@@ -907,6 +907,12 @@ async function runHistorianExclusive(
         nodes: range.nodes.length,
         tokens: range.tokens,
         importance: draft.importance,
+        // WP5 observability: without these two fields a missing profile-collect
+        // row is ambiguous — "empty observations" and "lane not armed" look
+        // identical from the journal. The count is the draft's raw output; the
+        // armed/off flag is whether the pre-step pass supplied the sink.
+        userObservations: observations.length,
+        profileCollect: deps.profileCollect === undefined ? 'off' : 'armed',
         coveredStartSeq: first.seq,
         coveredEndSeq: last.seq,
       },
