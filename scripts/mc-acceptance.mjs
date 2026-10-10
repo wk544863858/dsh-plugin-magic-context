@@ -20,6 +20,7 @@ import { homedir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { acceptanceDomainItems } from './domain-checks.mjs';
+import { scanHistorianStarts, staleOpenStarts } from './historian-pairing.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG = resolve(HERE, '..');
@@ -155,31 +156,18 @@ if (dsh) {
   // ─────────────────────────────────────────────────────── 6. historian：start 必须有终止事件
   const hist = dsh.prepare(`SELECT id, at, session_id, data FROM journal WHERE kind='historian' AND at > ? ORDER BY id ASC`).all(SINCE)
     .map((r) => ({ id: r.id, at: r.at, sid: r.session_id, phase: safeParse(r.data).phase, d: safeParse(r.data) }));
-  const orphans = [];
-  const openStarts = new Map();
+  // 配对与"安静孤儿"判定在 scripts/historian-pairing.mjs（纯函数，有正负样本对照）：
+  // supersede-close（同会话新 start 挤掉旧 start）与 15 分钟安静阈值都在那里。
+  const openStarts = scanHistorianStarts(hist);
   const histBoots = dsh.prepare(`SELECT id, at FROM journal WHERE kind='boot' AND at > ? ORDER BY id ASC`).all(SINCE).map((r) => ({ id: r.id, at: r.at }));
-  for (const h of hist) {
-    const key = h.sid ?? '-';
-    if (h.phase === 'start') {
-      // 被同会话的新 start 挤掉 = 关闭（supersede-close）。适配器用 inFlight
-      // 集合保证同一会话不会有并发第二个 run，因此"无终局就被新 start 挤掉"
-      // 只能是进程边界（hmr 重挂/重启）产物；挂载时的 journal 恢复
-      // （recoverOrphanHistorianRuns）也会为这类行补 adapter-remount 终局，
-      // 但 terminal 追加在日志尾部、无法改变扫描序中的挤掉事件本身。
-      openStarts.delete(key);
-      openStarts.set(key, h);
-    }
-    else if (h.phase === 'done' || h.phase === 'failed') openStarts.delete(key);
-  }
-  const nowOpen = [...openStarts.values()].filter((h) => Date.now() - Number(h.at) > 180_000);
+  const nowOpen = staleOpenStarts(openStarts);
   const counts = hist.reduce((acc, h) => ((acc[h.phase] = (acc[h.phase] ?? 0) + 1), acc), {});
   const trunc = hist.filter((h) => String(h.d.reason ?? '').includes('truncated at the token cap')).length;
   const stored = counts.stored ?? 0;
   // 一次运行被杀进程杀死时无法落账：start 之后 15s 内有 boot 事件即判定为进程重启所致。
-  const allOrphans = [...orphans, ...nowOpen];
-  const excused = allOrphans.filter((h) => histBoots.some((b) => b.at >= h.at && b.at - h.at < 15_000));
+  const excused = nowOpen.filter((h) => histBoots.some((b) => b.at >= h.at && b.at - h.at < 15_000));
   const firstTerminal = hist.find((h) => h.phase === 'done' || h.phase === 'failed');
-  const unexcused = allOrphans.filter((h) => !excused.includes(h));
+  const unexcused = nowOpen.filter((h) => !excused.includes(h));
   const postFix = firstTerminal ? unexcused.filter((h) => h.at >= firstTerminal.at) : unexcused;
   const historic = unexcused.length - postFix.length;
   const orphanCount = postFix.length;
