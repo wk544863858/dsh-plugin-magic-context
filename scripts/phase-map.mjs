@@ -73,8 +73,8 @@ const PHASE_A = [
 
 /**
  * Phase B: the `user` domain. Collection and review WRITE the frozen contract
- * and are still gated on an explicit human go-ahead, so they have no specs yet
- * and are listed as blind.
+ * and stay behind their own switches (`memory.global.user.collect` / `.review`,
+ * both default off), so the specs below use a synthetic contract database.
  */
 const PHASE_B = [
   'tests/directive-detect.spec.ts',
@@ -117,7 +117,12 @@ export const PHASES = [
     specs: PHASE_A,
     /** Extra commands that must pass for the gate, run after the specs. */
     checks: [{ label: 'contract freeze', script: 'scripts/mc-contract-freeze.mjs', args: ['verify', '--allow-missing'] }],
-    blind: ['WP4 共享属性维护已在合成库验证；真库首次共享行更新尚未执行'],
+    blind: [
+      'WP4 共享属性维护已在合成库验证；真库首次共享行更新尚未执行',
+      'A-7 双源对照（memory.domains.source=contract 与 adapter 的召回/水位结果一致）**无用例**：'
+      + '两条路径都已实现（memory-lane 的 domainSource 分支），但没有测试证明它们等价，'
+      + '所以"回滚杠杆"目前只是代码存在而非经过验证',
+    ],
   },
   {
     id: 'b',
@@ -138,6 +143,10 @@ export const PHASES = [
       '三个域都有实现与用例，但真库上只导入过 org 成员（machine 默认 off，user 写侧默认 off）',
       '复现检测在真实语料上是空门（1292 行 / 33 项目 / 0 共享 hash）——见 global-domain-source-finding',
       '真库上尚未发布过任何域行（可见性/退役/改写均在合成契约库上验证）',
+      'C-7 产品判据埋点（域命中按"域 × 不同项目数"统计）**无实现**：'
+      + '注入侧数据其实已在 journal 的 memory-recall.projects 里（域身份行会出现在该列表），'
+      + '但 mc-report / doctor 都没有把它聚合成域命中视图，也没有测试；'
+      + '⇒ WP9 的"2 周内无 ≥2 项目命中就停止投入"这条产品判据目前**无法从遥测得出**',
     ],
   },
   {

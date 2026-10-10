@@ -13,15 +13,18 @@
  *   newest embedded memory id 1103, newest memory id 1326 — nothing written
  *   since id 1103 has an embedding, and 194 rows BELOW that frontier lost one
  *
- * Two embedding spaces coexist (827 rows in one model, 97 in another). Writing
- * into the wrong space, or into a third, is the specific failure this module
- * exists to prevent: `memory_embeddings` is keyed `(memory_id, model_id)`, so a
- * wrong-space row is not an error — it is simply invisible to the readers that
- * use the other space, forever.
+ * Two embedding spaces coexist (≈744 rows in one model, ≈96 in another as of
+ * 2026-10-10 — re-measure rather than trusting these). Writing into the wrong
+ * space, or into a third, is the specific failure this module exists to prevent:
+ * `memory_embeddings` is keyed `(memory_id, model_id)`, so a wrong-space row is
+ * not an error — it is simply invisible to the readers that use the other space,
+ * forever.
  *
  * So this module only reads: it reports coverage and hands back the id list a
- * backfill WOULD take. The write stays unimplemented (it touches the frozen
- * contract) and is listed as a blind spot in phase D.
+ * backfill WOULD take. The write itself lives in `vector-backfill.ts` (WP11),
+ * which consumes exactly this plan; what stays unexecuted is the live write,
+ * because the switch (`memory.vectorBackfill`) defaults to off — that is the
+ * blind spot phase D records, not a missing implementation.
  */
 import { DatabaseSync } from 'node:sqlite'
 

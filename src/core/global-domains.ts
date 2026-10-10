@@ -21,8 +21,9 @@
  * are human-confirmed and never auto-promoted.
  *
  * Both paths write ONLY the adapter's own `global_candidates` table. Publishing
- * into the shared store under a domain identity is a separate, deliberately
- * unimplemented step (it writes the frozen contract).
+ * into the shared store under a domain identity is a separate step with its own
+ * gate: `publishGlobalCandidate` (WP9) does the write, and an approval that has
+ * not happened yet can never reach it.
  */
 import { DatabaseSync } from 'node:sqlite'
 import type { AdapterStores, GlobalCandidateRow } from './stores.ts'
