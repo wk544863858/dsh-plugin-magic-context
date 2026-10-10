@@ -24,6 +24,10 @@ coverage/
 # Anchored, for the same reason `/lib/` is.
 /models/
 
+# Packed distribution tarballs (`npm pack`; recipients install with
+# `dsh plugin --profile <name> add .\<file>.tgz`). Anchored like /lib/.
+/*.tgz
+
 # Logs
 *.log
 npm-debug.log*

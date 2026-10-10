@@ -11,7 +11,13 @@ import { enumerateSurfaceToolResults, requestContextOf } from './seams.ts'
 
 export interface StatusDeps {
   readonly stores: AdapterStores
-  readonly policy: PressurePolicy
+  /**
+   * The pressure policy — a snapshot, or a LIVE resolver (the composition
+   * passes `activePolicy`, so `/ctx-status` prints the thresholds the next
+   * pass will actually use; the old mount-time snapshot kept printing stale
+   * numbers after a settings-form edit until restart).
+   */
+  readonly policy: PressurePolicy | (() => PressurePolicy)
 }
 
 /** Narrowed registration surface (keeps the package typecheck standalone). */
@@ -40,13 +46,14 @@ export function registerCtxStatusCommand(ctx: Context, deps: StatusDeps): void {
     description: 'Magic Context: pressure, reclaim ledger, and pass state for this session.',
     handler: (invocation) => {
       const sessionId = invocation.agent.session.id
+      const policy = typeof deps.policy === 'function' ? deps.policy() : deps.policy
       const latest = deps.stores.latestUsage(sessionId)
       const { contextWindow } = requestContextOf(invocation.agent.session as never)
       // The same denominator the pass decision uses, so the reported percent
       // and the decision printed below it can never disagree.
-      const pressureWindow = pressureWindowTokens(contextWindow, deps.policy)
+      const pressureWindow = pressureWindowTokens(contextWindow, policy)
       const pressure = pressurePercent(latest, pressureWindow)
-      const decision = decidePass({ latest, pressure, now: Date.now(), policy: deps.policy })
+      const decision = decidePass({ latest, pressure, now: Date.now(), policy })
       const nodes = enumerateSurfaceToolResults(invocation.agent.session as never, callId =>
         deps.stores.getTag(sessionId, { kind: 'tool-result', callId }))
       const tagged = nodes.filter(node => node.tagNumber !== undefined)
@@ -91,10 +98,10 @@ export function registerCtxStatusCommand(ctx: Context, deps: StatusDeps): void {
           : `epoch ${String(baseline.epoch)}, node ${String(baseline.nodeSeq ?? '?')}, `
             + `frozen ${new Date(baseline.frozenAt).toISOString()}`
             + `${baseline.memoriesDigest === undefined ? '' : ', memories injected'}`}`,
-        `- policy: execute ≥ ${String(deps.policy.executeThreshold)}%, force ≥ ${String(deps.policy.forceThreshold)}%, `
-          + `ttl ${String(Math.round(deps.policy.ttlMs / 1000))}s, protect newest ${String(deps.policy.protectedToolResults)} `
-          + `(+${String(deps.policy.historianProtectedNodes)} from the historian), `
-          + `assumed window ${String(deps.policy.assumedContextWindow)} tokens`,
+        `- policy: execute ≥ ${String(policy.executeThreshold)}%, force ≥ ${String(policy.forceThreshold)}%, `
+          + `ttl ${String(Math.round(policy.ttlMs / 1000))}s, protect newest ${String(policy.protectedToolResults)} `
+          + `(+${String(policy.historianProtectedNodes)} from the historian), `
+          + `assumed window ${String(policy.assumedContextWindow)} tokens`,
         journalLine,
       ]
       return { kind: 'success', text: lines.join('\n') }

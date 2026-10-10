@@ -40,7 +40,6 @@
  *    checkpoint-summarizing engine competes with the reclaim lanes.
  */
 import type { Context } from '@deepseek-ai/cordis'
-import { join } from 'node:path'
 import {
   CONTEXT_WINDOW_EXCEEDED_CODE,
   DSH_EVENTS,
@@ -63,7 +62,8 @@ import { registerCtxStatusCommand } from './dsh/status-command.ts'
 import { registerCtxRecompCommand } from './dsh/recomp.ts'
 import { registerCtxGlobalCommand, registerCtxProfileCommand } from './dsh/command-surface.ts'
 import { SearchHintTracker } from './dsh/search-hint.ts'
-import { registerMagicCompactionEngine } from './dsh/compaction-engine.ts'
+import { registerMagicCompactionEngine, type EngineHandle } from './dsh/compaction-engine.ts'
+import { liveJournal } from './dsh/live-journal.ts'
 import { createTelemetryService } from './dsh/telemetry.ts'
 import { openMemoryLane } from './dsh/memory-lane.ts'
 import { injectReduceGuidance, preStepListener, type PreStepProjects } from './dsh/pre-step.ts'
@@ -73,7 +73,7 @@ import type { MagicContextDshConfig, MagicContextDshConfigDefineTool } from './d
 import { DEFAULT_POLICY, type PressurePolicy } from './core/policy.ts'
 import z from '@deepseek-ai/schemastery'
 import { ensureTag, tagPrefix } from './core/tagger.ts'
-import { openJournal, recoverOrphanHistorianRuns, type Journal, type JournalLevel } from './core/journal.ts'
+import { recoverOrphanHistorianRuns, type Journal } from './core/journal.ts'
 import { defaultDataDir, openStores, SCHEMA_VERSION } from './core/stores.ts'
 import { errText, type UsageRecord } from './core/types.ts'
 import { liveBoolean, liveNumber, liveString, policyOf } from './dsh/volatile.ts'
@@ -170,15 +170,19 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
   // consumer reads through the `live*` helpers instead of comparing the raw
   // value: `config.registerCompactionEngine !== false` is TRUE for a reference,
   // which would mount the engine a user had explicitly disabled.
-  const journal: Journal | undefined = liveBoolean(config.journal?.enabled, true)
-    ? openJournal({
-      stores,
-      ...liveBoolean(config.journal?.mirror, true) === false ? {} : { mirrorPath: join(storeDir, 'activity.log') },
-      level: liveString(config.journal?.level, 'info') as JournalLevel,
-      retentionDays: liveNumber(config.journal?.retentionDays, 30),
-      logger: ctx.logger,
-    })
-    : undefined
+  //
+  // `journal` is a LIVE wrapper when the composition boots with the journal
+  // on: enabled/level/mirror/retention are read at write time, so a
+  // settings-form edit applies to the next entry (a volatile commit never
+  // remounts, and the old mount-time construction made every journal edit a
+  // dead option until restart — the audit, 2026-10-10). Booting with
+  // `journal.enabled: false` still wires `undefined`: the maintenance tick
+  // reads a missing journal as "do not run", and the boot-time opt-out keeps
+  // that meaning (turning it back on then needs an app restart, which the
+  // form's hint says).
+  const journal: Journal | undefined = liveBoolean(config.journal?.enabled, true) === false
+    ? undefined
+    : liveJournal({ config, stores, storeDir, logger: ctx.logger })
   /** Sessions already announced, so the journal gets exactly one first-seen row. */
   const seenSessions = new Set<string>()
   // Journal repair: an hmr remount disposes stores mid-run and leaves a
@@ -210,6 +214,98 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     disposers.push((ctx.on as unknown as (n: string, l: unknown) => () => void).call(ctx, name, listener))
   }
 
+  // ── The compaction seam ────────────────────────────────────────────────────
+  // Occupying `ctx.compaction` is what makes this adapter authoritative over
+  // reclaim: no checkpoint-summarizing engine may compete with the historian
+  // and the drop lanes. Hosts that mount compaction-basic must disable that
+  // row in the profile patch (see the README) — two providers on one context
+  // throw.
+  //
+  // `registerCompactionEngine` is a LIVE switch: the pre-step band calls
+  // `reconcileEngine` on every step, so a settings-form toggle mounts or
+  // unmounts the engine without a restart. The switch is volatile, and a
+  // volatile commit never remounts the plugin — the old mount-time branch
+  // made the form's toggle a dead option: it saved, and nothing changed
+  // until the app restarted (the audit, 2026-10-10). The state sits here,
+  // before any `await` in apply, so a pre-step firing mid-apply (during the
+  // tools section's dynamic import) cannot hit a temporal-dead-zone read.
+  let adapterDisposed = false
+  let engineHandle: EngineHandle | undefined
+  let engineBusy = false
+  /** One mount attempt per ON transition: a failing mount must not retry on every step. */
+  let engineFailed = false
+  const reconcileEngine = (): void => {
+    const wanted = liveBoolean(config.registerCompactionEngine, false)
+    if (engineBusy || adapterDisposed || wanted === (engineHandle !== undefined)) return
+    if (wanted && engineFailed) return
+    engineBusy = true
+    if (wanted) {
+      void (async () => {
+        try {
+          const base = config.compactionBase ?? (await import('@deepseek-ai/dsh-compaction')).CompactionEngine
+          // Awaiting: a duplicate-mount rejection (`ctx.compaction` already
+          // owned) must land in the catch below, not become an unhandled
+          // rejection.
+          engineHandle = await registerMagicCompactionEngine(ctx, {
+            base,
+            stores,
+            policy,
+            activePolicy,
+            logger: ctx.logger,
+            ...llm === undefined ? {} : { llm },
+            ...journal === undefined ? {} : { journal },
+            ...config.historian === undefined ? {} : { route: config.historian },
+            ...memoryRecall === undefined ? {} : { recall: memoryRecall },
+            isDisposed: () => adapterDisposed,
+          })
+          ctx.logger.info('magic-context dsh adapter: CompactionEngine mounted on ctx.compaction')
+          stores.setMeta('compaction_engine', 'magic-context-dsh')
+          journal?.info('engine', 'CompactionEngine mounted on ctx.compaction', { action: 'mounted' })
+        } catch (error) {
+          const detail = errText(error)
+          engineFailed = true
+          stores.setMeta('compaction_engine', `unavailable: ${detail}`)
+          journal?.warn('engine', `CompactionEngine not mounted: ${detail}`, { action: 'unavailable', detail })
+          ctx.logger.warn(
+            `magic-context dsh adapter: CompactionEngine not mounted `
+            + `(${detail}); the management loop is unaffected`,
+          )
+        } finally {
+          engineBusy = false
+        }
+      })()
+      return
+    }
+    const handle = engineHandle
+    if (handle === undefined) {
+      // Unreachable past the guard above; kept so the narrowing is explicit.
+      engineBusy = false
+      return
+    }
+    engineHandle = undefined
+    engineFailed = false
+    void handle.dispose()
+      .then(() => {
+        // Record the opt-out explicitly: a stale "mounted" value from an
+        // earlier composition would otherwise keep claiming the seam.
+        stores.setMeta('compaction_engine', 'disabled-by-config')
+        journal?.info('engine', 'CompactionEngine unmounted by configuration', { action: 'unmounted' })
+        ctx.logger.info('magic-context dsh adapter: CompactionEngine unmounted (disabled by configuration)')
+      })
+      .catch((error: unknown) => {
+        ctx.logger.warn(`magic-context dsh adapter: engine unmount failed: ${errText(error)}`)
+      })
+      .finally(() => { engineBusy = false })
+  }
+  // Boot: mount eagerly, or record the opt-out explicitly (a stale "mounted"
+  // value from an earlier composition would otherwise keep claiming the seam).
+  if (liveBoolean(config.registerCompactionEngine, false)) {
+    reconcileEngine()
+  } else {
+    stores.setMeta('compaction_engine', 'disabled-by-config')
+    journal?.info('engine', 'CompactionEngine disabled by configuration', { action: 'disabled-by-config' })
+  }
+
   // Identities the preStep registers, the maintenance sweep serves and the
   // panel scopes by — one registry, three consumers.
   const projects: PreStepProjects = { seenIdentities: new Set<string>(), sessionIdentity: new Map<string, string>() }
@@ -238,6 +334,8 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     projects,
     seenSessions,
     activePolicy,
+    /** Engine mount/unmount rides the step band: a form toggle applies without a restart. */
+    reconcileEngine: () => reconcileEngine(),
     searchHints,
     noteSessionRoute: route => { lastSessionRoute = route },
   }))
@@ -434,15 +532,18 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     }
   }
   if (config.registerStatusCommand !== false) {
-    registerCtxStatusCommand(ctx, { stores, policy })
+    registerCtxStatusCommand(ctx, { stores, policy: activePolicy })
     // Recomp rides the same gate: it needs the same seams as the historian, and
     // its handler refuses with a readable message when the LLM is absent or the
     // historian is switched off.
     registerCtxRecompCommand(ctx, {
       stores,
-      policy,
+      policy: activePolicy,
       logger: ctx.logger,
-      enabled: liveBoolean(config.historianEnabled, true) !== false,
+      // LIVE gate: the same volatile `historianEnabled` the pre-step band
+      // reads at decision time (the old mount-time boolean disagreed with
+      // the live gate after a settings-form toggle).
+      enabled: () => liveBoolean(config.historianEnabled, true) !== false,
       ...journal === undefined ? {} : { journal },
       ...llm === undefined ? {} : { llm },
       ...config.historian === undefined ? {} : { route: config.historian },
@@ -470,46 +571,6 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     ctx.logger.info('magic-context dsh adapter: /ctx-profile and /ctx-global registered')
   }
 
-  // ── The compaction seam ────────────────────────────────────────────────────
-  // Occupying `ctx.compaction` is what makes this adapter authoritative over
-  // reclaim: no checkpoint-summarizing engine may compete with the historian
-  // and the drop lanes. Hosts that mount compaction-basic must disable that
-  // row (see the README's profile patch) — two providers on one context throw.
-  let adapterDisposed = false
-  if (liveBoolean(config.registerCompactionEngine, false)) {
-    try {
-      const base = config.compactionBase ?? (await import('@deepseek-ai/dsh-compaction')).CompactionEngine
-      // Awaiting: a duplicate-mount rejection (`ctx.compaction` already owned)
-      // must land in the catch below, not become an unhandled rejection.
-      await registerMagicCompactionEngine(ctx, {
-        base,
-        stores,
-        policy,
-        logger: ctx.logger,
-        ...llm === undefined ? {} : { llm },
-        ...journal === undefined ? {} : { journal },
-        ...config.historian === undefined ? {} : { route: config.historian },
-        ...memoryRecall === undefined ? {} : { recall: memoryRecall },
-        isDisposed: () => adapterDisposed,
-      })
-      ctx.logger.info('magic-context dsh adapter: CompactionEngine mounted on ctx.compaction')
-      stores.setMeta('compaction_engine', 'magic-context-dsh')
-      journal?.info('engine', 'CompactionEngine mounted on ctx.compaction', { action: 'mounted' })
-    } catch (error) {
-      const detail = errText(error)
-      stores.setMeta('compaction_engine', `unavailable: ${detail}`)
-      journal?.warn('engine', `CompactionEngine not mounted: ${detail}`, { action: 'unavailable', detail })
-      ctx.logger.warn(
-        `magic-context dsh adapter: CompactionEngine not mounted `
-          + `(${detail}); the management loop is unaffected`,
-      )
-    }
-  } else {
-    // Record the opt-out explicitly: a stale "mounted" value from an earlier
-    // composition would otherwise keep claiming the seam.
-    stores.setMeta('compaction_engine', 'disabled-by-config')
-    journal?.info('engine', 'CompactionEngine disabled by configuration', { action: 'disabled-by-config' })
-  }
   stores.setMeta('adapter_version', 'phase2')
   stores.setMeta('memory_bridge', memoryRecall === undefined
     ? memorySettings === undefined ? 'off' : 'disabled-by-config'
@@ -774,7 +835,8 @@ export const Config = z.object({
   journal: z.object({
     enabled: z.boolean().default(true).volatile(),
     level: z.string().default('info').volatile(),
-    retentionDays: z.number().default(30).volatile(),
+    /** min(1): a stray 0/negative would prune the whole table at open. */
+    retentionDays: z.number().min(1).default(30).volatile(),
     mirror: z.boolean().default(true).volatile(),
   }),
 

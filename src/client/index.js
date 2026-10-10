@@ -191,15 +191,21 @@ window.__ModuleLoader__.load({
       },
       {
         path: ['journal', 'retentionDays'], kind: 'number', label: 'Journal retention (days)',
-        hint: 'How long journal rows are kept.',
+        hint: 'How long journal rows are kept. Re-prunes once the value changes (minimum 1 day).',
       },
       { path: ['historianEnabled'], kind: 'boolean', label: 'Historian enabled', hint: 'Run the out-of-band historian.' },
       {
         path: ['registerCompactionEngine'], kind: 'boolean', label: 'Register compaction engine',
-        hint: 'Register the adapter as the compaction engine seam.',
+        hint: 'Register the adapter as the compaction engine seam. Mounts or unmounts on the next agent step — disable the host compaction row first.',
       },
-      { path: ['journal', 'enabled'], kind: 'boolean', label: 'Journal enabled', hint: 'Record adapter activity.' },
-      { path: ['journal', 'mirror'], kind: 'boolean', label: 'Journal text mirror', hint: 'Also write the one-line activity mirror file.' },
+      {
+        path: ['journal', 'enabled'], kind: 'boolean', label: 'Journal enabled',
+        hint: 'Record adapter activity. Turning off applies immediately; turning on from an off start needs an app restart.',
+      },
+      {
+        path: ['journal', 'mirror'], kind: 'boolean', label: 'Journal text mirror',
+        hint: 'Also write the one-line activity mirror file. Applies to entries written after the change.',
+      },
     ]
 
     /** Copy the shared settings form frame renders. */

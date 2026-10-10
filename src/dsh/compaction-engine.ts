@@ -44,6 +44,14 @@ export interface CompactionEngineDeps {
   readonly base: unknown
   readonly stores: AdapterStores
   readonly policy: PressurePolicy
+  /**
+   * Live policy resolver: when present, every engine method re-resolves the
+   * policy at its use point, so a settings-form threshold edit reaches the
+   * engine path without a remount (volatile commits never remount — the
+   * "dead option" audit, 2026-10-10). Absent falls back to the snapshot
+   * {@link policy}, which is what tests and stand-alone constructions pass.
+   */
+  readonly activePolicy?: () => PressurePolicy
   readonly logger: { info(message: string): void; warn(message: string): void }
   readonly llm?: HistorianLlm
   readonly route?: { provider: string; model: string }
@@ -57,6 +65,15 @@ export interface CompactionEngineDeps {
    * and interrupts the session (measured live as `database is not open`).
    */
   readonly isDisposed?: () => boolean
+}
+
+/**
+ * What {@link registerMagicCompactionEngine} hands back: the mounted fiber.
+ * `dispose()` unmounts the engine from `ctx.compaction`, which is what lets
+ * the composition follow a runtime `registerCompactionEngine` toggle off.
+ */
+export interface EngineHandle {
+  readonly dispose: () => Promise<void>
 }
 
 /** A structurally complete `CompactionResult` (the seam's result shape). */
@@ -94,17 +111,20 @@ function regionNodes(nodes: readonly SurfaceNode[], start: number, end: number):
 /**
  * Create and mount the adapter's CompactionEngine. Awaiting the returned
  * promise settles once the service is provided (or rejects when another
- * engine already owns `ctx.compaction`).
+ * engine already owns `ctx.compaction`). The returned handle's `dispose()`
+ * unmounts the engine, so the caller can follow a runtime toggle off.
  */
 export async function registerMagicCompactionEngine(
   ctx: Context,
   deps: CompactionEngineDeps,
-): Promise<void> {
+): Promise<EngineHandle> {
   const base = deps.base as new (ctx: unknown, config?: unknown) => {
     compactIfNeeded(agent: unknown, trigger: unknown, signal: AbortSignal): Promise<CheckpointResult | null>
     compactNow(agent: unknown, signal: AbortSignal, sourceCommandId?: string): Promise<CheckpointResult | null>
     compactRegion(start: number, end: number, agent: unknown, signal?: AbortSignal): Promise<CheckpointResult>
   }
+  /** The live policy at the use point (snapshot fallback: see deps). */
+  const policyNow = (): PressurePolicy => deps.activePolicy?.() ?? deps.policy
 
   const sessionOf = (agent: unknown): Session => {
     const session = (agent as { session?: Session }).session
@@ -124,7 +144,7 @@ export async function registerMagicCompactionEngine(
     const systemSeq = enumerateSurfaceNodes(input.session).find(node => node.role === 'system')?.seq
     const draft = await callHistorian(
       {
-        policy: deps.policy,
+        policy: policyNow(),
         llm: deps.llm,
         logger: deps.logger,
         ...deps.journal === undefined ? {} : { journal: deps.journal },
@@ -165,7 +185,7 @@ export async function registerMagicCompactionEngine(
       shadowedTokenCount,
       provider: deps.route?.provider ?? 'unknown',
       model: deps.route?.model ?? 'unknown',
-      maxTokens: deps.policy.historianMaxTokens,
+      maxTokens: policyNow().historianMaxTokens,
       rawOutput: summary,
       llmStreamCall: true,
     } as never)
@@ -234,7 +254,7 @@ export async function registerMagicCompactionEngine(
           session,
           sessionId,
           stores: deps.stores,
-          policy: deps.policy,
+          policy: policyNow(),
           logger: deps.logger,
           pass: { kind: 'execute', reason: 'execute-threshold' },
           pressure: undefined,
@@ -263,7 +283,7 @@ export async function registerMagicCompactionEngine(
       if (!this.usable()) return null
       const session = sessionOf(agent)
       const nodes = enumerateSurfaceNodes(session)
-      const range = selectManualRange(nodes, deps.stores, session.id, deps.policy)
+      const range = selectManualRange(nodes, deps.stores, session.id, policyNow())
       if (range.length === 0) return null
       return writeCheckpoint({
         session,
@@ -286,7 +306,7 @@ export async function registerMagicCompactionEngine(
     }
   }
 
-  await ctx.plugin(EngineClass, {})
+  return await ctx.plugin(EngineClass, {})
 }
 
 /** The manual range: the same eligibility rules, without the token gate. */

@@ -186,6 +186,14 @@ epoch 指纹稳定、权威守卫（authority 表空 + privilege 未启用）、
   `Config`（schemastery，**只有 `.volatile()` 字段会被投影**），写回走 settings →
   profile `cordis.patch.yml` 的同 id 覆盖行；因为 volatile 变更不重挂 fiber，**保存即生效**。
   host 侧读取一律经 `liveNumber/liveBoolean/liveString`，在决策点现取，这是"改了立刻生效"的前提。
+  > **生效语义（2026-10-10 死选项审计后逐项落实）**：`policy.*` 阈值与 `historianEnabled`
+  > 在下一个决策点生效（含 `/ctx-status`、`/ctx-recomp` 与 compaction engine 路径——引擎
+  > 方法在用点经 `activePolicy()` 现取）。`registerCompactionEngine` 由 pre-step 每步的
+  > `reconcileEngine` 动态挂/卸（无需重启，但先停宿主 compaction 行）。`journal.*` 走
+  > `liveJournal` 包装（`src/dsh/live-journal.ts`）：level/mirror 对下一条写入生效，
+  > retentionDays 变更后重修剪；唯一次例外——**挂载时就是 off 的 journal，运行中打开
+  > 需要重启**（off 语义保持"维护 tick 不跑"的旧契约）。`journal.retentionDays` 有
+  > `min(1)` 下限（schema + 包装层双保险，防止手改 YAML 把全表剪掉）。
 - **`shell.overlay` 遥测徽标**：消费本插件自己的 HTTP 端点
   `GET /mc-telemetry/summary`（一次性快照）与 `GET /mc-telemetry/events`（SSE 实时尾）。
   实测（本机运行中的应用）：`curl http://127.0.0.1:19387/mc-telemetry/summary` →

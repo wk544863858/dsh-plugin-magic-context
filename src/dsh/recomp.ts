@@ -28,15 +28,25 @@ export const RECOMP_USAGE = 'Usage: /ctx-recomp [all | last:<n> | <startSeq>-<en
 
 export interface RecompDeps {
   readonly stores: AdapterStores
-  readonly policy: PressurePolicy
+  /**
+   * The pressure policy — a snapshot, or a LIVE resolver (the composition
+   * passes `activePolicy`, so `/ctx-recomp` budgets with the thresholds the
+   * next pass will actually use instead of a mount-time snapshot).
+   */
+  readonly policy: PressurePolicy | (() => PressurePolicy)
   readonly logger: { info(message: string): void; warn(message: string): void }
   readonly journal?: Journal
   readonly llm?: HistorianLlm
   readonly route?: { provider: string; model: string }
   readonly timeoutMs?: number
   readonly now?: () => number
-  /** False when the adapter runs with the historian switched off. */
-  readonly enabled?: boolean
+  /**
+   * False when the adapter runs with the historian switched off. May be a
+   * LIVE resolver so the gate follows the same volatile `historianEnabled`
+   * the pre-step band reads at decision time (the old mount-time boolean
+   * disagreed with the live gate after a settings-form toggle).
+   */
+  readonly enabled?: boolean | (() => boolean)
 }
 
 /** What the command was asked to redo. */
@@ -138,7 +148,10 @@ export async function recompactCompartments(
   // property does not survive the intervening calls.
   const llm = deps.llm
   if (llm === undefined) throw new Error('recompaction requires an LLM seam')
-  const historianDeps = { ...deps, llm }
+  // Resolve the policy ONCE per invocation (a getter re-reads the live
+  // volatile references; a snapshot is used as-is).
+  const policy = typeof deps.policy === 'function' ? deps.policy() : deps.policy
+  const historianDeps = { ...deps, policy, llm }
   const recompacted: number[] = []
   const skipped: Array<{ compartmentId: number; reason: string }> = []
   const failed: Array<{ compartmentId: number; reason: string }> = []
@@ -146,8 +159,8 @@ export async function recompactCompartments(
   // oversized span digests in chunks with a merge call instead of truncating.
   const chunkTokens = historianTriggerBudget(
     input.contextWindow,
-    deps.policy.historianAssumedWindow,
-    deps.policy.historianMinBudgetTokens,
+    policy.historianAssumedWindow,
+    policy.historianMinBudgetTokens,
   )
   for (const target of input.targets) {
     // The compartment stores its covered seqs as plain numbers (they round-trip
@@ -239,7 +252,8 @@ export function registerCtxRecompCommand(ctx: Context, deps: RecompDeps): void {
     description: 'Magic Context: re-digest already-compacted history that turned out wrong.',
     input: { hint: 'all | last:<n> | <startSeq>-<endSeq>' },
     handler: async (invocation) => {
-      if (deps.llm === undefined || deps.enabled === false) {
+      const enabled = typeof deps.enabled === 'function' ? deps.enabled() : deps.enabled
+      if (deps.llm === undefined || enabled === false) {
         return {
           kind: 'error',
           text: 'Magic Context: the historian is not available for this adapter, so there is nothing to re-digest.',

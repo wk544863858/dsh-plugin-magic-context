@@ -32,6 +32,7 @@ const PHASE_BASE = [
   'tests/historian-terminal.spec.ts',
   'tests/host-drift-tolerance.spec.ts',
   'tests/journal.spec.ts',
+  'tests/live-journal.spec.ts',
   'tests/maintenance-wiring.spec.ts',
   'tests/maintenance.spec.ts',
   'tests/management-pass-fail.spec.ts',

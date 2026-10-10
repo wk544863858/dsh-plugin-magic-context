@@ -51,6 +51,14 @@ describe('runtime Config schema', () => {
     expect(() => Config({ policy: { assumedContextWindow: 0 } })).toThrow()
   })
 
+  it('rejects a journal retention that would prune the whole table at open', () => {
+    // 0/negative days prune with a future cutoff — every row is "older".
+    expect(() => Config({ journal: { retentionDays: 0 } })).toThrow()
+    expect(() => Config({ journal: { retentionDays: -5 } })).toThrow()
+    const value = Config({ journal: { retentionDays: 7 } }) as unknown as Record<string, any>
+    expect((value.journal.retentionDays as Volatile).get()).toBe(7)
+  })
+
   it('never materialises the memory block, and passes unknown keys through', () => {
     const bare = Config({}) as unknown as Record<string, unknown>
     expect(bare.memory).toBeUndefined()

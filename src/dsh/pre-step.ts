@@ -77,6 +77,14 @@ export interface PreStepDeps {
    * drift tests and stand-alone constructions stay unchanged.
    */
   noteSessionRoute?: (route: { provider: string; model: string }) => void
+  /**
+   * Compaction-engine mount/unmount, invoked at EVERY pre-step so the live
+   * `registerCompactionEngine` flag follows a settings-form toggle without a
+   * restart (volatile commits never remount the plugin, so the old
+   * mount-time branch made the form's switch a dead option). Optional for the
+   * same reason as {@link noteSessionRoute}. Must not throw.
+   */
+  reconcileEngine?: () => void
 }
 
 /**
@@ -117,6 +125,9 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
   let payloadDriftWarned = false
 
   return async (payload: PreStepPayload, next): Promise<PreStepEnterDecision | { kind: 'reject' }> => {
+    // Engine mount/unmount rides the step band: reconcile is two boolean
+    // reads when nothing changed and must never fail the turn.
+    deps.reconcileEngine?.()
     const decision = await next()
     if (decision.kind !== 'enter') return decision
     // Shape-tolerant identity read: this line sits BEFORE every fail-open band

@@ -86,10 +86,18 @@ export interface JournalLogger {
 
 export interface JournalOptions {
   readonly stores: JournalStore
-  /** Mirrors every persisted entry as one line; errors here never throw. */
-  readonly mirrorPath?: string
-  /** Entries below this level are dropped entirely. Default 'info'. */
-  readonly level?: JournalLevel
+  /**
+   * Mirrors every persisted entry as one line; errors here never throw. May be
+   * a GETTER: volatile settings commits never remount the plugin, so the live
+   * wrapper (dsh/live-journal.ts) hands a function here and an edit applies to
+   * the very next write. Each distinct path is prepared (mkdir + rotate) once.
+   */
+  readonly mirrorPath?: string | (() => string | undefined)
+  /**
+   * Entries below this level are dropped entirely. Default 'info'. May be a
+   * getter for the same reason as {@link mirrorPath}.
+   */
+  readonly level?: JournalLevel | (() => JournalLevel)
   /** Entries older than this are pruned when the journal opens. Default 30 days. */
   readonly retentionDays?: number
   /** Rotate the mirror once it exceeds this size. Default 5 MiB. */
@@ -260,9 +268,30 @@ function rotateMirror(path: string, maxBytes: number): void {
  */
 export function openJournal(options: JournalOptions): Journal {
   const now = options.now ?? (() => Date.now())
-  const threshold = LEVEL_RANK[options.level ?? 'info']
   const retentionDays = options.retentionDays ?? 30
   const mirrorMaxBytes = options.mirrorMaxBytes ?? 5 * 1024 * 1024
+  const resolveLevel = (): JournalLevel => {
+    if (typeof options.level !== 'function') return options.level ?? 'info'
+    return options.level() ?? 'info'
+  }
+  const resolveMirror = (): string | undefined => {
+    const path = typeof options.mirrorPath === 'function' ? options.mirrorPath() : options.mirrorPath
+    return typeof path === 'string' && path.length > 0 ? path : undefined
+  }
+  /** Each distinct mirror path is prepared (mkdir + rotate) exactly once. */
+  const preparedMirrors = new Set<string>()
+  const prepareMirror = (path: string): void => {
+    if (preparedMirrors.has(path)) return
+    preparedMirrors.add(path)
+    try {
+      mkdirSync(dirname(path), { recursive: true })
+      rotateMirror(path, mirrorMaxBytes)
+    } catch (error) {
+      options.logger?.warn(
+        `magic-context journal: mirror unavailable: ${errText(error)}`,
+      )
+    }
+  }
 
   try {
     const pruned = options.stores.pruneJournal(now() - retentionDays * 24 * 60 * 60_000)
@@ -271,16 +300,6 @@ export function openJournal(options: JournalOptions): Journal {
     options.logger?.warn(
       `magic-context journal: retention prune failed: ${errText(error)}`,
     )
-  }
-  if (options.mirrorPath !== undefined) {
-    try {
-      mkdirSync(dirname(options.mirrorPath), { recursive: true })
-      rotateMirror(options.mirrorPath, mirrorMaxBytes)
-    } catch (error) {
-      options.logger?.warn(
-        `magic-context journal: mirror unavailable: ${errText(error)}`,
-      )
-    }
   }
 
   const write = (entry: JournalEntry): void => {
@@ -291,9 +310,11 @@ export function openJournal(options: JournalOptions): Journal {
         `magic-context journal: write failed (${entry.kind}): ${errText(error)}`,
       )
     }
-    if (options.mirrorPath !== undefined) {
+    const mirror = resolveMirror()
+    if (mirror !== undefined) {
+      prepareMirror(mirror)
       try {
-        appendFileSync(options.mirrorPath, formatJournalLine(entry))
+        appendFileSync(mirror, formatJournalLine(entry))
       } catch {
         /* the mirror is a convenience; the database is authoritative */
       }
@@ -307,7 +328,7 @@ export function openJournal(options: JournalOptions): Journal {
     data?: Record<string, unknown>,
     sessionId?: string,
   ): void => {
-    if (LEVEL_RANK[level] < threshold) return
+    if (LEVEL_RANK[level] < LEVEL_RANK[resolveLevel()]) return
     const entry: JournalEntry = {
       at: now(),
       level,
@@ -331,6 +352,7 @@ export function openJournal(options: JournalOptions): Journal {
       ...sessionId === undefined ? {} : { sessionId },
     }),
     byKind: since => options.stores.journalByKind(since),
-    ...options.mirrorPath === undefined ? {} : { mirrorPath: options.mirrorPath },
+    /** Live: follows a getter-backed `mirrorPath` option without a reopen. */
+    get mirrorPath() { return resolveMirror() },
   }
 }
