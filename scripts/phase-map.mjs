@@ -62,7 +62,7 @@ const PHASE_BASE = [
   'tests/wire-repair.spec.ts',
 ]
 
-/** Phase A: the substrate. Contract frozen, adapter schema v8, domains activate. */
+/** Phase A: the substrate. Contract frozen, adapter schema v9, domains activate. */
 const PHASE_A = [
   'tests/contract-freeze.spec.ts',
   'tests/store-schema-v8.spec.ts',
@@ -117,7 +117,7 @@ export const PHASES = [
   },
   {
     id: 'a',
-    title: 'A 地基（契约冻结 / schema v8 / 域激活）',
+    title: 'A 地基（契约冻结 / schema v9 / 域激活）',
     specs: PHASE_A,
     /** Extra commands that must pass for the gate, run after the specs. */
     checks: [{ label: 'contract freeze', script: 'scripts/mc-contract-freeze.mjs', args: ['verify', '--allow-missing'] }],
@@ -134,7 +134,8 @@ export const PHASES = [
     specs: PHASE_B,
     checks: [],
     blind: [
-      'WP5/WP7 已实现并有用例，但开关默认 off：真机端到端（真实会话产出候选 → 评审 → 注入）尚未跑过',
+      'WP5/WP7 已实现并有用例；开关线上实况（2026-10-10）：collect=on（线上仍 0 条 staged）、review=off'
+      + '——真机端到端（真实会话产出候选 → 评审 → 注入）尚未跑过',
       'B-8 端到端（合成会话全链路可 journal 回溯）仍缺',
     ],
   },
@@ -144,13 +145,13 @@ export const PHASES = [
     specs: PHASE_C,
     checks: [],
     blind: [
-      '三个域都有实现与用例，但真库上只导入过 org 成员（machine 默认 off，user 写侧默认 off）',
+      '三个域都有实现与用例，但真库上只导入过 org 成员（machine 域 off；user 写侧 collect=on、review=off）',
       '复现检测在真实语料上是空门（1292 行 / 33 项目 / 0 共享 hash）——见 global-domain-source-finding',
-      '真库上尚未发布过任何域行（可见性/退役/改写均在合成契约库上验证）',
-      'C-7 产品判据埋点（域命中按"域 × 不同项目数"统计）**无实现**：'
-      + '注入侧数据其实已在 journal 的 memory-recall.projects 里（域身份行会出现在该列表），'
-      + '但 mc-report / doctor 都没有把它聚合成域命中视图，也没有测试；'
-      + '⇒ WP9 的"2 周内无 ≥2 项目命中就停止投入"这条产品判据目前**无法从遥测得出**',
+      '真库已发布 org 域行（2026-10-10：#1431 现行、#1420 归档+superseded ⇒ 发布/退役/改写各走通一次）；'
+      + 'machine 域 0 行；跨项目真实注入（域命中）尚未发生——可见性证明来自合成桥接调用，非真实 foreign 会话',
+      'C-7 产品判据埋点已落地（scripts/report-hits.mjs + mc-report「域命中(14d)」行 + tests/report-hits.spec.ts）；'
+      + '剩余盲区=观察期未满：org 域 2026-10-10 启用、14 天窗到 2026-10-24，期间域命中=0 属"未起算"，'
+      + 'WP9 判据（<2 读取项目 ⇒ 停止投入）到 10-24 才能出结论',
     ],
   },
   {
@@ -162,8 +163,10 @@ export const PHASES = [
       'D-5 剥离演练已做（tests/strip-drill.spec.ts + docs/strip-drill-report-2026-10-10.md）；'
       + '白名单=两条闭环都走完 5 步：org 域（建域→候选→批准→注入→退役）+ user 域（采集→评审→注入→退役）',
       '发布是"复制"而非"镜像"：源行后续改写不传播到域行（报告盲区 2，尚无对账 verify）',
-      '四个写开关默认全 off ⇒ 演练证明的是能力闭环，不是线上已开启',
-      'WP11 向量回填的真写未执行（开关默认 off）；真库 dry-run 已做（parity 1.000000 PASS）',
+      '写开关线上实况（2026-10-10）：user.collect=on、vectorBackfill=on（已收口）、user.review=off、'
+      + 'machine.enabled=off——演练与线上的差距收窄到"画像评审注入"与"machine 域"两段未开',
+      'WP11 向量回填已真写并收口（2026-10-10 09:52 开启 → 15:19 dominant 100%）；'
+      + '残余特性：缺口随新晋升行回升、靠 30 分钟维护拍清理，机器空闲时段不补跑',
       'doctor / mc-acceptance 的域判定已有 hermetic 正负样本（tests/domain-checks.spec.ts），'
       + '但真库采样仍是各一次：阈值与采样量的长期漂移只能靠趋势，不能靠这两条判据',
     ],
