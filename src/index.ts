@@ -493,28 +493,23 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
 
   // ── Tools + command ────────────────────────────────────────────────────────
   if (config.registerTools !== false) {
-    // Constructor resolution: host-injected → dynamic import → local builder.
-    // The local builder is what makes the packaged Desktop runtime work: a
-    // profile-installed bundle cannot import the harness packages (Node's ESM
-    // resolver ignores NODE_PATH), and ToolDefinition is a plain structural
-    // interface either way. See dsh/tool-bridge.ts.
+    // Constructor resolution: host-injected → dynamic import. The import is
+    // the normal path (`@deepseek-ai/dsh-tools` is a hard dependency); when
+    // neither resolves, the failure propagates and the mount aborts loudly —
+    // the ctx_* tools are the only entry for the agent's reduce marks, so a
+    // boot without them must not half-run. See dsh/tool-bridge.ts.
     let defineTool = config.defineTool
     toolMode = 'host-injected'
     if (defineTool === undefined) {
-      try {
-        defineTool = (await import('@deepseek-ai/dsh-tools')).defineTool
-        toolMode = 'dynamic-import'
-      } catch {
-        toolMode = 'local-builder'
-      }
+      defineTool = (await import('@deepseek-ai/dsh-tools')).defineTool
+      toolMode = 'dynamic-import'
     }
     try {
       const registrar = (ctx as unknown as { tools: Registrar }).tools
       // The host's `defineTool` takes a wider option type than the subset this
       // package authors; `tool-bridge`'s seam names that subset so the three
       // tool bodies keep their argument types (see `LocalDefineTool`).
-      const toolConstructor = defineTool as LocalDefineTool | undefined
-      const deps = { stores, ...toolConstructor === undefined ? {} : { defineTool: toolConstructor }, ...journal === undefined ? {} : { journal } }
+      const deps = { stores, defineTool: defineTool as LocalDefineTool, ...journal === undefined ? {} : { journal } }
       registrar.register(defineCtxReduceTool(deps))
       registrar.register(defineCtxExpandTool(deps))
       if (memoryRecall !== undefined) {
@@ -675,12 +670,13 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
   // measured at ~10 rows/minute during heavy work. Telemetry serves the newest
   // row to the panel, so both gauges agree within one threshold step.
   ctx.inject(['sessionProjections'], (scope) => {
-    if (journal === undefined) return
-    const registry = (scope as unknown as {
-      sessionProjections: {
-        onChanged(listener: (session: { id?: string }, key: string, value: unknown) => void): () => void
-      }
-    }).sessionProjections
+    // Structural, not host-typed on purpose: `SessionProjectionMap` is
+    // merge-extensible and `contextPressure` is registered at runtime by the
+    // token meter, so the host type's key union cannot name our key.
+    const registry = (scope as { sessionProjections?: {
+      onChanged(listener: (session: { id?: string }, key: string, value: unknown) => void): () => void
+    } }).sessionProjections
+    if (journal === undefined || registry === undefined) return
     const lastBySession = new Map<string, LoggedPressureReading>()
     const disposeListener = registry.onChanged((session, key, value) => {
       try {

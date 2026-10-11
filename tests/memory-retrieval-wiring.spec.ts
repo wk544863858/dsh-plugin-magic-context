@@ -30,6 +30,7 @@ import {
   openMemoryWriter,
   type MemoryWriter,
 } from '../src/core/memory-write.ts'
+import { defineTool } from '@deepseek-ai/dsh-tools'
 import { defineCtxMemoryTool } from '../src/dsh/tool-bridge.ts'
 import { makeMemoryDb } from './helpers/memory-db'
 
@@ -125,6 +126,7 @@ function build(options: {
       })
       : () => ({ lines: [] as string[], digest: 'unavailable', reason: options.unavailable as string }))
   return defineCtxMemoryTool({
+    defineTool,
     ...writer === undefined ? {} : { writer },
     resolveIdentity: () => ('identity' in options ? options.identity : OWN),
     recall: recall as never,

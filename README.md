@@ -57,12 +57,12 @@ fail-open 降级 FTS 车道，journal 有可读 warn，doctor 有裁决。
 - GUI 插件页停用该 bundle（写 profile patch 的 `disabled`），或
 - `dsh plugin --profile desktop remove dsh-plugin-magic-context`
 
-**为什么必须能脱离 `@deepseek-ai/*` 运行**：打包版把 profile 插件当编译 ESM 加载，
-而 Node 的 ESM 解析器不读 `NODE_PATH`，profile 的
-`pnpm-workspace.yaml` 又是 `autoInstallPeers: false` —— 插件无法 import 宿主包。
-因此工具定义改由**本地结构化构造器**生成（`ToolDefinition` 本就是普通接口，
-`register()` 只要求 `output.render` + 受支持的 JSON Schema），宿主注入
-`config.defineTool` 仍是首选路径，动态导入退居次选。
+**工具构造器解析**：`config.defineTool`（宿主注入，测试/在树胶水）优先，其次
+动态 `import('@deepseek-ai/dsh-tools')`——`@deepseek-ai/*` 宿主包是**硬依赖**
+（dependencies 精确钉版），任何安装形态都物理可解析，动态导入即正常路径。
+二者皆不可用时**响亮失败**（挂载中止）：ctx_* 工具是回收标记的唯一入口，
+不能静默半启动；曾经的本地构造器兜底已删（判据三连见
+`docs/dsh-plugin-creator-mode-health-check-2026-10-11.md` §C1）。
 
 两个可选的开关（写进 profile 的 `cordis.patch.yml`，按需打开）：
 

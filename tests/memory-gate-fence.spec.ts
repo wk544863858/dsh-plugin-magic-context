@@ -41,6 +41,7 @@ import {
   normalizedMemoryHash,
   openMemoryWriter,
 } from '../src/core/memory-write.ts'
+import { defineTool } from '@deepseek-ai/dsh-tools'
 import { defineCtxMemoryTool } from '../src/dsh/tool-bridge.ts'
 import { makeMemoryDb } from './helpers/memory-db'
 
@@ -292,6 +293,7 @@ describe('the storage-contract fence (task-9 ③)', () => {
     const writer = openMemoryWriter({ dbPath: path, logger: silentLogger, now: () => T0 })
     try {
       const tool = defineCtxMemoryTool({
+        defineTool,
         writer,
         resolveIdentity: () => OWN,
         recall: () => undefined,

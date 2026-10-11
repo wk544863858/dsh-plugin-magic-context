@@ -5,17 +5,14 @@
  * The tool CONSTRUCTOR is resolved in this order:
  *  1. `config.defineTool` — host glue that resolved `@deepseek-ai/dsh-tools`
  *     natively (tests, in-tree glue);
- *  2. a dynamic `import('@deepseek-ai/dsh-tools')`, when that specifier is
- *     resolvable from this package;
- *  3. {@link defineToolLocal} — a faithful local builder.
+ *  2. a dynamic `import('@deepseek-ai/dsh-tools')` — the normal path: the
+ *     package is a hard dependency, so every install shape resolves it.
  *
- * Step 3 exists because the packaged Desktop runtime loads profile bundles as
- * compiled ESM and Node's ESM resolver does not consult `NODE_PATH`: a plugin
- * installed into a profile cannot rely on importing the harness packages at
- * all. `ToolDefinition` is a plain structural interface (packages/core/tools/
- * src/index.ts:223) whose `register()` only demands `output.render` plus a
- * supported JSON Schema (index.ts:1063), so authoring the definition directly
- * is exactly what `defineTool` produces — with our own argument validation.
+ * When neither resolves, apply() aborts the mount loudly: the ctx_* tools are
+ * the only entry for the agent's reduce marks, so a boot without them must not
+ * half-run. (The former local `defineTool` reimplementation is gone — it was
+ * reachable only while the harness packages were peers; they are pinned
+ * dependencies now.)
  *
  * Semantics follow Magic Context's discipline: ctx_reduce only QUEUES marks
  * (a landing is a priced bust, so it waits for the execute band in pre-step
@@ -80,95 +77,19 @@ export interface LocalToolOptions<A = Record<string, unknown>> {
  */
 export type LocalDefineTool = <A>(options: LocalToolOptions<A>) => unknown
 
-function parameterJsonSchema(
-  parameters: LocalToolOptions['parameters'],
-): Record<string, unknown> {
-  const properties: Record<string, unknown> = {}
-  const required: string[] = []
-  for (const [key, spec] of Object.entries(parameters)) {
-    properties[key] = { type: spec.type }
-    if (spec.required === true) required.push(key)
-  }
-  return {
-    type: 'object',
-    properties,
-    ...required.length === 0 ? {} : { required },
-  }
-}
-
-/**
- * A local, faithful subset of `defineTool`: it compiles the parameter DSL to
- * JSON Schema, publishes the `{}` output schema that `{ type: 'json' }`
- * compiles to, and validates model arguments the same way (`INVALID_ARGS`).
- */
-export function defineToolLocal<A>(options: LocalToolOptions<A>): unknown {
-  const schema = parameterJsonSchema(options.parameters)
-  const validate = (args: unknown): string[] => {
-    const violations: string[] = []
-    if (args === null || typeof args !== 'object' || Array.isArray(args)) {
-      return ['expected an object of arguments']
-    }
-    const record = args as Record<string, unknown>
-    for (const [key, spec] of Object.entries(options.parameters)) {
-      const value = record[key]
-      if (value === undefined) {
-        if (spec.required === true) violations.push(`${key} is required`)
-        continue
-      }
-      const matches = spec.type === 'string'
-        ? typeof value === 'string'
-        : spec.type === 'integer'
-          ? typeof value === 'number' && Number.isInteger(value)
-          : spec.type === 'number'
-            ? typeof value === 'number' && Number.isFinite(value)
-            : spec.type === 'boolean'
-              ? typeof value === 'boolean'
-              : true
-      if (!matches) violations.push(`${key} must be ${spec.type}`)
-    }
-    return violations
-  }
-  const execute = options.execute
-  const render = options.output.render
-  return {
-    name: options.name,
-    description: options.description,
-    parameters: schema,
-    output: {
-      schema: {},
-      render: (args: unknown, value: unknown) => render(args as A, value),
-    },
-    async execute(args: unknown, exec: ToolRunContext): Promise<unknown> {
-      const violations = validate(args)
-      if (violations.length > 0) {
-        const error = new Error(`invalid arguments: ${violations.join('; ')}`) as Error & { code?: string; violations?: string[] }
-        error.code = 'INVALID_ARGS'
-        error.violations = violations
-        throw error
-      }
-      return execute(args as A, exec)
-    },
-  }
-}
-
 export interface ToolBridgeDeps {
   readonly stores: AdapterStores
-  /** Host-supplied constructor; absent falls back to the dynamic import, then to the local builder. */
-  readonly defineTool?: LocalDefineTool
+  /** Resolved constructor: `config.defineTool` or the dynamic import. Required — apply() fails loud without one. */
+  readonly defineTool: LocalDefineTool
   /** Validation-period activity journal (optional). */
   readonly journal?: Journal
 }
 
-/** Probe for the loading-mode diagnostics: resolves what apply() resolves as a fallback. */
+/** Probe for the loading-mode diagnostics: resolves the dynamic-import constructor. */
 export function resolveDefineTool(): Promise<ToolBridgeDeps['defineTool']> {
   // The host builder takes its own (wider) option type; the seam names the
   // subset we author, so the call sites keep their parameter types.
   return import('@deepseek-ai/dsh-tools').then(module => module.defineTool as LocalDefineTool)
-}
-
-/** The constructor a tool factory actually uses. */
-function toolBuilder(deps: ToolBridgeDeps): LocalDefineTool {
-  return deps.defineTool ?? defineToolLocal
 }
 
 interface TagVerdict {
@@ -194,7 +115,7 @@ function ackText(lines: string[]): ContentBlock[] {
 }
 
 export function defineCtxReduceTool(deps: ToolBridgeDeps): unknown {
-  const defineTool = toolBuilder(deps)
+  const defineTool = deps.defineTool
   return defineTool<{ readonly drop: string }>({
     name: 'ctx_reduce',
     description:
@@ -256,7 +177,7 @@ export function defineCtxReduceTool(deps: ToolBridgeDeps): unknown {
 }
 
 export function defineCtxExpandTool(deps: ToolBridgeDeps): unknown {
-  const defineTool = toolBuilder(deps)
+  const defineTool = deps.defineTool
   return defineTool<{ readonly tags: string }>({
     name: 'ctx_expand',
     description:
@@ -325,7 +246,7 @@ export function defineCtxExpandTool(deps: ToolBridgeDeps): unknown {
  * `{ok:false, reason}` refusal, never a thrown error.
  */
 export interface MemoryToolDeps {
-  readonly defineTool?: ToolBridgeDeps['defineTool']
+  readonly defineTool: ToolBridgeDeps['defineTool']
   readonly journal?: Journal
   /**
    * Recall callback. The second argument is the tool's run context: a host that
@@ -426,7 +347,7 @@ export interface MemoryToolRunContext {
 }
 
 export function defineCtxMemoryTool(deps: MemoryToolDeps): unknown {
-  const defineTool = deps.defineTool ?? defineToolLocal
+  const defineTool = deps.defineTool
   /**
    * The session's project identity, which every write must carry: Magic Context
    * only lets an agent mutate its own project's memories.

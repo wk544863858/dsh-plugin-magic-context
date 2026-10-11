@@ -34,6 +34,7 @@ import {
   workspaceVisibilityPredicate,
   type MemorySearchSpace,
 } from '../src/core/memory-search.ts'
+import { defineTool } from '@deepseek-ai/dsh-tools'
 import { defineCtxMemoryTool } from '../src/dsh/tool-bridge.ts'
 import { makeMemoryDb } from './helpers/memory-db'
 
@@ -390,6 +391,7 @@ describe('§9.1 at the ctx_memory boundary', () => {
     readonly search?: unknown
   }): BuiltTool {
     return defineCtxMemoryTool({
+      defineTool,
       resolveIdentity: () => OWN,
       ...options.writer === undefined ? {} : { writer: options.writer },
       ...options.search === undefined ? {} : { search: options.search },

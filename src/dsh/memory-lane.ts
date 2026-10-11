@@ -72,7 +72,7 @@ export interface MemoryLane {
   /** The `defineCtxMemoryTool` deps object (identity resolution + recall + search). */
   ctxMemoryRegistration(input: {
     activePolicy: () => PressurePolicy
-    defineTool: MagicContextDshConfigDefineTool | undefined
+    defineTool: MagicContextDshConfigDefineTool
     journal: Journal | undefined
   }): Parameters<typeof defineCtxMemoryTool>[0]
 }
@@ -479,7 +479,7 @@ export function openMemoryLane(
       }
       const bridge = memoryRecall
       return {
-        ...defineTool === undefined ? {} : { defineTool: defineTool as LocalDefineTool },
+        defineTool: defineTool as LocalDefineTool,
         ...journal === undefined ? {} : { journal },
         ...memoryWriter === undefined || config.memory?.write === false ? {} : { writer: memoryWriter },
         ...memorySearchForTool === undefined ? {} : { search: memorySearchForTool },
