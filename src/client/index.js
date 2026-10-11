@@ -90,6 +90,17 @@ window.__ModuleLoader__.load({
     /** How often the open panel re-reads `/mc-telemetry/summary` for its header counters. */
     const HEALTH_REFRESH_MS = 60_000
     /**
+     * How long an `error` row keeps the pill red.
+     *
+     * The pill answers "is anything wrong NOW", so it must not ride a cumulative
+     * counter: `errorsSinceBoot` spans the whole process lifetime, and a long-lived
+     * process (measured: 21.5 h of uptime) stayed red all day on provider-side
+     * stream failures the adapter had already classified and retried. 15 minutes
+     * exceeds the 300 s stream idle timeout, so a run that is genuinely failing
+     * still shows red while it retries.
+     */
+    const ERROR_RECENT_MS = 15 * 60_000
+    /**
      * The composer's DOCK row — the "status bar" beneath the input line.
      *
      * The composer is two rows: the input line (left `+` / permission / `input.left`
@@ -506,6 +517,23 @@ window.__ModuleLoader__.load({
      * The telemetry badge
      * ------------------------------------------------------------------ */
 
+    /**
+     * The errors the badge counts as "now": `level === 'error'` journal rows inside
+     * `ERROR_RECENT_MS`. Read off `recent` (newest-first, owned by the live frames)
+     * rather than the summary, so the window closes on its own as frames arrive —
+     * the timer in the component only covers a session that has gone quiet.
+     */
+    function countRecentErrors(recent, now) {
+      if (!Array.isArray(recent)) return 0
+      const cutoff = now - ERROR_RECENT_MS
+      let count = 0
+      for (const entry of recent) {
+        if (entry !== null && typeof entry === 'object' && entry.level === 'error'
+          && typeof entry.at === 'number' && entry.at >= cutoff) count += 1
+      }
+      return count
+    }
+
     /** Trim the Host summary into what the badge renders. */
     function trimSummary(summary) {
       const adapter = summary && typeof summary.adapter === 'object' && summary.adapter !== null ? summary.adapter : {}
@@ -530,7 +558,6 @@ window.__ModuleLoader__.load({
         lastEventAt: health.lastEventAt,
         passes24h: health.passes24h,
         errorsSinceBoot: health.errorsSinceBoot,
-        errors24h: health.errors24h,
         drops24h: health.drops24h,
         compartments24h: health.compartments24h,
         // The density pass: the numbers a user actually acts on.
@@ -675,7 +702,7 @@ window.__ModuleLoader__.load({
         'status.unavailable': '不可用',
         'tip.unavailable': '遥测不可用',
         'tip.connecting': '连接中…',
-        'tip.errors': '{n} 个错误',
+        'tip.errors': '{n} 个近期错误',
         'tip.pressure': '上下文已用 {pressure}',
         'tip.pressureWithMemories': '上下文已用 {pressure} · 记忆 {memories} 条',
         'tip.live': 'Magic Context 运行中',
@@ -760,7 +787,7 @@ window.__ModuleLoader__.load({
         'status.unavailable': 'unavailable',
         'tip.unavailable': 'Telemetry unavailable',
         'tip.connecting': 'Connecting…',
-        'tip.errors': '{n} errors',
+        'tip.errors': '{n} recent errors',
         'tip.pressure': '{pressure} of context used',
         'tip.pressureWithMemories': '{pressure} of context used · {memories} memories',
         'tip.live': 'Magic Context live',
@@ -1174,6 +1201,19 @@ window.__ModuleLoader__.load({
       const [anchor, setAnchor] = useState(null)
       const [hovered, setHovered] = useState(false)
       const pillRef = useRef(null)
+      // Computed here (not down with the other render-time values) because the decay
+      // timer below has to know whether the badge is currently red.
+      const recentErrors = countRecentErrors(state.recent, Date.now())
+      const redNow = recentErrors > 0
+      const [, setClock] = useState(0)
+      // A quiet session emits no frames, so a red badge would never age out on its
+      // own; while (and only while) it is red, re-render once a minute so the
+      // window closes on time. Green costs nothing.
+      useEffect(() => {
+        if (!redNow) return undefined
+        const timer = setInterval(() => { setClock((value) => value + 1) }, 60_000)
+        return () => { clearInterval(timer) }
+      }, [redNow])
       /** The one summary fetch: `ok → json`, anything else rejects. Lives at
        * component scope — both the SSE effect (probe) and the open-panel
        * effect (refresh) call it. */
@@ -1303,14 +1343,13 @@ window.__ModuleLoader__.load({
 
       const summary = state.summary
       const health = trimSummary(summary)
-      // The pill answers "is anything wrong NOW": prefer the errors the running
-      // process reported, so a restart clears failures the current build already
-      // fixed instead of keeping the badge red for a whole day.
-      const errors = typeof health.errorsSinceBoot === 'number'
-        ? health.errorsSinceBoot
-        : typeof health.errors24h === 'number'
-          ? health.errors24h
-          : 0
+      // The pill answers "is anything wrong NOW": a RECENT error (`recentErrors`,
+      // 15-minute window), not the cumulative `errorsSinceBoot` — that count in a
+      // long-lived process kept the badge red for a whole day on provider-side
+      // failures the adapter itself had already classified and retried. The
+      // cumulative number is still what the panel's ledger `E` cell reports.
+      const errorsSinceBoot = typeof health.errorsSinceBoot === 'number' ? health.errorsSinceBoot : 0
+      const errors = recentErrors
       const passes = typeof health.passes24h === 'number' ? health.passes24h : 0
       // The one number that matters is the context pressure, not the pass
       // count (92% of passes are defers — noise). Tone follows it: green
@@ -1515,7 +1554,7 @@ window.__ModuleLoader__.load({
           mt !== undefined && mt.expired ? 'K ' + fmtInt(mt.expired) : '',
           mt !== undefined && mt.verified ? 'V ' + fmtInt(mt.verified) : '',
           mt !== undefined && mt.updated ? 'R ' + fmtInt(mt.updated) : '',
-          errors > 0 ? 'E ' + fmtInt(errors) : '',
+          errorsSinceBoot > 0 ? 'E ' + fmtInt(errorsSinceBoot) : '',
         ]),
       ]
 
@@ -1771,6 +1810,11 @@ window.__ModuleLoader__.load({
         // node-side spec pins them so a formatting regression (the scope bug
         // that briefly unmounted the pill) cannot come back silently.
         compactTok, fmtInt, spanOf, trimSummary, timeShort,
+        // The pill's "is anything wrong NOW" window: pinned by
+        // tests/client-pure.spec.ts so the badge cannot silently fall back to the
+        // cumulative count (it stayed red for 21.5 h of uptime on provider-side
+        // failures the adapter had already handled).
+        countRecentErrors, errorRecentMs: ERROR_RECENT_MS,
       },
     }
   },

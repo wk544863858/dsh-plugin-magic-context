@@ -38,6 +38,8 @@ const api = factory((name) => {
     spanOf: (value: unknown) => string
     timeShort: (value: unknown) => string
     trimSummary: (summary: unknown) => Record<string, unknown>
+    countRecentErrors: (recent: readonly unknown[], now: number) => number
+    errorRecentMs: number
     recordOf: (event: unknown) => { category: string; text: string; detail: string; summary?: string } | null
     recordsOf: (rows: readonly unknown[]) => Array<{ category: string; text: string; detail: string; count: number }>
     recordCategories: Record<string, { icon: string; labelKey: string; tone: string }>
@@ -45,7 +47,7 @@ const api = factory((name) => {
   }
 }
 
-const { compactTok, fmtInt, spanOf, trimSummary } = api.__diagnostics
+const { compactTok, fmtInt, spanOf, trimSummary, countRecentErrors, errorRecentMs } = api.__diagnostics
 
 describe('compactTok — the one token-scale formatter', () => {
   it('keeps small counts bare, k-scale with one decimal, M-scale likewise', () => {
@@ -220,5 +222,49 @@ describe('trimSummary — the badge whitelist', () => {
     // errorsSinceBoot is a raw passthrough (the red-pill reader) — null stays null.
     expect(trimmed.errorsSinceBoot).toBeNull()
     expect(trimmed.memoryStats).toBeUndefined()
+  })
+})
+
+/**
+ * The pill's red state. It used to ride `errorsSinceBoot`, which on 2026-10-11
+ * kept the badge red through 21.5 h of uptime over five provider-side stream
+ * failures (all `level: 'error'`, all already classified and retried by the
+ * adapter) while the panel showed its green "connected" header — the two
+ * surfaces disagreed. The window is what makes them agree, so both ends of it
+ * are pinned here: a fresh error still reddens the badge, an old one never does.
+ */
+describe('countRecentErrors — the pill answers "is anything wrong NOW"', () => {
+  const now = 1_800_000_000_000
+
+  it('counts an error inside the window', () => {
+    expect(countRecentErrors([{ at: now - 60_000, level: 'error', kind: 'historian' }], now)).toBe(1)
+  })
+
+  it('the 21.5 h regression: old errors no longer redden the badge', () => {
+    // The live shape that produced "MC · 10 err" beside a green panel.
+    const stale = Array.from({ length: 10 }, (_, index) => ({ at: now - (index + 1) * 3_600_000, level: 'error' }))
+    expect(countRecentErrors(stale, now)).toBe(0)
+  })
+
+  it('the window edge is inclusive and one millisecond older is not', () => {
+    expect(countRecentErrors([{ at: now - errorRecentMs, level: 'error' }], now)).toBe(1)
+    expect(countRecentErrors([{ at: now - errorRecentMs - 1, level: 'error' }], now)).toBe(0)
+  })
+
+  it('only level=error counts — info and warn rows never redden it', () => {
+    expect(countRecentErrors([
+      { at: now - 1_000, level: 'info' },
+      { at: now - 1_000, level: 'warn' },
+      { at: now - 1_000, level: 'error' },
+      { at: now - 1_000, level: 'error' },
+    ], now)).toBe(2)
+  })
+
+  it('a malformed row is skipped, never counted and never thrown on', () => {
+    expect(countRecentErrors([
+      null, undefined, {}, { at: 'yesterday', level: 'error' }, { level: 'error' }, { at: now, level: 42 },
+    ], now)).toBe(0)
+    expect(countRecentErrors(undefined as unknown as readonly unknown[], now)).toBe(0)
+    expect(countRecentErrors('nope' as unknown as readonly unknown[], now)).toBe(0)
   })
 })
