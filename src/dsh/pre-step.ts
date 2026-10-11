@@ -20,6 +20,7 @@ import { decidePass, pressurePercent, pressureWindowTokens, type PressurePolicy 
 import { PROFILE_M0_BUDGET_TOKENS, resolveIdentitySpec } from '../core/memory-bridge.ts'
 import type { MemoryFact } from '../core/memory-categories.ts'
 import { errText } from '../core/types.ts'
+import { estimateTokens } from '../core/compartments.ts'
 import {
   DSH_EVENTS,
   type PreStepEnterDecision,
@@ -435,7 +436,7 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
               newRows: memories.newLines.length,
               digest: memories.digest.slice(0, 12),
               budgetTokens: policy.memoryBudgetTokens,
-              estTokens: memories.lines.reduce((total, line) => total + Math.ceil(line.length / 4), 0),
+              estTokens: memories.lines.reduce((total, line) => total + estimateTokens(line), 0),
               identity: memories.identity,
               maxMemoryId: memories.currentMaxMemoryId,
               workspace: memories.workspace,
@@ -456,7 +457,7 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
               digest: profile.digest.slice(0, 12),
               watermark: stores.baselineState(sessionId)?.profileWatermark,
               currentMaxId: profile.currentMaxId,
-              estTokens: profile.lines.reduce((total, line) => total + Math.ceil(line.length / 4), 0),
+              estTokens: profile.lines.reduce((total, line) => total + estimateTokens(line), 0),
             },
             sessionId,
           )
@@ -620,12 +621,11 @@ export function injectReduceGuidance(deps: PreStepDeps): void {
   const { ctx, config, stores, journal, reduceTracker, lane } = deps
   if (liveBoolean(config.reduceGuidance, true) === false) return
   ctx.inject(['systemPrompt'], (scope) => {
-    const systemPrompt = (scope as unknown as {
-      systemPrompt: {
-        section(section: { name: string; text: string; order?: number }): () => void
-        context(context: { name: string; order: number; text: (assembly: unknown) => string }): () => void
-      }
-    }).systemPrompt
+    const systemPrompt = (scope as { systemPrompt?: {
+      section(section: { name: string; text: string; order?: number }): () => void
+      context(context: { name: string; order: number; text: (assembly: unknown) => string }): () => void
+    } }).systemPrompt
+    if (systemPrompt === undefined) return
     scope.effect(() => systemPrompt.section({
       name: 'magic-context-desk',
       text: buildDeskSection(lane.memoryEnabled),

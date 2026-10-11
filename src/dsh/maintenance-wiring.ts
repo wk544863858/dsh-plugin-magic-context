@@ -27,6 +27,8 @@ import { quotaSkipSince, resolveMaintenanceRoute, ROUTE_QUOTA_HOLD_MS, RouteHeal
 
 /** WP11 default batch: how many vectors one maintenance tick may add. */
 export const VECTOR_BACKFILL_DEFAULT_LIMIT = 24
+/** Live maintenance tickers keyed by adapter DB path — a same-DB remount replaces its predecessor (see wireMaintenance). */
+const maintenanceTickers = new Map<string, () => void>()
 import type { MemoryWriter } from '../core/memory-write.ts'
 import type { ProfileWriter } from '../core/profile-write.ts'
 import { errText } from '../core/types.ts'
@@ -203,9 +205,26 @@ export function wireMaintenance(input: {
       maintenanceBusy = false
     }
   }
+  // One live ticker per adapter store, process-wide. A remount that arrives
+  // without its predecessor's disposal (the GUI-reconnect reload path) used to
+  // STACK a second 60s first-tick and a second interval on the same DB —
+  // measured at 6 ticks/75 minutes. The registry, keyed by `dbPath`, replaces
+  // the live ticker instead: a same-DB remount takes over, different-DB mounts
+  // (tests with separate data dirs) stay independent.
+  const predecessor = maintenanceTickers.get(stores.dbPath)
+  if (predecessor !== undefined) predecessor()
+  let stopped = false
   let maintenanceTimer: ReturnType<typeof setInterval> | undefined
+  const stopTicker = (): void => {
+    if (stopped) return
+    stopped = true
+    if (maintenanceTickers.get(stores.dbPath) === stopTicker) maintenanceTickers.delete(stores.dbPath)
+    if (maintenanceTimer !== undefined) clearInterval(maintenanceTimer)
+    clearTimeout(maintenanceFirst)
+  }
   const maintenanceFirst = setTimeout(() => {
     void runMaintenance().finally(() => {
+      if (stopped) return
       maintenanceTimer = setInterval(
         () => { void runMaintenance() },
         Math.max(60_000, liveNumber(config.maintenance?.intervalMs, 1_800_000)),
@@ -214,10 +233,8 @@ export function wireMaintenance(input: {
     })
   }, 60_000)
   ;(maintenanceFirst as unknown as { unref?: () => void }).unref?.()
-  disposers.push(() => {
-    if (maintenanceTimer !== undefined) clearInterval(maintenanceTimer)
-    clearTimeout(maintenanceFirst)
-  })
+  maintenanceTickers.set(stores.dbPath, stopTicker)
+  disposers.push(stopTicker)
   return {
     maintenanceLast: () => maintenanceLast,
     profileReviewLast: () => profileReviewLast,
