@@ -16,6 +16,7 @@
   "files": [
     "lib",
     "vendor",
+    "assets",
     "cordis.patch.yml",
     "README.md",
     "NOTICE"
@@ -47,7 +48,8 @@
     "@deepseek-ai/dsh-compaction": "*",
     "@deepseek-ai/dsh-llm": "*",
     "@deepseek-ai/dsh-session": "*",
-    "@deepseek-ai/dsh-tools": "*"
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/schemastery": "*"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.5-alpha.1",
@@ -60,6 +62,7 @@
     "@deepseek-ai/dsh-session-title": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-system-prompt": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-tools": "0.2.1-alpha.1",
+    "@deepseek-ai/schemastery": "3.18.5-alpha.1",
     "@huggingface/tokenizers": "0.2.0",
     "@types/node": "^24.19.1",
     "onnxruntime-common": "1.31.0-dev.20260911-2a43ec07e",
@@ -67,12 +70,6 @@
     "vitest": "^4.1.8"
   },
   "dependencies": {
-    "@deepseek-ai/cordis": "4.0.5-alpha.1",
-    "@deepseek-ai/dsh-agent": "0.2.1-alpha.1",
-    "@deepseek-ai/dsh-llm": "0.2.1-alpha.1",
-    "@deepseek-ai/dsh-session": "0.2.1-alpha.1",
-    "@deepseek-ai/dsh-tools": "0.2.1-alpha.1",
-    "@deepseek-ai/schemastery": "3.18.5-alpha.1",
     "@huggingface/tokenizers": "0.2.0",
     "onnxruntime-common": "1.31.0-dev.20260911-2a43ec07e"
   }
