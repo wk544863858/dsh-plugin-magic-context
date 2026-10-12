@@ -316,10 +316,16 @@ export async function reviewGlobalCandidates(input: {
       continue
     }
     if (verdict.label === OPTION_APPROVE || verdict.label.startsWith('批准')) {
+      // Approve plus a typed text publishes the TYPED text as the shared row:
+      // the operator edited the memory before release (2026-10-12). The
+      // project-level source row keeps its original body — the review edits
+      // the shared edition only; the journal note carries the edit so the
+      // divergence stays auditable.
       const published = publishGlobalCandidate(input.store, {
         candidateId: candidate.id,
         writer: input.publisher,
         now: input.now(),
+        ...(note === undefined ? {} : { contentOverride: note }),
       })
       if (!published.ok) {
         failed += 1
@@ -329,8 +335,12 @@ export async function reviewGlobalCandidates(input: {
       }
       approved += 1
       lines.push(`#${String(candidate.id)} ✓ 已发布为 ${published.identity} [${published.category}]`
-        + `（memory #${String(published.memoryId)}${published.created ? '' : '，已存在'}）`)
-      journalDecision('approved', { memoryId: published.memoryId })
+        + `（memory #${String(published.memoryId)}${published.created ? '' : '，已存在'}）`
+        + (note === undefined ? '' : '，内容已按输入修改'))
+      journalDecision('approved', {
+        memoryId: published.memoryId,
+        ...(note === undefined ? {} : { edited: 1 }),
+      })
       continue
     }
     if (verdict.label === OPTION_REJECT || verdict.label.startsWith('拒绝')) {
@@ -341,7 +351,8 @@ export async function reviewGlobalCandidates(input: {
       continue
     }
     skipped += 1
-    lines.push(`#${String(candidate.id)} → 跳过，留在待审池`)
+    lines.push(`#${String(candidate.id)} → 跳过，留在待审池`
+      + (note === undefined ? '' : '（自定义文本需配合批准/拒绝选项生效）'))
     journalDecision('skipped')
   }
 

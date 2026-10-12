@@ -150,6 +150,47 @@ describe('reviewGlobalCandidates', () => {
     expect(row?.payload).toMatchObject({ candidateId: id, decision: 'approved', answer: '批准发布' })
   })
 
+  it('publishes the typed text when approving with a custom answer, source row untouched', async () => {
+    const store = storeWithDomains()
+    const id = stage(store, { category: 'CONSTRAINTS', sourceMemoryId: 7 })
+    const { port, calls } = fakePublisher()
+    const { journal, rows } = fakeJournal()
+    const outcome = await reviewGlobalCandidates({
+      store,
+      ask: fakeAsker(askId => ({ answers: [{ id: askId, selected: ['批准发布'], custom: '  修正后的事实：构建走 npm run gate  ' }] })),
+      publisher: port,
+      journal,
+      sessionId: 'session-1',
+      now: () => NOW,
+    })
+    expect(outcome.approved).toBe(1)
+    // The shared row carries the trimmed typed text, not the candidate body.
+    expect(calls[0]?.content).toBe('修正后的事实：构建走 npm run gate')
+    expect(outcome.lines.some(line => line.includes('内容已按输入修改'))).toBe(true)
+    expect(rows.find(entry => entry.kind === 'global-review')?.payload).toMatchObject({
+      decision: 'approved',
+      edited: 1,
+      note: '修正后的事实：构建走 npm run gate',
+    })
+  })
+
+  it('keeps a bare custom answer (no option) pending and says so', async () => {
+    const store = storeWithDomains()
+    const id = stage(store, { category: 'CONSTRAINTS', sourceMemoryId: 7 })
+    const { port, calls } = fakePublisher()
+    const outcome = await reviewGlobalCandidates({
+      store,
+      ask: fakeAsker(askId => ({ answers: [{ id: askId, selected: [], custom: '先改改内容' }] })),
+      publisher: port,
+      now: () => NOW,
+    })
+    expect(outcome.skipped).toBe(1)
+    expect(outcome.approved).toBe(0)
+    expect(calls).toHaveLength(0)
+    expect(store.getGlobalCandidate(id)?.state).toBe('pending')
+    expect(outcome.lines.some(line => line.includes('自定义文本需配合批准/拒绝选项生效'))).toBe(true)
+  })
+
   it('rejects without publishing and skips without touching state', async () => {
     const store = storeWithDomains()
     const rejectId = stage(store, { category: 'CONSTRAINTS', sourceMemoryId: 7, content: 'A' })

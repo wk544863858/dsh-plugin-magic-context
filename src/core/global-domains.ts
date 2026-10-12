@@ -351,6 +351,8 @@ export function publishGlobalCandidate(
     readonly writer: DomainWritePort
     readonly now: number
     readonly importance?: number
+    /** Publish this text instead of the candidate body (operator-edited approval). */
+    readonly contentOverride?: string
   },
 ): DomainPublishResult {
   const candidate = store.getGlobalCandidate(options.candidateId)
@@ -374,7 +376,7 @@ export function publishGlobalCandidate(
   const written = options.writer.publishDomainMemory({
     identity: candidate.domainId,
     category,
-    content: candidate.content,
+    content: options.contentOverride ?? candidate.content,
     ...options.importance === undefined ? {} : { importance: options.importance },
   })
   if (!written.ok) return { ok: false, error: `publish refused: ${written.detail}` }
