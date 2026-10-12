@@ -68,6 +68,7 @@ import { createTelemetryService } from './dsh/telemetry.ts'
 import { openMemoryLane } from './dsh/memory-lane.ts'
 import { injectReduceGuidance, preStepListener, type PreStepProjects } from './dsh/pre-step.ts'
 import { wireMaintenance } from './dsh/maintenance-wiring.ts'
+import { SWITCH_SNAPSHOT_META_KEY, buildSwitchSnapshot, diffSwitches } from './dsh/config-switches.ts'
 import { isQuotaExhaustedDetail, RouteHealth, type RouteChoice } from './core/route-health.ts'
 import type { MagicContextDshConfig, MagicContextDshConfigDefineTool } from './dsh/config.ts'
 import { DEFAULT_POLICY, type PressurePolicy } from './core/policy.ts'
@@ -704,11 +705,37 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     void disposeListener
   })
 
+  // Config-drift alarm (2026-10-12): the profile's `config` block is REPLACE
+  // semantics and once silently dropped three switch keys — the switches fell
+  // back to defaults with no error row, found ~12h later by inference. Diff
+  // this mount's effective snapshot against the previous mount's (persisted in
+  // the adapter meta table) and say so LOUDLY when something went off. First
+  // mount only seeds. Fail-open: a meta failure must not break the boot.
+  const switches = buildSwitchSnapshot(config)
+  try {
+    const previousRaw = stores.getMeta(SWITCH_SNAPSHOT_META_KEY)
+    if (previousRaw !== undefined) {
+      const previous = JSON.parse(previousRaw) as Record<string, unknown>
+      for (const row of diffSwitches(previous, switches)) {
+        const detail = { key: row.key, before: row.before, after: row.after }
+        if (row.severity === 'went-off') {
+          journal?.warn('config-drift', `switch went OFF: ${row.key} (${String(row.before)} -> ${String(row.after)})`, detail)
+        } else {
+          journal?.info('config-drift', `switch changed: ${row.key} (${String(row.before)} -> ${String(row.after)})`, detail)
+        }
+      }
+    }
+    stores.setMeta(SWITCH_SNAPSHOT_META_KEY, JSON.stringify(switches))
+  } catch (error) {
+    journal?.warn('config-drift', `switch snapshot diff failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
+
   journal?.info('boot', `adapter booted (tools: ${toolMode}, historian: ${liveBoolean(config.historianEnabled, true) === false ? 'off' : llm === undefined ? 'no-llm' : 'on'})`, {
     version: 'phase2',
     dbPath: stores.dbPath,
     schemaVersion: SCHEMA_VERSION,
     recoveredHistorianRuns,
+    switches,
     tools: { mode: toolMode, registered: config.registerTools !== false },
     engine: stores.getMeta('compaction_engine'),
     memory: stores.getMeta('memory_bridge'),

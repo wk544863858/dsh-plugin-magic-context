@@ -83,14 +83,17 @@ interface Booted {
 /** Boot the real plugin with fake timers already installed, so the 60s first
  * sweep and the interval are ours to drive. `route` pins maintenance's route;
  * pass the session's own route to exercise the quota-skip rule (which only ever
- * suppresses the main conversation's exact route). */
+ * suppresses the main conversation's exact route). `dataDir` reuses an existing
+ * adapter store (the config-drift test boots the SAME store twice). */
 async function boot(options: {
   memoryDbPath: string
   cwd: string
   maintenance: boolean
   route?: { provider: string; model: string }
+  dataDir?: string
+  memoryOverrides?: Record<string, unknown>
 }): Promise<Booted> {
-  const dataDir = tempDir('mc-maint-data-')
+  const dataDir = options.dataDir ?? tempDir('mc-maint-data-')
   const route = options.route ?? VERIFY_ROUTE
   const maintenance = options.maintenance
     ? { maintenance: { intervalMs: 60_000, verifyProvider: route.provider, verifyModel: route.model } }
@@ -108,7 +111,7 @@ async function boot(options: {
     // A tiny conversation must stay BELOW the compaction threshold: that quiet
     // path is exactly where the identity registration used to be missing.
     policy: { executeThreshold: 95, forceThreshold: 99 },
-    memory: { dbPath: options.memoryDbPath },
+    memory: { dbPath: options.memoryDbPath, ...options.memoryOverrides },
     ...maintenance,
   })
   const agent = await ctx.agentLoop.create(
@@ -145,6 +148,28 @@ function maintenanceRows(journalPath: string): Array<{ level: string; summary: s
   }
 }
 
+/** The newest `boot` row (effective switches live in its data.switches). */
+function bootRow(journalPath: string): { level: string; data: Record<string, unknown> } {
+  const db = new DatabaseSync(journalPath, { readOnly: true })
+  try {
+    const row = db.prepare("SELECT level, data FROM journal WHERE kind = 'boot' ORDER BY id DESC LIMIT 1").get() as
+      { level: string; data: string | null }
+    return { level: String(row.level), data: JSON.parse(String(row.data ?? '{}')) as Record<string, unknown> }
+  } finally {
+    db.close()
+  }
+}
+
+function driftRows(journalPath: string): Array<{ level: string; summary: string }> {
+  const db = new DatabaseSync(journalPath, { readOnly: true })
+  try {
+    return db.prepare("SELECT level, summary FROM journal WHERE kind = 'config-drift' ORDER BY id ASC").all()
+      .map(row => ({ level: String(row.level), summary: String(row.summary) }))
+  } finally {
+    db.close()
+  }
+}
+
 afterEach(() => {
   vi.useRealTimers()
   for (const dir of tempDirs.splice(0)) {
@@ -164,6 +189,15 @@ describe('maintenance sweep wiring (real plugin, fake clock)', () => {
     const store = makeMemoryDb(identity)
     const { ctx, agent, journalPath } = await boot({ memoryDbPath: store.path, cwd, maintenance: true })
     try {
+      // The boot row carries the EFFECTIVE switch snapshot: "what is on right
+      // now" is one query away and needs no profile parse (the lost-key
+      // defense, C1). The default-on backfill pin doubles as the P2 assertion.
+      const bootLine = bootRow(journalPath)
+      const switches = bootLine.data.switches as Record<string, unknown>
+      expect(switches.vectorBackfill).toBe(true)
+      expect(switches.scoring).toBe(false)
+      expect(switches.machine).toBe(false)
+
       // The verdict route is the configured one, not the session's.
       ctx.llm.registerAdapter(['mock-verify'], new MockAdapter([
         textResponse(JSON.stringify({ verdicts: [{ id: store.id, verdict: 'verified' }] })),
@@ -290,6 +324,34 @@ describe('maintenance sweep wiring (real plugin, fake clock)', () => {
       expect(rowSnapshot(store.path, store.id)).toMatchObject({ verificationStatus: 'verified' })
     } finally {
       await ctx.fiber.dispose()
+    }
+  })
+
+  it('alarms on the journal when a switch went off between mounts of the same store', async () => {
+    vi.useFakeTimers()
+    const cwd = tempDir('mc-maint-cwd5-')
+    const dataDir = tempDir('mc-maint-data5-')
+    const store = makeMemoryDb(resolveIdentitySpec(cwd)!)
+
+    // First mount: defaults (vectorBackfill ON) seed the snapshot silently.
+    const first = await boot({ memoryDbPath: store.path, cwd, maintenance: true, dataDir })
+    await first.ctx.fiber.dispose()
+
+    // Second mount on the SAME store with the key turned OFF — the exact shape
+    // a profile rewrite produces (the 2026-10-11 incident). The drift alarm
+    // must name the switch at warn level the moment it happens.
+    const second = await boot({
+      memoryDbPath: store.path,
+      cwd,
+      maintenance: true,
+      dataDir,
+      memoryOverrides: { vectorBackfill: false },
+    })
+    try {
+      const rows = driftRows(second.journalPath)
+      expect(rows.some(row => row.level === 'warn' && row.summary.includes('switch went OFF: vectorBackfill'))).toBe(true)
+    } finally {
+      await second.ctx.fiber.dispose()
     }
   })
 })

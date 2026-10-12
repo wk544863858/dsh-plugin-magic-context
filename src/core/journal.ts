@@ -27,6 +27,7 @@ export type JournalLevel = 'info' | 'warn' | 'error'
 /** The canonical event kinds; the report tool groups by these. */
 export type JournalKind =
   | 'boot'
+  | 'config-drift'
   | 'session-first-seen'
   | 'pass'
   | 'drop-landed'
