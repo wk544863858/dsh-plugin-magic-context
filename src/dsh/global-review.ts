@@ -171,12 +171,21 @@ export async function reviewGlobalCandidates(input: {
       lines.push(`#${String(candidate.id)} ✗ 共享库当前不可写（无发布器），候选保留待审`)
       continue
     }
-    const meta = `[${candidate.category ?? '未分类'}] 来源 ${shortIdentity(candidate.firstIdentity)}`
-      + ` · ${String(candidate.distinctIdentities)} 个项目独立观察 / ${String(candidate.observationCount)} 次`
-      + (candidate.suggestedDomain === undefined
-        ? ''
-        : `\nLLM 建议域：${domainLabel(candidate.suggestedDomain === 'machine' ? 'dir:global:machine' : 'dir:global:org')}`
-          + (candidate.suggestionReason === undefined ? '' : `（${candidate.suggestionReason}）`))
+    // Card copy differs by LANE. An instant promotion (onlyCandidateId set) is
+    // the operator's OWN just-requested act: the card says so, drops the pool
+    // statistics (meaningless for a one-write candidate) and the "skip"
+    // non-option (the operator is right here). A batch card stays neutral and
+    // keeps all four choices.
+    const instant = input.onlyCandidateId !== undefined
+    const domainName = domainLabel(candidate.domainId)
+    const source = instant
+      ? `来源：你刚要求提升 memory #${String(candidate.sourceMemoryId ?? candidate.id)}` +
+        `（项目 ${shortIdentity(candidate.firstIdentity)}）`
+      : `来源：自动暂存 · ${String(candidate.distinctIdentities)} 个项目独立观察 / ${String(candidate.observationCount)} 次` +
+        (candidate.suggestedDomain === undefined
+          ? ''
+          : `\nLLM 建议域：${domainLabel(candidate.suggestedDomain === 'machine' ? 'dir:global:machine' : 'dir:global:org')}`
+            + (candidate.suggestionReason === undefined ? '' : `（${candidate.suggestionReason}）`))
     // Reclassification precheck: the OTHER enabled global domain, and only if
     // this candidate's category is on its allowlist — the card must never
     // offer a reroute the gate would refuse (same principle as gating before
@@ -189,15 +198,20 @@ export async function reviewGlobalCandidates(input: {
     const rerouteOption = otherDomain === undefined ? undefined
       : otherDomain.kind === 'org' ? OPTION_REROUTE_ORG : OPTION_REROUTE_MACHINE
     const options = [
-      { label: OPTION_APPROVE, description: '写入共享域，所有成员项目可见（source_type=user）' },
+      {
+        label: OPTION_APPROVE,
+        description: instant
+          ? `写入${domainName}，该域所有成员项目可见（你刚要求的操作）`
+          : '写入共享域，所有成员项目可见（source_type=user）',
+      },
       ...(rerouteAllowed && rerouteOption !== undefined
         ? [{
             label: rerouteOption,
             description: `改判到${domainLabel(otherDomain.domainId)}并发布（原候选退役，journal 记 reclassified）`,
           }]
         : []),
-      { label: OPTION_SKIP, description: '留在待审池，下次再决定' },
-      { label: OPTION_REJECT, description: '标记 rejected，不再进入待审' },
+      ...instant ? [] : [{ label: OPTION_SKIP, description: '留在待审池，下次再决定' }],
+      { label: OPTION_REJECT, description: instant ? '终局拒绝，不再进入待审' : '标记 rejected，不再进入待审' },
     ]
     const id = `global-candidate-${String(candidate.id)}`
     let answer: unknown
@@ -206,9 +220,9 @@ export async function reviewGlobalCandidates(input: {
         sessionId: input.sessionId,
         questions: [{
           id,
-          question: `发布候选 #${String(candidate.id)} 到 ${domainLabel(candidate.domainId)}？`,
-          detail: `${meta}\n\n${candidate.content}`,
-          header: '记忆发布审批',
+          question: `把这条 [${candidate.category ?? '未分类'}] 记忆发布到${domainName}？`,
+          detail: `${source}\n\n${candidate.content}`,
+          header: `记忆发布审批 · ${domainName}`,
           options,
         }],
       })

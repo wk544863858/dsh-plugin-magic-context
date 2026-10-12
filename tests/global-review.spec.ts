@@ -125,14 +125,20 @@ describe('reviewGlobalCandidates', () => {
     const id = stage(store, { category: 'CONSTRAINTS', sourceMemoryId: 7 })
     const { port, calls } = fakePublisher()
     const { journal, rows } = fakeJournal()
+    const raisedCards: GlobalReviewQuestion[][] = []
     const outcome = await reviewGlobalCandidates({
       store,
-      ask: fakeAsker(askId => (askId === `global-candidate-${String(id)}` ? { answers: [{ id: askId, selected: ['批准发布'] }] } : {})),
+      ask: fakeAsker(askId => (askId === `global-candidate-${String(id)}` ? { answers: [{ id: askId, selected: ['批准发布'] }] } : {}), raisedCards),
       publisher: port,
       journal,
       sessionId: 'session-1',
       now: () => NOW,
     })
+    // Batch-lane card copy: neutral, pool statistics present, no hash.
+    const batchCard = raisedCards[0]![0]!
+    expect(batchCard.detail).toContain('来源：自动暂存 · 0 个项目独立观察 / 0 次')
+    expect(batchCard.detail).not.toContain('git:abc')
+    expect(batchCard.options?.some(option => option.label === '跳过')).toBe(true)
     expect(outcome.approved).toBe(1)
     expect(outcome.failed).toBe(0)
     expect(calls).toHaveLength(1)
@@ -228,6 +234,18 @@ describe('reviewGlobalCandidates', () => {
     // One card, the promoted one, published; the rest of the pool untouched.
     expect(raised).toHaveLength(1)
     expect(raised[0][0]?.id).toBe(`global-candidate-${String(target)}`)
+    // Instant-lane card copy: the operator's own act, no pool statistics, no
+    // "skip" non-option, recommend-flavoured approve.
+    const card = raised[0]![0]!
+    expect(card.question).toBe('把这条 [CONSTRAINTS] 记忆发布到机器域？')
+    expect(card.header).toBe('记忆发布审批 · 机器域')
+    expect(card.detail).toContain('来源：你刚要求提升 memory #2')
+    expect(card.detail).not.toContain('独立观察')
+    const labels = card.options?.map(option => option.label) ?? []
+    expect(labels).toContain('批准发布')
+    expect(labels).not.toContain('跳过')
+    expect(labels).toContain('拒绝')
+    expect(card.options?.find(option => option.label === '批准发布')?.description).toContain('你刚要求的操作')
     expect(outcome.approved).toBe(1)
     expect(calls).toHaveLength(1)
     expect(calls[0]).toMatchObject({ identity: 'dir:global:machine' })
