@@ -23,11 +23,27 @@
 
 import {
   DEFAULT_DOMAIN_BUDGET_TOKENS,
-  DEFAULT_SHARE_CATEGORIES,
   defaultDomainCap,
   domainIdentity,
 } from './domains.ts'
 import type { AdapterStores } from './stores.ts'
+
+/**
+ * The machine domain's BIRTH allowlist (2026-10-12, user verdict "A"): native
+ * machine facts are environment/configuration constraints, so the contract's
+ * conservative `["CONSTRAINTS"]` default forced every one of them to masquerade
+ * as CONSTRAINTS to publish at all (#1515 did, #1537 was refused). Scope is the
+ * v2 FIVE share categories (the only values `parseShareCategories` accepts);
+ * `ENVIRONMENT` exists in the 8-category decay table but is NOT a share
+ * category. Applies only to NEW domains — an existing row's hand-edited
+ * allowlist survives every sync, and the live row was widened by the same
+ * verdict.
+ */
+export const MACHINE_DEFAULT_SHARE_CATEGORIES: ReadonlyArray<string> = [
+  'CONSTRAINTS',
+  'CONFIG_VALUES',
+  'ARCHITECTURE',
+]
 
 export interface MachineDomainConfig {
   readonly enabled?: boolean
@@ -112,7 +128,7 @@ export function syncMachineDomain(
       enabled: plan.enabled,
       budgetTokens: DEFAULT_DOMAIN_BUDGET_TOKENS.machine,
       cap: defaultDomainCap('machine'),
-      shareCategories: DEFAULT_SHARE_CATEGORIES,
+      shareCategories: MACHINE_DEFAULT_SHARE_CATEGORIES,
     }, input.now)
   } else if (existing.enabled !== plan.enabled) {
     // Flip only the switch: a hand-edited cap or allowlist must survive a sync.

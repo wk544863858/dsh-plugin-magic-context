@@ -22,7 +22,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { DEFAULT_SHARE_CATEGORIES, defaultDomainCap, domainIdentity } from '../src/core/domains.ts'
+import { defaultDomainCap, domainIdentity } from '../src/core/domains.ts'
 import { planMachineDomain, syncMachineDomain } from '../src/core/machine-domain.ts'
 import { openMemoryBridge } from '../src/core/memory-bridge.ts'
 import { openMemoryWriter } from '../src/core/memory-write.ts'
@@ -145,7 +145,7 @@ describe('syncMachineDomain — the store side', () => {
     expect(stores.listDomains()).toEqual([])
   })
 
-  it('creates the domain with the derived cap and the contract default allowlist', () => {
+  it('creates the domain with the derived cap and the machine birth allowlist', () => {
     const stores = store()
     const plan = syncMachineDomain(stores, { identities: [A, B], config: { enabled: true }, now: NOW })
     expect(plan.add).toEqual([A, B].sort())
@@ -153,8 +153,29 @@ describe('syncMachineDomain — the store side', () => {
     expect(domain?.kind).toBe('machine')
     expect(domain?.enabled).toBe(true)
     expect(domain?.cap).toBe(defaultDomainCap('machine'))
-    expect(domain?.shareCategories).toEqual([...DEFAULT_SHARE_CATEGORIES])
+    // Birth allowlist, widened 2026-10-12: native machine facts are
+    // CONFIG_VALUES/ARCHITECTURE rows; scope stays the v2 five share
+    // categories (ENVIRONMENT is a decay class, not a share class).
+    // Serialized order is the store's localeCompare normalization.
+    expect(domain?.shareCategories).toEqual(['ARCHITECTURE', 'CONFIG_VALUES', 'CONSTRAINTS'])
     expect(stores.listDomainMembers(MACHINE).map(member => member.identity).sort()).toEqual([A, B].sort())
+  })
+
+  it('never overwrites a hand-edited allowlist on later syncs', () => {
+    const stores = store()
+    syncMachineDomain(stores, { identities: [A, B], config: { enabled: true }, now: NOW })
+    stores.upsertDomain({
+      domainId: MACHINE,
+      kind: 'machine',
+      enabled: true,
+      budgetTokens: 512,
+      cap: defaultDomainCap('machine'),
+      shareCategories: ['CONSTRAINTS'],
+    }, NOW + 1_000)
+    syncMachineDomain(stores, { identities: [A, B], config: { enabled: false }, now: NOW + 2_000 })
+    const back = syncMachineDomain(stores, { identities: [A, B], config: { enabled: true }, now: NOW + 3_000 })
+    expect(back.enabled).toBe(true)
+    expect(stores.getDomain(MACHINE)?.shareCategories).toEqual(['CONSTRAINTS'])
   })
 
   it('writes nothing the second time', () => {
