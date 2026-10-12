@@ -175,6 +175,10 @@ epoch 指纹稳定、权威守卫（authority 表空 + privilege 未启用）、
 > 安装 journal 版本后需要**一次重载**才生效：插件页里关掉再打开该 bundle（HMR），
 > 或重启桌面应用（必定生效）。生效标志：`meta.schema_version` 变为 `6`。
 
+## 全局域记忆：自动入队 + 人工审批（2026-10-12）
+
+机器域/组织域的维护分两段：**入队**可自动化——`memory.global.machine.autoStage`（默认 false）让维护 tick 把合格记忆升入候选池；**发布永远是人**——对 agent 说"审一下待审队列"，agent 调 `ctx_memory action=review_global`，宿主 `userQuestions` 弹审批卡（候选全文 + 来源 + 观察计数，选项：批准发布/跳过/拒绝），批准才走 WP9 的 gate→publish（`source_type=user`），每条决定连同答案原文进 journal（`global-review` 行）。机器级、组织级共用同一队列与同一审批卡。约束：审批卡必须由 agent 轮内触发（Web 审答器只路由带活根 Agent 的请求，维护 tick 弹卡会 NO_PROVIDER）；`memory.global.review.batchLimit`（默认 5）限制单次卡数；headless 无审答器时明确拒绝、零状态变更。键盘路径 `/ctx-global approve|reject-candidate` 保留。
+
 ## 界面集成（插件页配置项 + 主界面遥测）
 
 两个界面能力都靠**同一个浏览器半侧**（`src/client/index.js`，纯 JS，构建时原样拷到 `lib/client.js`）：
