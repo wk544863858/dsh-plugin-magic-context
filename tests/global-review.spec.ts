@@ -150,45 +150,91 @@ describe('reviewGlobalCandidates', () => {
     expect(row?.payload).toMatchObject({ candidateId: id, decision: 'approved', answer: '批准发布' })
   })
 
-  it('publishes the typed text when approving with a custom answer, source row untouched', async () => {
+  it('treats a bare typed answer as a revision: re-raises the card with the new body, publishes on approve', async () => {
     const store = storeWithDomains()
     const id = stage(store, { category: 'CONSTRAINTS', sourceMemoryId: 7 })
     const { port, calls } = fakePublisher()
     const { journal, rows } = fakeJournal()
+    const details: Array<string | undefined> = []
     const outcome = await reviewGlobalCandidates({
       store,
-      ask: fakeAsker(askId => ({ answers: [{ id: askId, selected: ['批准发布'], custom: '  修正后的事实：构建走 npm run gate  ' }] })),
+      ask: async input => {
+        details.push(input.questions[0]?.detail)
+        return input.questions[0]?.detail === undefined
+          ? {}
+          : details.length === 1
+            ? { answers: [{ id: input.questions[0]!.id, selected: [], custom: '修正后的事实：构建走 npm run gate' }] }
+            : { answers: [{ id: input.questions[0]!.id, selected: ['批准发布'] }] }
+      },
       publisher: port,
       journal,
       sessionId: 'session-1',
       now: () => NOW,
     })
-    expect(outcome.approved).toBe(1)
-    // The shared row carries the trimmed typed text, not the candidate body.
+    // Round 1 shows the original body; round 2 shows the typed revision with
+    // the confirmation tag; the approval publishes the REVISION.
+    expect(details).toHaveLength(2)
+    expect(details[0]).toContain('> 共享事实：测试构建走 npm run gate')
+    expect(details[0]).not.toContain('已按你的意见修改')
+    expect(details[1]).toContain('> 修正后的事实：构建走 npm run gate')
+    expect(details[1]).toContain('已按你的意见修改')
     expect(calls[0]?.content).toBe('修正后的事实：构建走 npm run gate')
-    expect(outcome.lines.some(line => line.includes('内容已按输入修改'))).toBe(true)
-    expect(rows.find(entry => entry.kind === 'global-review')?.payload).toMatchObject({
-      decision: 'approved',
-      edited: 1,
-      note: '修正后的事实：构建走 npm run gate',
-    })
+    expect(outcome.approved).toBe(1)
+    expect(outcome.lines.some(line => line.includes('按修改稿发布'))).toBe(true)
+    expect(rows.find(entry => entry.kind === 'global-review' && entry.payload.decision === 'revised')
+      ?.payload).toMatchObject({ round: 1, note: '修正后的事实：构建走 npm run gate' })
+    expect(rows.find(entry => entry.kind === 'global-review' && entry.payload.decision === 'approved')
+      ?.payload).toMatchObject({ memoryId: 101, revisedBody: '修正后的事实：构建走 npm run gate' })
   })
 
-  it('keeps a bare custom answer (no option) pending and says so', async () => {
+  it('publishes verbatim when an option is chosen without any typed text', async () => {
     const store = storeWithDomains()
-    const id = stage(store, { category: 'CONSTRAINTS', sourceMemoryId: 7 })
+    stage(store, { category: 'CONSTRAINTS', sourceMemoryId: 7 })
     const { port, calls } = fakePublisher()
     const outcome = await reviewGlobalCandidates({
       store,
-      ask: fakeAsker(askId => ({ answers: [{ id: askId, selected: [], custom: '先改改内容' }] })),
+      ask: fakeAsker(askId => ({ answers: [{ id: askId, selected: ['批准发布'] }] })),
       publisher: port,
       now: () => NOW,
     })
-    expect(outcome.skipped).toBe(1)
-    expect(outcome.approved).toBe(0)
+    expect(outcome.approved).toBe(1)
+    expect(calls[0]?.content).toBe('共享事实：测试构建走 npm run gate')
+  })
+
+  it('rejects after a revision round and skips when the revision loop is exhausted', async () => {
+    const store = storeWithDomains()
+    const id = stage(store, { category: 'CONSTRAINTS', sourceMemoryId: 7 })
+    const { port, calls } = fakePublisher()
+    let first = true
+    const outcome = await reviewGlobalCandidates({
+      store,
+      ask: fakeAsker(askId => {
+        if (first) {
+          first = false
+          return { answers: [{ id: askId, selected: [], custom: '再改一版' }] }
+        }
+        return { answers: [{ id: askId, selected: ['拒绝'] }] }
+      }),
+      publisher: port,
+      now: () => NOW,
+    })
+    expect(outcome.rejected).toBe(1)
     expect(calls).toHaveLength(0)
-    expect(store.getGlobalCandidate(id)?.state).toBe('pending')
-    expect(outcome.lines.some(line => line.includes('自定义文本需配合批准/拒绝选项生效'))).toBe(true)
+    expect(store.getGlobalCandidate(id)?.state).toBe('rejected')
+
+    // Loop guard: MAX_REVISION_ROUNDS typed answers in a row skip the
+    // candidate instead of spinning forever.
+    const store2 = storeWithDomains()
+    const id2 = stage(store2, { category: 'CONSTRAINTS', sourceMemoryId: 9 })
+    const outcome2 = await reviewGlobalCandidates({
+      store: store2,
+      ask: fakeAsker(askId => ({ answers: [{ id: askId, selected: [], custom: `改 ${askId}` }] })),
+      publisher: fakePublisher().port,
+      now: () => NOW,
+    })
+    expect(outcome2.skipped).toBe(1)
+    expect(outcome2.lines.some(line => line.includes('修改轮次达上限'))).toBe(true)
+    expect(store2.getGlobalCandidate(id2)?.state).toBe('pending')
   })
 
   it('rejects without publishing and skips without touching state', async () => {

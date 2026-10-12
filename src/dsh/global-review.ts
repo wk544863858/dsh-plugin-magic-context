@@ -23,8 +23,12 @@
  * user is never asked to approve something no gate would ever publish.
  */
 import { approvalGate, publishGlobalCandidate, type DomainWritePort } from '../core/global-domains.ts'
+import { normalizedMemoryHash } from '../core/memory-write.ts'
 import type { AdapterStores } from '../core/stores.ts'
 import type { Journal } from '../core/journal.ts'
+
+/** Revision rounds per candidate before the loop gives up and skips (operator typo loop guard). */
+const MAX_REVISION_ROUNDS = 5
 
 /** One question card in the shape `ctx.userQuestions.ask()` accepts. */
 export interface GlobalReviewQuestion {
@@ -216,31 +220,66 @@ export async function reviewGlobalCandidates(input: {
     // blockquote style indents 16px with a rule: wrapping the body in a
     // quote block lines it up under the question and reads as quoted
     // review content.
-    const body = candidate.content.split('\n').map(line => `> ${line}`).join('\n')
-    let answer: unknown
-    try {
-      answer = await input.ask({
-        sessionId: input.sessionId,
-        questions: [{
-          id,
-          question,
-          detail: `${body}${llmNote}`,
-          header: `记忆发布审批 · ${domainName}`,
-          options,
-        }],
-      })
-    } catch (error) {
-      failed += 1
-      lines.push(`#${String(candidate.id)} ✗ 审批卡未能送达：${error instanceof Error ? error.message : String(error)}`)
-      continue
+    //
+    // A typed answer with NO option selected is a REVISION OPINION (user
+    // decision 2026-10-12): the typed text becomes the new body and the card
+    // is re-raised for confirmation, looping until an option is chosen or
+    // MAX_REVISION_ROUNDS is hit (skip, stay pending). Approve and reject
+    // themselves stay pure: an option click settles the card on the body
+    // currently shown.
+    let body = candidate.content
+    let revised = false
+    let exhausted = false
+    let verdict: { readonly label: string; readonly custom?: string } | undefined
+    for (let round = 1; ; round += 1) {
+      const quoted = body.split('\n').map(line => `> ${line}`).join('\n')
+      const revisedTag = revised ? '\n>\n> ✎ 已按你的意见修改，请确认' : ''
+      let answer: unknown
+      try {
+        answer = await input.ask({
+          sessionId: input.sessionId,
+          questions: [{
+            id,
+            question,
+            detail: `${quoted}${revisedTag}${llmNote}`,
+            header: `记忆发布审批 · ${domainName}`,
+            options,
+          }],
+        })
+      } catch (error) {
+        failed += 1
+        lines.push(`#${String(candidate.id)} ✗ 审批卡未能送达：${error instanceof Error ? error.message : String(error)}`)
+        verdict = undefined
+        break
+      }
+      verdict = firstAnswer(answer, id)
+      if (verdict === undefined) break
+      if (verdict.custom === undefined) break
+      if (round >= MAX_REVISION_ROUNDS) {
+        exhausted = true
+        break
+      }
+      body = verdict.custom
+      revised = true
+      input.journal?.info('global-review', `candidate #${String(candidate.id)} revised`, {
+        phase: 'global-review',
+        candidateId: candidate.id,
+        domainId: candidate.domainId,
+        decision: 'revised',
+        round,
+        note: verdict.custom,
+      }, input.sessionId)
     }
-    const verdict = firstAnswer(answer, id)
     if (verdict === undefined) {
       failed += 1
       lines.push(`#${String(candidate.id)} ✗ 无法解析审批答案，候选保留待审`)
       continue
     }
-    const note = verdict.custom
+    if (exhausted) {
+      skipped += 1
+      lines.push(`#${String(candidate.id)} → 修改轮次达上限（${String(MAX_REVISION_ROUNDS)}），跳过留池`)
+      continue
+    }
     const journalDecision = (decision: string, extra?: Record<string, unknown>): void => {
       input.journal?.info('global-review', `candidate #${String(candidate.id)} ${decision}`, {
         phase: 'global-review',
@@ -248,7 +287,7 @@ export async function reviewGlobalCandidates(input: {
         domainId: candidate.domainId,
         decision,
         answer: verdict.label,
-        ...(note === undefined ? {} : { note }),
+        ...(revised ? { revisedBody: body } : {}),
         ...extra,
       }, input.sessionId)
     }
@@ -266,8 +305,8 @@ export async function reviewGlobalCandidates(input: {
       }
       const rerouted = input.store.upsertGlobalCandidate({
         domainId: targetDomainId,
-        content: candidate.content,
-        normalizedHash: candidate.normalizedHash,
+        content: revised ? body : candidate.content,
+        normalizedHash: revised ? normalizedMemoryHash(body) : candidate.normalizedHash,
         firstIdentity: candidate.firstIdentity,
         ...(candidate.sessionId === undefined ? {} : { sessionId: candidate.sessionId }),
         ...(candidate.compartmentStart === undefined ? {} : { compartmentStart: candidate.compartmentStart }),
@@ -316,16 +355,11 @@ export async function reviewGlobalCandidates(input: {
       continue
     }
     if (verdict.label === OPTION_APPROVE || verdict.label.startsWith('批准')) {
-      // Approve plus a typed text publishes the TYPED text as the shared row:
-      // the operator edited the memory before release (2026-10-12). The
-      // project-level source row keeps its original body — the review edits
-      // the shared edition only; the journal note carries the edit so the
-      // divergence stays auditable.
       const published = publishGlobalCandidate(input.store, {
         candidateId: candidate.id,
         writer: input.publisher,
         now: input.now(),
-        ...(note === undefined ? {} : { contentOverride: note }),
+        ...(revised ? { contentOverride: body } : {}),
       })
       if (!published.ok) {
         failed += 1
@@ -336,23 +370,19 @@ export async function reviewGlobalCandidates(input: {
       approved += 1
       lines.push(`#${String(candidate.id)} ✓ 已发布为 ${published.identity} [${published.category}]`
         + `（memory #${String(published.memoryId)}${published.created ? '' : '，已存在'}）`
-        + (note === undefined ? '' : '，内容已按输入修改'))
-      journalDecision('approved', {
-        memoryId: published.memoryId,
-        ...(note === undefined ? {} : { edited: 1 }),
-      })
+        + (revised ? '，按修改稿发布' : ''))
+      journalDecision('approved', { memoryId: published.memoryId })
       continue
     }
     if (verdict.label === OPTION_REJECT || verdict.label.startsWith('拒绝')) {
       input.store.setGlobalCandidateState(candidate.id, 'rejected', input.now())
       rejected += 1
-      lines.push(`#${String(candidate.id)} ✗ 已拒绝${note === undefined ? '' : `（${note}）`}`)
+      lines.push(`#${String(candidate.id)} ✗ 已拒绝`)
       journalDecision('rejected')
       continue
     }
     skipped += 1
-    lines.push(`#${String(candidate.id)} → 跳过，留在待审池`
-      + (note === undefined ? '' : '（自定义文本需配合批准/拒绝选项生效）'))
+    lines.push(`#${String(candidate.id)} → 跳过，留在待审池`)
     journalDecision('skipped')
   }
 
