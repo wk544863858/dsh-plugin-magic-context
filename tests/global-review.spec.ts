@@ -245,4 +245,97 @@ describe('reviewGlobalCandidates', () => {
     expect(calls[0]).toMatchObject({ identity: 'dir:global:org' })
     expect(store.getGlobalCandidate(id)?.state).toBe('approved')
   })
+
+  it('reclassifies to the other domain on the user\u2019s overrule', async () => {
+    const store = storeWithDomains()
+    const machineId = stage(store, {
+      domainId: 'dir:global:machine', category: 'CONSTRAINTS', sourceMemoryId: 21, content: '组织规则：跨仓库串行。',
+    })
+    const { port, calls } = fakePublisher()
+    const { journal, rows } = fakeJournal()
+    const outcome = await reviewGlobalCandidates({
+      store,
+      ask: fakeAsker(askId => ({ answers: [{ id: askId, selected: ['发布到组织域'] }] })),
+      publisher: port,
+      journal,
+      now: () => NOW,
+    })
+    expect(outcome.reclassified).toBe(1)
+    expect(outcome.approved).toBe(0)
+    // The ORIGINAL candidate retires; the target domain carries the published row.
+    expect(store.getGlobalCandidate(machineId)?.state).toBe('rejected')
+    const orgCandidate = store.listGlobalCandidates({ state: 'approved', domainId: 'dir:global:org' })
+      .find(entry => entry.sourceMemoryId === 21)
+    expect(orgCandidate).toBeDefined()
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ identity: 'dir:global:org' })
+    const row = rows.find(entry => entry.kind === 'global-review')
+    expect(row?.payload).toMatchObject({ decision: 'reclassified', toDomain: 'dir:global:org', answer: '发布到组织域' })
+  })
+
+  it('retires the original as a duplicate when the target domain already holds the content', async () => {
+    const store = storeWithDomains()
+    const orgId = stage(store, {
+      domainId: 'dir:global:org', category: 'CONSTRAINTS', sourceMemoryId: 22, content: '已在组织域的规则。',
+    })
+    store.setGlobalCandidateState(orgId, 'approved', NOW)
+    const orgRow = store.getGlobalCandidate(orgId)!
+    // Same content/hash staged into machine by mistake — the review sees it.
+    const machineId = store.upsertGlobalCandidate({
+      domainId: 'dir:global:machine',
+      content: orgRow.content,
+      normalizedHash: orgRow.normalizedHash,
+      firstIdentity: orgRow.firstIdentity,
+      category: 'CONSTRAINTS',
+      sourceMemoryId: 22,
+    }, NOW).id
+    const { port, calls } = fakePublisher()
+    const { journal, rows } = fakeJournal()
+    const outcome = await reviewGlobalCandidates({
+      store,
+      ask: fakeAsker(askId => ({ answers: [{ id: askId, selected: ['发布到组织域'] }] })),
+      publisher: port,
+      journal,
+      now: () => NOW,
+    })
+    expect(outcome.reclassified).toBe(1)
+    expect(outcome.approved).toBe(0)
+    expect(calls).toHaveLength(0)
+    expect(store.getGlobalCandidate(machineId)?.state).toBe('rejected')
+    expect(store.getGlobalCandidate(orgId)?.state).toBe('approved')
+    const row = rows.find(entry => entry.kind === 'global-review')
+    expect(row?.payload).toMatchObject({ decision: 'reclassified-duplicate' })
+  })
+
+  it('offers the reroute option only when the other enabled domain can take the category', async () => {
+    const store = storeWithDomains()
+    const first = stage(store, { domainId: 'dir:global:machine', category: 'CONSTRAINTS', sourceMemoryId: 23 })
+    const calls: GlobalReviewQuestion[][] = []
+    await reviewGlobalCandidates({
+      store,
+      ask: fakeAsker(askId => ({ answers: [{ id: askId, selected: ['跳过'] }] }), calls),
+      publisher: fakePublisher().port,
+      now: () => NOW,
+    })
+    expect(calls[0]![0]!.options?.some(option => option.label === '发布到组织域')).toBe(true)
+    // Flip org off: the reroute option disappears from the card.
+    store.upsertDomain({
+      domainId: 'dir:global:org', kind: 'org', enabled: false, budgetTokens: 512,
+      cap: defaultDomainCap('org'), shareCategories: ['CONSTRAINTS'],
+    }, NOW)
+    store.setGlobalCandidateState(first, 'rejected', NOW)
+    const second = store.upsertGlobalCandidate({
+      domainId: 'dir:global:machine', content: '另一条约束。', normalizedHash: 'hash-reroute-2',
+      firstIdentity: 'git:abc12345xyz', category: 'CONSTRAINTS', sourceMemoryId: 24,
+    }, NOW).id
+    const calls2: GlobalReviewQuestion[][] = []
+    await reviewGlobalCandidates({
+      store,
+      ask: fakeAsker(askId => ({ answers: [{ id: askId, selected: ['跳过'] }] }), calls2),
+      publisher: fakePublisher().port,
+      now: () => NOW,
+    })
+    expect(calls2[0]![0]!.options?.some(option => option.label === '发布到组织域')).toBe(false)
+    expect(store.getGlobalCandidate(second)?.state).toBe('pending')
+  })
 })

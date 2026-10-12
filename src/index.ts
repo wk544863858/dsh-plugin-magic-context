@@ -552,8 +552,8 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
               now: () => Date.now(),
             })
             return pending.then(r => ({
-              outcome: `审批完成：批准 ${String(r.approved)} / 拒绝 ${String(r.rejected)} / 跳过 ${String(r.skipped)}`
-                + ` / 失败 ${String(r.failed)}；剩余待审 ${String(r.remaining)}`,
+              outcome: `审批完成：批准 ${String(r.approved)} / 改判 ${String(r.reclassified)} / 拒绝 ${String(r.rejected)}`
+                + ` / 跳过 ${String(r.skipped)} / 失败 ${String(r.failed)}；剩余待审 ${String(r.remaining)}`,
               detail: r.lines.length === 0 ? undefined : r.lines.join('\n'),
             }))
           },

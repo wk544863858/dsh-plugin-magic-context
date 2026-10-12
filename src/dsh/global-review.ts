@@ -45,10 +45,15 @@ export type GlobalReviewAsker = (input: {
 const OPTION_APPROVE = '批准发布'
 const OPTION_SKIP = '跳过'
 const OPTION_REJECT = '拒绝'
+/** Reclassification options: the card names the OTHER global domain explicitly. */
+const OPTION_REROUTE_MACHINE = '发布到机器域'
+const OPTION_REROUTE_ORG = '发布到组织域'
 
 export interface GlobalReviewOutcome {
   readonly approved: number
   readonly rejected: number
+  /** The user overruled the staging domain: published into the other one. */
+  readonly reclassified: number
   readonly skipped: number
   /** Gate refusals, publish failures and unanswerable cards — state untouched. */
   readonly failed: number
@@ -106,6 +111,7 @@ export async function reviewGlobalCandidates(input: {
     return {
       approved: 0,
       rejected: 0,
+      reclassified: 0,
       skipped: 0,
       failed: 0,
       lines: ['人工审批未接线（headless 或宿主缺 userQuestions 服务），待审队列原样保留。'],
@@ -113,12 +119,13 @@ export async function reviewGlobalCandidates(input: {
     }
   }
   if (pending.length === 0) {
-    return { approved: 0, rejected: 0, skipped: 0, failed: 0, lines: ['全局域待审队列为空。'], remaining: 0 }
+    return { approved: 0, rejected: 0, reclassified: 0, skipped: 0, failed: 0, lines: ['全局域待审队列为空。'], remaining: 0 }
   }
   const batch = pending.slice(0, Math.max(1, input.batchLimit ?? 5))
   const lines: string[] = []
   let approved = 0
   let rejected = 0
+  let reclassified = 0
   let skipped = 0
   let failed = 0
 
@@ -149,6 +156,28 @@ export async function reviewGlobalCandidates(input: {
         ? ''
         : `\nLLM 建议域：${domainLabel(candidate.suggestedDomain === 'machine' ? 'dir:global:machine' : 'dir:global:org')}`
           + (candidate.suggestionReason === undefined ? '' : `（${candidate.suggestionReason}）`))
+    // Reclassification precheck: the OTHER enabled global domain, and only if
+    // this candidate's category is on its allowlist — the card must never
+    // offer a reroute the gate would refuse (same principle as gating before
+    // the card).
+    const otherDomain = input.store.listDomains()
+      .find(domain => domain.enabled && domain.domainId !== candidate.domainId
+        && (domain.kind === 'machine' || domain.kind === 'org'))
+    const rerouteAllowed = otherDomain !== undefined && candidate.category !== undefined
+      && otherDomain.shareCategories.includes(candidate.category)
+    const rerouteOption = otherDomain === undefined ? undefined
+      : otherDomain.kind === 'org' ? OPTION_REROUTE_ORG : OPTION_REROUTE_MACHINE
+    const options = [
+      { label: OPTION_APPROVE, description: '写入共享域，所有成员项目可见（source_type=user）' },
+      ...(rerouteAllowed && rerouteOption !== undefined
+        ? [{
+            label: rerouteOption,
+            description: `改判到${domainLabel(otherDomain.domainId)}并发布（原候选退役，journal 记 reclassified）`,
+          }]
+        : []),
+      { label: OPTION_SKIP, description: '留在待审池，下次再决定' },
+      { label: OPTION_REJECT, description: '标记 rejected，不再进入待审' },
+    ]
     const id = `global-candidate-${String(candidate.id)}`
     let answer: unknown
     try {
@@ -159,11 +188,7 @@ export async function reviewGlobalCandidates(input: {
           question: `发布候选 #${String(candidate.id)} 到 ${domainLabel(candidate.domainId)}？`,
           detail: `${meta}\n\n${candidate.content}`,
           header: '记忆发布审批',
-          options: [
-            { label: OPTION_APPROVE, description: '写入共享域，所有成员项目可见（source_type=user）' },
-            { label: OPTION_SKIP, description: '留在待审池，下次再决定' },
-            { label: OPTION_REJECT, description: '标记 rejected，不再进入待审' },
-          ],
+          options,
         }],
       })
     } catch (error) {
@@ -188,6 +213,69 @@ export async function reviewGlobalCandidates(input: {
         ...(note === undefined ? {} : { note }),
         ...extra,
       }, input.sessionId)
+    }
+    if ((rerouteOption !== undefined && verdict.label === rerouteOption)
+      || ((verdict.label === OPTION_REROUTE_ORG || verdict.label === OPTION_REROUTE_MACHINE)
+        && rerouteOption !== undefined)) {
+      // Human overrule of the staging domain. The target row is upserted in
+      // the other domain (idempotent per domain+hash), gated, published; the
+      // ORIGINAL candidate retires as rejected — journal carries the verdict.
+      const targetDomainId = otherDomain?.domainId
+      if (targetDomainId === undefined || input.publisher === undefined) {
+        failed += 1
+        lines.push(`#${String(candidate.id)} ✗ 改判目标域不可用，候选保留待审`)
+        continue
+      }
+      const rerouted = input.store.upsertGlobalCandidate({
+        domainId: targetDomainId,
+        content: candidate.content,
+        normalizedHash: candidate.normalizedHash,
+        firstIdentity: candidate.firstIdentity,
+        ...(candidate.sessionId === undefined ? {} : { sessionId: candidate.sessionId }),
+        ...(candidate.compartmentStart === undefined ? {} : { compartmentStart: candidate.compartmentStart }),
+        ...(candidate.compartmentEnd === undefined ? {} : { compartmentEnd: candidate.compartmentEnd }),
+        category: candidate.category,
+        sourceMemoryId: candidate.sourceMemoryId,
+        suggestedDomain: candidate.suggestedDomain,
+        ...(candidate.suggestionReason === undefined ? {} : { suggestionReason: candidate.suggestionReason }),
+      }, input.now())
+      if (rerouted.state === 'approved') {
+        // The content already lives in the target domain — retire the original
+        // as a duplicate instead of publishing twice.
+        input.store.setGlobalCandidateState(candidate.id, 'rejected', input.now())
+        reclassified += 1
+        lines.push(`#${String(candidate.id)} ⤴ 目标域已有同内容行（memory 已发布），原候选退役`)
+        journalDecision('reclassified-duplicate', { toDomain: targetDomainId, reroutedCandidateId: rerouted.id })
+        continue
+      }
+      const rerouteGate = approvalGate(input.store, rerouted)
+      if (!rerouteGate.ok) {
+        failed += 1
+        lines.push(`#${String(candidate.id)} ✗ 改判被目标域 gate 拒绝：${rerouteGate.error}`)
+        journalDecision('reroute-refused', { toDomain: targetDomainId, reason: rerouteGate.error })
+        continue
+      }
+      const published = publishGlobalCandidate(input.store, {
+        candidateId: rerouted.id,
+        writer: input.publisher,
+        now: input.now(),
+      })
+      if (!published.ok) {
+        failed += 1
+        lines.push(`#${String(candidate.id)} ✗ 改判发布失败：${published.error}`)
+        journalDecision('reroute-publish-failed', { toDomain: targetDomainId, reason: published.error })
+        continue
+      }
+      input.store.setGlobalCandidateState(candidate.id, 'rejected', input.now())
+      reclassified += 1
+      lines.push(`#${String(candidate.id)} ⤴ 改判发布到 ${domainLabel(targetDomainId)}`
+        + `（memory #${String(published.memoryId)}），原候选退役`)
+      journalDecision('reclassified', {
+        toDomain: targetDomainId,
+        reroutedCandidateId: rerouted.id,
+        memoryId: published.memoryId,
+      })
+      continue
     }
     if (verdict.label === OPTION_APPROVE || verdict.label.startsWith('批准')) {
       const published = publishGlobalCandidate(input.store, {
@@ -223,5 +311,5 @@ export async function reviewGlobalCandidates(input: {
   if (pending.length > batch.length) {
     lines.push(`（本批 ${String(batch.length)}/${String(pending.length)} 条，剩余 ${String(remaining)} 条待审，再次调用继续）`)
   }
-  return { approved, rejected, skipped, failed, lines, remaining }
+  return { approved, rejected, reclassified, skipped, failed, lines, remaining }
 }
