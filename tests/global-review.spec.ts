@@ -138,7 +138,7 @@ describe('reviewGlobalCandidates', () => {
     // detail carries only the body.
     const batchCard = raisedCards[0]![0]!
     expect(batchCard.question).toBe('发布这条自动暂存的 [CONSTRAINTS] 记忆到机器域？（0 个项目独立观察 / 0 次）')
-    expect(batchCard.detail).toBe('共享事实：测试构建走 npm run gate')
+    expect(batchCard.detail).toBe('> 共享事实：测试构建走 npm run gate')
     expect(batchCard.detail).not.toContain('git:abc')
     expect(batchCard.options?.some(option => option.label === '跳过')).toBe(true)
     expect(outcome.approved).toBe(1)
@@ -241,7 +241,7 @@ describe('reviewGlobalCandidates', () => {
     const card = raised[0]![0]!
     expect(card.question).toBe('把你刚提升的 memory #2 发布到机器域？')
     expect(card.header).toBe('记忆发布审批 · 机器域')
-    expect(card.detail).toBe('just promoted')
+    expect(card.detail).toBe('> just promoted')
     expect(card.detail).not.toContain('来源')
     expect(card.detail).not.toContain('独立观察')
     const labels = card.options?.map(option => option.label) ?? []

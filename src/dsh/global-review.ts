@@ -178,7 +178,7 @@ export async function reviewGlobalCandidates(input: {
         `（${String(candidate.distinctIdentities)} 个项目独立观察 / ${String(candidate.observationCount)} 次）`
     const llmNote = instant || candidate.suggestedDomain === undefined
       ? ''
-      : `\n\nLLM 建议域：${domainLabel(candidate.suggestedDomain === 'machine' ? 'dir:global:machine' : 'dir:global:org')}` +
+      : '\n>\n> LLM 建议域：' + domainLabel(candidate.suggestedDomain === 'machine' ? 'dir:global:machine' : 'dir:global:org') +
         (candidate.suggestionReason === undefined ? '' : `（${candidate.suggestionReason}）`)
     // Reclassification precheck: the OTHER enabled global domain, and only if
     // this candidate's category is on its allowlist — the card must never
@@ -208,6 +208,13 @@ export async function reviewGlobalCandidates(input: {
       { label: OPTION_REJECT, description: instant ? '终局拒绝，不再进入待审' : '标记 rejected，不再进入待审' },
     ]
     const id = `global-candidate-${String(candidate.id)}`
+    // The host renders `detail` nearly flush-left (margin 0 2px) while the
+    // question sits at 24px — bare body text reads as misaligned (user
+    // feedback, two rounds). detail goes through MarkdownText, whose
+    // blockquote style indents 16px with a rule: wrapping the body in a
+    // quote block lines it up under the question and reads as quoted
+    // review content.
+    const body = candidate.content.split('\n').map(line => `> ${line}`).join('\n')
     let answer: unknown
     try {
       answer = await input.ask({
@@ -215,7 +222,7 @@ export async function reviewGlobalCandidates(input: {
         questions: [{
           id,
           question,
-          detail: `${candidate.content}${llmNote}`,
+          detail: `${body}${llmNote}`,
           header: `记忆发布审批 · ${domainName}`,
           options,
         }],
