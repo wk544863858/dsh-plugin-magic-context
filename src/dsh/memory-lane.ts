@@ -14,6 +14,7 @@ import type { PressurePolicy } from '../core/policy.ts'
 import { openMemoryBridge, DEFAULT_SHARE_CATEGORIES, defaultMemoryDbPath, resolveIdentitySpec, type ActivePeerDomain } from '../core/memory-bridge.ts'
 import { openMemoryWriter, type MemoryWriter } from '../core/memory-write.ts'
 import { ensureContractStore } from '../core/contract-bootstrap.ts'
+import { syncMachineDomain } from '../core/machine-domain.ts'
 import { openProfileWriter, type ProfileWriter } from '../core/profile-write.ts'
 import { planBackfill } from '../core/vector-lane.ts'
 import { runVectorBackfill, type VectorBackfillOutcome } from '../core/vector-backfill.ts'
@@ -138,6 +139,28 @@ export function openMemoryLane(
       } catch {
         // best effort only — the meta row is observability, not a gate
       }
+    }
+  }
+  // WP10 projection at MOUNT: the machine domain row's existence and enabled
+  // flag are a CONFIG projection, not a pass artifact — the pre-step sync sits
+  // inside the execute band, so a freshly flipped switch stayed invisible until
+  // pressure crossed the threshold (measured 2026-10-12: enabled at 12:31, row
+  // still absent at 40% pressure 12:32). Membership still syncs per execute
+  // pass, where the identities the process has actually served are known.
+  if (memoryEnabled) {
+    try {
+      syncMachineDomain(stores, {
+        identities: [],
+        config: {
+          enabled: liveBoolean(config.memory?.global?.machine?.enabled, false),
+          ...config.memory?.global?.machine?.excludeProjects === undefined
+            ? {}
+            : { excludeProjects: config.memory.global.machine.excludeProjects },
+        },
+        now: Date.now(),
+      })
+    } catch {
+      // projection only — the pre-step sync self-heals on the next execute pass
     }
   }
   const memoryRecall = !memoryEnabled

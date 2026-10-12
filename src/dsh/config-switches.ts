@@ -19,7 +19,7 @@
  * the first mount only seeds, and every later mount can diff.
  */
 import type { MagicContextDshConfig } from './config.ts'
-import { liveBoolean, liveNumber } from './volatile.ts'
+import { liveBoolean, liveNumber, liveString } from './volatile.ts'
 import { vectorBackfillEnabled } from './maintenance-wiring.ts'
 
 /** Every tracked switch. Booleans alarm on `went-off`; the rest report changes. */
@@ -53,9 +53,12 @@ export function buildSwitchSnapshot(config: MagicContextDshConfig): SwitchSnapsh
     userCollect: liveBoolean(config.memory?.global?.user?.collect, false),
     userReview: liveBoolean(config.memory?.global?.user?.review, false),
     machine: liveBoolean(config.memory?.global?.machine?.enabled, false),
-    guardMode: config.policy?.compartmentGuardMode ?? 'observe',
+    // liveString/liveNumber unwrap schemastery volatile references — a raw
+    // read serialized the reference object into the boot row (measured 12:31:
+    // guardMode arrived as {"get":"[depth]"}).
+    guardMode: liveString(config.policy?.compartmentGuardMode, 'observe'),
     forceWaitMs: liveNumber(config.policy?.forceWaitReadyMs, 0),
-    evidenceMode: config.maintenance?.evidenceVerify?.mode ?? 'off',
+    evidenceMode: liveString(config.maintenance?.evidenceVerify?.mode, 'off'),
   }
 }
 
