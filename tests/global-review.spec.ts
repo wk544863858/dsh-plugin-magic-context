@@ -134,9 +134,11 @@ describe('reviewGlobalCandidates', () => {
       sessionId: 'session-1',
       now: () => NOW,
     })
-    // Batch-lane card copy: neutral, pool statistics present, no hash.
+    // Batch-lane card copy: neutral, statistics live in the question, the
+    // detail carries only the body.
     const batchCard = raisedCards[0]![0]!
-    expect(batchCard.detail).toContain('来源：自动暂存 · 0 个项目独立观察 / 0 次')
+    expect(batchCard.question).toBe('发布这条自动暂存的 [CONSTRAINTS] 记忆到机器域？（0 个项目独立观察 / 0 次）')
+    expect(batchCard.detail).toBe('共享事实：测试构建走 npm run gate')
     expect(batchCard.detail).not.toContain('git:abc')
     expect(batchCard.options?.some(option => option.label === '跳过')).toBe(true)
     expect(outcome.approved).toBe(1)
@@ -234,18 +236,19 @@ describe('reviewGlobalCandidates', () => {
     // One card, the promoted one, published; the rest of the pool untouched.
     expect(raised).toHaveLength(1)
     expect(raised[0][0]?.id).toBe(`global-candidate-${String(target)}`)
-    // Instant-lane card copy: the operator's own act, no pool statistics, no
-    // "skip" non-option, recommend-flavoured approve.
+    // Instant-lane card copy: the operator's own act in the question, the bare
+    // body in the detail (no field-line islands), no "skip" non-option.
     const card = raised[0]![0]!
-    expect(card.question).toBe('把这条 [CONSTRAINTS] 记忆发布到机器域？')
+    expect(card.question).toBe('把你刚提升的 memory #2 发布到机器域？')
     expect(card.header).toBe('记忆发布审批 · 机器域')
-    expect(card.detail).toContain('来源：你刚要求提升 memory #2')
+    expect(card.detail).toBe('just promoted')
+    expect(card.detail).not.toContain('来源')
     expect(card.detail).not.toContain('独立观察')
     const labels = card.options?.map(option => option.label) ?? []
     expect(labels).toContain('批准发布')
     expect(labels).not.toContain('跳过')
     expect(labels).toContain('拒绝')
-    expect(card.options?.find(option => option.label === '批准发布')?.description).toContain('你刚要求的操作')
+    expect(card.options?.find(option => option.label === '批准发布')?.description).toBe('写入机器域，该域所有成员项目可见')
     expect(outcome.approved).toBe(1)
     expect(calls).toHaveLength(1)
     expect(calls[0]).toMatchObject({ identity: 'dir:global:machine' })

@@ -68,14 +68,6 @@ function domainLabel(domainId: string): string {
   return domainId
 }
 
-function shortIdentity(identity: string): string {
-  const colon = identity.indexOf(':')
-  if (colon === -1) return identity
-  const head = identity.slice(0, colon + 1)
-  const rest = identity.slice(colon + 1)
-  return rest.length > 8 ? `${head}${rest.slice(0, 8)}…` : identity
-}
-
 /** Extract the first answer's verdict from the raw `ask()` reply, or undefined when the shape is unrecognised. */
 function firstAnswer(answer: unknown, id: string): { readonly label: string; readonly custom?: string } | undefined {
   if (answer === null || typeof answer !== 'object') return undefined
@@ -171,21 +163,23 @@ export async function reviewGlobalCandidates(input: {
       lines.push(`#${String(candidate.id)} ✗ 共享库当前不可写（无发布器），候选保留待审`)
       continue
     }
-    // Card copy differs by LANE. An instant promotion (onlyCandidateId set) is
-    // the operator's OWN just-requested act: the card says so, drops the pool
-    // statistics (meaningless for a one-write candidate) and the "skip"
-    // non-option (the operator is right here). A batch card stays neutral and
-    // keeps all four choices.
+    // Card copy differs by LANE, and ALL metadata lives in the `question`: the
+    // host renders `detail` flush-left while header/question are indented, so
+    // any field line in `detail` reads as a stray island (user feedback
+    // 2026-10-12). `detail` therefore carries ONLY the memory body. An instant
+    // promotion (onlyCandidateId) is the operator's OWN just-requested act —
+    // the question says so and drops the pool statistics and the "skip"
+    // non-option; a batch card stays neutral with all four choices.
     const instant = input.onlyCandidateId !== undefined
     const domainName = domainLabel(candidate.domainId)
-    const source = instant
-      ? `来源：你刚要求提升 memory #${String(candidate.sourceMemoryId ?? candidate.id)}` +
-        `（项目 ${shortIdentity(candidate.firstIdentity)}）`
-      : `来源：自动暂存 · ${String(candidate.distinctIdentities)} 个项目独立观察 / ${String(candidate.observationCount)} 次` +
-        (candidate.suggestedDomain === undefined
-          ? ''
-          : `\nLLM 建议域：${domainLabel(candidate.suggestedDomain === 'machine' ? 'dir:global:machine' : 'dir:global:org')}`
-            + (candidate.suggestionReason === undefined ? '' : `（${candidate.suggestionReason}）`))
+    const question = instant
+      ? `把你刚提升的 memory #${String(candidate.sourceMemoryId ?? candidate.id)} 发布到${domainName}？`
+      : `发布这条自动暂存的 [${candidate.category ?? '未分类'}] 记忆到${domainName}？` +
+        `（${String(candidate.distinctIdentities)} 个项目独立观察 / ${String(candidate.observationCount)} 次）`
+    const llmNote = instant || candidate.suggestedDomain === undefined
+      ? ''
+      : `\n\nLLM 建议域：${domainLabel(candidate.suggestedDomain === 'machine' ? 'dir:global:machine' : 'dir:global:org')}` +
+        (candidate.suggestionReason === undefined ? '' : `（${candidate.suggestionReason}）`)
     // Reclassification precheck: the OTHER enabled global domain, and only if
     // this candidate's category is on its allowlist — the card must never
     // offer a reroute the gate would refuse (same principle as gating before
@@ -201,7 +195,7 @@ export async function reviewGlobalCandidates(input: {
       {
         label: OPTION_APPROVE,
         description: instant
-          ? `写入${domainName}，该域所有成员项目可见（你刚要求的操作）`
+          ? `写入${domainName}，该域所有成员项目可见`
           : '写入共享域，所有成员项目可见（source_type=user）',
       },
       ...(rerouteAllowed && rerouteOption !== undefined
@@ -220,8 +214,8 @@ export async function reviewGlobalCandidates(input: {
         sessionId: input.sessionId,
         questions: [{
           id,
-          question: `把这条 [${candidate.category ?? '未分类'}] 记忆发布到${domainName}？`,
-          detail: `${source}\n\n${candidate.content}`,
+          question,
+          detail: `${candidate.content}${llmNote}`,
           header: `记忆发布审批 · ${domainName}`,
           options,
         }],
