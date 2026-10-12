@@ -46,13 +46,12 @@ const maintenanceTickers = new Map<string, () => void>()
 import type { MemoryWriter } from '../core/memory-write.ts'
 import type { ProfileWriter } from '../core/profile-write.ts'
 import { errText } from '../core/types.ts'
-import { autoStageMachineCandidates } from '../core/global-autostage.ts'
+import { autoStageGlobalCandidates, type AutoStageLlm } from '../core/global-autostage.ts'
 import type { HistorianLlm } from './historian.ts'
 import type { MagicContextDshConfig } from './config.ts'
 import type { PreStepProjects } from './pre-step.ts'
 import { liveBoolean, liveNumber, liveString, liveValue } from './volatile.ts'
 import { existsSync } from 'node:fs'
-
 /** Newest maintenance tally, surfaced by the telemetry panel (dreamer KPI). */
 export interface MaintenanceLast {
   at: number
@@ -173,20 +172,34 @@ export function wireMaintenance(input: {
         }
       }
 
-      // L1①: machine-domain auto-stage. GLOBAL — one candidate pool, so it runs
-      // once per tick beside the profile review, not per identity. The switch
-      // is read LIVE (a profile flip needs no remount). Journal only when
-      // something actually staged: a silent "0 staged" every 30 minutes is
-      // noise, and the panel's candidate queue is the standing view.
-      if (liveBoolean(config.memory?.global?.machine?.autoStage, false) && writer !== undefined) {
-        const outcome = autoStageMachineCandidates({ store: stores, contractDbPath: writer.dbPath, now: Date.now() })
+      // L1① v10: classify-then-route global auto-stage. The classifier needs
+      // the SAME LLM seam as the verify lane (route, model, session id), so it
+      // rides the tick's route. Fail-closed: no route (or the pin route on
+      // quota-hold) means NOTHING is staged — the memories stay at project
+      // level, never a guessed fallback domain.
+      if (liveBoolean(config.memory?.global?.machine?.autoStage, false)
+        && tickLlmReady && tickRoute !== undefined && llm !== undefined && writer !== undefined) {
+        const outcome = await autoStageGlobalCandidates({
+          store: stores,
+          contractDbPath: writer.dbPath,
+          now: Date.now(),
+          llm: llm as unknown as AutoStageLlm,
+          route: tickRoute,
+        })
         if (outcome.staged.length > 0) {
           journal.info(
             'memory-promote',
-            `auto-staged ${String(outcome.staged.length)} machine candidate(s): ${outcome.staged
-              .map(entry => `#${String(entry.candidateId)}(memory ${String(entry.memoryId)})`)
+            `auto-staged ${String(outcome.staged.length)} global candidate(s): ${outcome.staged
+              .map(entry => `#${String(entry.candidateId)}(memory ${String(entry.memoryId)} → ${entry.domainId})`)
               .join(', ')}`,
             { phase: 'auto-stage', staged: outcome.staged, skipped: outcome.skipped },
+          )
+        }
+        if (outcome.reason !== undefined) {
+          journal.info(
+            'memory-promote',
+            `auto-stage paused: ${outcome.reason} (memories stay at project level)`,
+            { phase: 'auto-stage', reason: outcome.reason },
           )
         }
       }

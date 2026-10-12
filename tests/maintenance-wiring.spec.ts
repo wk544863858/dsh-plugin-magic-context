@@ -355,7 +355,7 @@ describe('maintenance sweep wiring (real plugin, fake clock)', () => {
     }
   })
 
-  it('auto-stages a recurred allowlisted memory into the machine domain (L1①)', async () => {
+  it('auto-stages a recurred allowlisted memory into the machine domain (L1① v10)', async () => {
     vi.useFakeTimers()
     const cwd = tempDir('mc-maint-cwd6-')
     const dataDir = tempDir('mc-maint-data6-')
@@ -375,6 +375,11 @@ describe('maintenance sweep wiring (real plugin, fake clock)', () => {
     } finally {
       contract.close()
     }
+    // The classifier route rides the maintenance route (v10): without a route
+    // nothing stages, so the test must pin one — mirroring the live pin. The
+    // SAME adapter serves both lanes because a tick reuses one route: first
+    // reply = the verify verdict for the seeded row, second = the classifier's
+    // domain verdict (verify runs before auto-stage inside one tick).
     const { ctx, journalPath } = await boot({
       memoryDbPath: store.path,
       cwd,
@@ -382,6 +387,14 @@ describe('maintenance sweep wiring (real plugin, fake clock)', () => {
       dataDir,
       memoryOverrides: { global: { machine: { enabled: true, autoStage: true } } },
     })
+    // The classifier is the FIRST LLM consumer of this tick: no session ever
+    // ran a turn, so `seenIdentities` is empty and the verify lane (which is
+    // per-identity) never fires — the auto-stage classify call is the only one.
+    // One reply is what the wiring actually needs; a second reply would
+    // silently become the classify input and fail to parse.
+    ctx.llm.registerAdapter(['mock-verify'], new MockAdapter([
+      textResponse(JSON.stringify({ domain: 'machine', reason: 'machine env' })),
+    ]))
     try {
       // The mount projection created the machine domain row (enabled); the
       // first sweep at 60s runs the auto-stage pass.
@@ -389,9 +402,9 @@ describe('maintenance sweep wiring (real plugin, fake clock)', () => {
       const adapter = new DatabaseSync(join(dataDir, 'dsh-magic-context.db'), { readOnly: true })
       try {
         const row = adapter
-          .prepare("SELECT domain_id, state, source_memory_id FROM global_candidates WHERE source_memory_id = 1001")
-          .get() as { domain_id: string; state: string; source_memory_id: number } | undefined
-        expect(row).toMatchObject({ domain_id: 'dir:global:machine', state: 'pending', source_memory_id: 1001 })
+          .prepare("SELECT domain_id, state, source_memory_id, suggested_domain FROM global_candidates WHERE source_memory_id = 1001")
+          .get() as { domain_id: string; state: string; source_memory_id: number; suggested_domain: string | null } | undefined
+        expect(row).toMatchObject({ domain_id: 'dir:global:machine', state: 'pending', source_memory_id: 1001, suggested_domain: 'machine' })
       } finally {
         adapter.close()
       }

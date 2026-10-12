@@ -145,6 +145,10 @@ export async function reviewGlobalCandidates(input: {
     }
     const meta = `[${candidate.category ?? '未分类'}] 来源 ${shortIdentity(candidate.firstIdentity)}`
       + ` · ${String(candidate.distinctIdentities)} 个项目独立观察 / ${String(candidate.observationCount)} 次`
+      + (candidate.suggestedDomain === undefined
+        ? ''
+        : `\nLLM 建议域：${domainLabel(candidate.suggestedDomain === 'machine' ? 'dir:global:machine' : 'dir:global:org')}`
+          + (candidate.suggestionReason === undefined ? '' : `（${candidate.suggestionReason}）`))
     const id = `global-candidate-${String(candidate.id)}`
     let answer: unknown
     try {

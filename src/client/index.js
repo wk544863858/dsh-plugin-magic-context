@@ -670,6 +670,7 @@ window.__ModuleLoader__.load({
         'record.failed': '执行失败',
         // Record details ({n} figures).
         'detail.added': '新增 {n}',
+        'detail.staged': '入队 {n}',
         'detail.seenAgain': '去重命中 {n}',
         'detail.skipped': '跳过 {n}',
         'detail.verb.write': '写入',
@@ -756,6 +757,7 @@ window.__ModuleLoader__.load({
         'record.maintenance': 'Maintenance sweep',
         'record.failed': 'Operation failed',
         'detail.added': 'added {n}',
+        'detail.staged': 'staged {n}',
         'detail.seenAgain': 'seen again {n}',
         'detail.skipped': 'skipped {n}',
         'detail.verb.write': 'write',
@@ -944,11 +946,25 @@ window.__ModuleLoader__.load({
           const inserted = arrayLength(data, 'inserted')
           const seenAgain = arrayLength(data, 'seenAgain')
           const skipped = arrayLength(data, 'skipped')
-          return record('write', 'record.promotion', undefined, [
+          const staged = arrayLength(data, 'staged')
+          const detail = [
             inserted === undefined ? '' : t('detail.added', { n: fmtInt(inserted) }),
-            seenAgain ? t('detail.seenAgain', { n: fmtInt(seenAgain) }) : '',
-            skipped ? t('detail.skipped', { n: fmtInt(skipped) }) : '',
-          ])
+            // A machine/org auto-stage row (`phase: auto-stage`) carries `staged`
+            // instead of `inserted` — the candidate pool is filled, no project
+            // row is written. Show the candidating count for it.
+            staged === undefined ? '' : t('detail.staged', { n: fmtInt(staged) }),
+          ]
+          // The panel's promotion detail must always carry a real count
+          // (mc-records-check asserts /新增 \d+/ on the rendered line).
+          const count = detail.find((part) => /^\D*?\d+/.test(part))
+          if (count !== undefined) {
+            return record('write', 'record.promotion', undefined, [
+              count,
+              seenAgain ? t('detail.seenAgain', { n: fmtInt(seenAgain) }) : '',
+              skipped ? t('detail.skipped', { n: fmtInt(skipped) }) : '',
+            ])
+          }
+          return record('write', 'record.promotion', undefined, detail)
         }
         case 'tool-call': {
           // The reclamation lane first: ctx_reduce/ctx_expand rows carry `tool`

@@ -104,7 +104,11 @@ const unknownCategories = [...new Set(records.map((r) => r.category))].filter((c
 check('每个分类都在面板的分类表里（防镜像漂移）', unknownCategories.length === 0,
   unknownCategories.length ? unknownCategories.join(', ') : `${new Set(records.map((r) => r.category)).size} 类`);
 const promote = records.find((r) => r.text === '记忆提升');
-check('promotion 记录带真实条数', promote !== undefined && /新增 \d+/.test(promote.detail), promote?.detail ?? '(无样本)');
+// The promotion record must carry a real count on its own line. Two shapes are
+// legitimate: a project promotion ("新增 9") and a global auto-stage row
+// ("入队 3"). "入队 3" is the v10 auto-stage detail; the check rejects a bare
+// record with NO figure at all (the pre-v10 shape that had none).
+check('promotion 记录带真实条数', promote !== undefined && /(?:新增|入队) \d+/.test(promote.detail), promote?.detail ?? '(无样本)');
 // The folded half of the design: recall and SOFT baseline are noise, and the
 // noise line names them with their counts instead of vanishing silently.
 check('recall/soft baseline 折叠为噪声而不是记录', notFolded.length === 0, `${notFolded.length} 行泄漏`);

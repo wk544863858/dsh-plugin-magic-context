@@ -20,7 +20,7 @@ import type { DomainKind } from './domains.ts'
 import { parseShareCategories, serializeShareCategories } from './domains.ts'
 import type { TagRecord, TagTarget, UsageRecord } from './types.ts'
 
-export const SCHEMA_VERSION = 9
+export const SCHEMA_VERSION = 10
 
 /** The m[0]/m[1] baseline identity for one session. */
 export interface BaselineState {
@@ -138,6 +138,14 @@ export interface GlobalCandidateRow {
   readonly category?: string
   /** v9: the project memory a human promotion came from. */
   readonly sourceMemoryId?: number
+  /**
+   * v10: the LLM classification that routed this candidate into its domain
+   * (`project` rows are never staged, so an absent value here means the row
+   * predates classification — a human promotion or an older auto-stage).
+   */
+  readonly suggestedDomain?: 'machine' | 'org'
+  /** v10: the classifier's one-line reason, carried into the review card. */
+  readonly suggestionReason?: string
   readonly state: 'pending' | 'approved' | 'rejected' | 'expired'
   readonly createdAt: number
   readonly updatedAt: number
@@ -293,6 +301,9 @@ export interface AdapterStores {
       compartmentEnd?: number
       category?: string
       sourceMemoryId?: number
+      /** v10: the LLM classification that routed this candidate (optional — human promotions carry none). */
+      suggestedDomain?: 'machine' | 'org'
+      suggestionReason?: string
     },
     now: number,
   ): GlobalCandidateRow
@@ -622,6 +633,22 @@ const MIGRATIONS: readonly Migration[] = [
       db.exec(`
         ALTER TABLE global_candidates ADD COLUMN category TEXT;
         ALTER TABLE global_candidates ADD COLUMN source_memory_id INTEGER;
+      `)
+    },
+  },
+  {
+    // v10: the LLM domain classification that routes an auto-staged candidate
+    // into machine or org — and, when classification fails, leaves the memory
+    // at PROJECT level (nothing staged). `suggested_domain` and
+    // `suggestion_reason` ride the candidate row so the review card can show
+    // the classifier's verdict and the operator can overrule it (the card's
+    // "publish to another domain" option). Both nullable: a human promotion or
+    // a pre-v10 auto-stage has no suggestion.
+    version: 10,
+    up: (db) => {
+      db.exec(`
+        ALTER TABLE global_candidates ADD COLUMN suggested_domain TEXT;
+        ALTER TABLE global_candidates ADD COLUMN suggestion_reason TEXT;
       `)
     },
   },
@@ -1121,6 +1148,7 @@ export function openStores(dataDir: string): AdapterStores {
     session_id: string | null; compartment_start: number | null; compartment_end: number | null
     distinct_identities: number; observation_count: number; state: string
     category: string | null; source_memory_id: number | null
+    suggested_domain: string | null; suggestion_reason: string | null
     created_at: number; updated_at: number
   }
 
@@ -1137,6 +1165,8 @@ export function openStores(dataDir: string): AdapterStores {
     observationCount: row.observation_count,
     ...row.category === null ? {} : { category: row.category },
     ...row.source_memory_id === null ? {} : { sourceMemoryId: row.source_memory_id },
+    ...row.suggested_domain === null ? {} : { suggestedDomain: row.suggested_domain as 'machine' | 'org' },
+    ...row.suggestion_reason === null ? {} : { suggestionReason: row.suggestion_reason },
     state: row.state as GlobalCandidateRow['state'],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -1170,17 +1200,22 @@ export function openStores(dataDir: string): AdapterStores {
       compartmentEnd?: number
       category?: string
       sourceMemoryId?: number
+      suggestedDomain?: 'machine' | 'org'
+      suggestionReason?: string
     },
     now: number,
   ): GlobalCandidateRow => {
     db.prepare(
       'INSERT INTO global_candidates(domain_id, content, normalized_hash, first_identity, session_id, '
         + 'compartment_start, compartment_end, distinct_identities, observation_count, category, source_memory_id, '
-        + "state, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 'pending', ?, ?) "
+        + 'suggested_domain, suggestion_reason, '
+        + "state, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, 'pending', ?, ?) "
         + 'ON CONFLICT(domain_id, normalized_hash) DO UPDATE SET content = excluded.content, '
         // A later sighting that does not carry the metadata must not erase it.
         + 'category = COALESCE(excluded.category, global_candidates.category), '
         + 'source_memory_id = COALESCE(excluded.source_memory_id, global_candidates.source_memory_id), '
+        + 'suggested_domain = COALESCE(excluded.suggested_domain, global_candidates.suggested_domain), '
+        + 'suggestion_reason = COALESCE(excluded.suggestion_reason, global_candidates.suggestion_reason), '
         + 'updated_at = excluded.updated_at, '
         + "state = CASE WHEN global_candidates.state = 'expired' THEN 'pending' ELSE global_candidates.state END",
     ).run(
@@ -1193,6 +1228,8 @@ export function openStores(dataDir: string): AdapterStores {
       candidate.compartmentEnd ?? null,
       candidate.category ?? null,
       candidate.sourceMemoryId ?? null,
+      candidate.suggestedDomain ?? null,
+      candidate.suggestionReason ?? null,
       now,
       now,
     )

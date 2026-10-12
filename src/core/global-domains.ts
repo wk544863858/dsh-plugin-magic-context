@@ -198,7 +198,15 @@ export type PromotionResult =
  */
 export function promoteMemoryToCandidate(
   store: AdapterStores,
-  options: { contractDbPath: string; memoryId: number; domainId?: string; now: number },
+  options: {
+    contractDbPath: string
+    memoryId: number
+    domainId?: string
+    now: number
+    /** v10: the LLM classification that routed this promotion (card display + audit). */
+    suggestedDomain?: 'machine' | 'org'
+    suggestionReason?: string
+  },
 ): PromotionResult {
   const domainId = options.domainId ?? ORG_DOMAIN_ID
   if (store.getDomain(domainId) === undefined) {
@@ -228,6 +236,8 @@ export function promoteMemoryToCandidate(
       firstIdentity: memory.projectPath,
       category: memory.category,
       sourceMemoryId: memory.id,
+      ...(options.suggestedDomain === undefined ? {} : { suggestedDomain: options.suggestedDomain }),
+      ...(options.suggestionReason === undefined ? {} : { suggestionReason: options.suggestionReason }),
     },
     options.now,
   )
