@@ -354,6 +354,60 @@ describe('maintenance sweep wiring (real plugin, fake clock)', () => {
       await second.ctx.fiber.dispose()
     }
   })
+
+  it('auto-stages a recurred allowlisted memory into the machine domain (L1①)', async () => {
+    vi.useFakeTimers()
+    const cwd = tempDir('mc-maint-cwd6-')
+    const dataDir = tempDir('mc-maint-data6-')
+    const store = makeMemoryDb(resolveIdentitySpec(cwd)!)
+    // A recurred, allowlisted, project-scope fact in the contract store — the
+    // narrow profile the auto-stage lane is allowed to pick up.
+    const contract = new DatabaseSync(store.path)
+    try {
+      contract
+        .prepare(
+          "INSERT INTO memories(id, project_path, category, content, normalized_hash, scope, shareable, "
+            + "seen_count, first_seen_at, created_at, updated_at, last_seen_at, status) "
+            + "VALUES(1001, ?, 'CONSTRAINTS', '端到端自动入队约束。', 'hash-e2e-machine', 'project', 0, "
+            + "2, 1, 1, 1, 1, 'active')",
+        )
+        .run(resolveIdentitySpec(cwd))
+    } finally {
+      contract.close()
+    }
+    const { ctx, journalPath } = await boot({
+      memoryDbPath: store.path,
+      cwd,
+      maintenance: true,
+      dataDir,
+      memoryOverrides: { global: { machine: { enabled: true, autoStage: true } } },
+    })
+    try {
+      // The mount projection created the machine domain row (enabled); the
+      // first sweep at 60s runs the auto-stage pass.
+      await vi.advanceTimersByTimeAsync(60_000)
+      const adapter = new DatabaseSync(join(dataDir, 'dsh-magic-context.db'), { readOnly: true })
+      try {
+        const row = adapter
+          .prepare("SELECT domain_id, state, source_memory_id FROM global_candidates WHERE source_memory_id = 1001")
+          .get() as { domain_id: string; state: string; source_memory_id: number } | undefined
+        expect(row).toMatchObject({ domain_id: 'dir:global:machine', state: 'pending', source_memory_id: 1001 })
+      } finally {
+        adapter.close()
+      }
+      const jdb = new DatabaseSync(journalPath, { readOnly: true })
+      try {
+        const promoted = jdb
+          .prepare("SELECT summary FROM journal WHERE kind = 'memory-promote' AND summary LIKE 'auto-staged%'")
+          .all()
+        expect(promoted.length).toBeGreaterThanOrEqual(1)
+      } finally {
+        jdb.close()
+      }
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
 })
 
 describe('vectorBackfill default (WP11 gate)', () => {

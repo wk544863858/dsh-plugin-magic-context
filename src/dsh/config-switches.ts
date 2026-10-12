@@ -33,6 +33,7 @@ export const SWITCH_KEYS = [
   'userCollect',
   'userReview',
   'machine',
+  'machineAutoStage',
   'guardMode',
   'forceWaitMs',
   'evidenceMode',
@@ -53,6 +54,7 @@ export function buildSwitchSnapshot(config: MagicContextDshConfig): SwitchSnapsh
     userCollect: liveBoolean(config.memory?.global?.user?.collect, false),
     userReview: liveBoolean(config.memory?.global?.user?.review, false),
     machine: liveBoolean(config.memory?.global?.machine?.enabled, false),
+    machineAutoStage: liveBoolean(config.memory?.global?.machine?.autoStage, false),
     // liveString/liveNumber unwrap schemastery volatile references — a raw
     // read serialized the reference object into the boot row (measured 12:31:
     // guardMode arrived as {"get":"[depth]"}).

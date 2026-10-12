@@ -141,6 +141,16 @@ export interface MagicContextDshConfig {
          * excluding never deletes anything else (see planMachineDomain).
          */
         excludeProjects?: readonly string[]
+        /**
+         * L1① (2026-10-12): the maintenance tick may promote qualifying
+         * memories into the machine domain's CANDIDATE pool on its own —
+         * active, project scope, category on the domain's allowlist,
+         * seen_count >= 2, no credential body, ≤3 per pass, paused while ≥10
+         * candidates sit pending. Staging is reversible and shares nothing;
+         * PUBLISHING stays a human act (`approve` / panel button). Default
+         * FALSE — the pool only fills itself once the operator asks for it.
+         */
+        autoStage?: boolean
       }
     }
     /**

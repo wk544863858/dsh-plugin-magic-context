@@ -46,6 +46,7 @@ const maintenanceTickers = new Map<string, () => void>()
 import type { MemoryWriter } from '../core/memory-write.ts'
 import type { ProfileWriter } from '../core/profile-write.ts'
 import { errText } from '../core/types.ts'
+import { autoStageMachineCandidates } from '../core/global-autostage.ts'
 import type { HistorianLlm } from './historian.ts'
 import type { MagicContextDshConfig } from './config.ts'
 import type { PreStepProjects } from './pre-step.ts'
@@ -169,6 +170,24 @@ export function wireMaintenance(input: {
           verified: outcome.verified,
           updated: outcome.updated,
           archived: outcome.archived,
+        }
+      }
+
+      // L1①: machine-domain auto-stage. GLOBAL — one candidate pool, so it runs
+      // once per tick beside the profile review, not per identity. The switch
+      // is read LIVE (a profile flip needs no remount). Journal only when
+      // something actually staged: a silent "0 staged" every 30 minutes is
+      // noise, and the panel's candidate queue is the standing view.
+      if (liveBoolean(config.memory?.global?.machine?.autoStage, false) && writer !== undefined) {
+        const outcome = autoStageMachineCandidates({ store: stores, contractDbPath: writer.dbPath, now: Date.now() })
+        if (outcome.staged.length > 0) {
+          journal.info(
+            'memory-promote',
+            `auto-staged ${String(outcome.staged.length)} machine candidate(s): ${outcome.staged
+              .map(entry => `#${String(entry.candidateId)}(memory ${String(entry.memoryId)})`)
+              .join(', ')}`,
+            { phase: 'auto-stage', staged: outcome.staged, skipped: outcome.skipped },
+          )
         }
       }
 
