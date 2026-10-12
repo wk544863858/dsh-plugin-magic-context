@@ -105,8 +105,18 @@ export async function reviewGlobalCandidates(input: {
   readonly batchLimit?: number
   readonly sessionId?: string
   readonly now: () => number
+  /**
+   * Review ONLY this candidate (the `ctx_memory action=promote` path): the
+   * promotion just enqueued it and the card must come up at once, ahead of
+   * whatever else sits in the pool. Absent = the batch review of the whole
+   * pending queue, unchanged.
+   */
+  readonly onlyCandidateId?: number
 }): Promise<GlobalReviewOutcome> {
-  const pending = input.store.listGlobalCandidates({ state: 'pending' })
+  const pendingAll = input.store.listGlobalCandidates({ state: 'pending' })
+  const pending = input.onlyCandidateId === undefined
+    ? pendingAll
+    : pendingAll.filter(candidate => candidate.id === input.onlyCandidateId)
   if (input.ask === undefined) {
     return {
       approved: 0,
@@ -119,6 +129,17 @@ export async function reviewGlobalCandidates(input: {
     }
   }
   if (pending.length === 0) {
+    if (input.onlyCandidateId !== undefined) {
+      return {
+        approved: 0,
+        rejected: 0,
+        reclassified: 0,
+        skipped: 0,
+        failed: 1,
+        lines: [`候选 #${String(input.onlyCandidateId)} 已不在待审池（可能刚被处理过），本次未弹卡。`],
+        remaining: pendingAll.length,
+      }
+    }
     return { approved: 0, rejected: 0, reclassified: 0, skipped: 0, failed: 0, lines: ['全局域待审队列为空。'], remaining: 0 }
   }
   const batch = pending.slice(0, Math.max(1, input.batchLimit ?? 5))

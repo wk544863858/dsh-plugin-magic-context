@@ -62,6 +62,7 @@ import { registerCtxStatusCommand } from './dsh/status-command.ts'
 import { registerCtxRecompCommand } from './dsh/recomp.ts'
 import { registerCtxGlobalCommand, registerCtxProfileCommand } from './dsh/command-surface.ts'
 import { reviewGlobalCandidates, type GlobalReviewAsker } from './dsh/global-review.ts'
+import { promoteMemoryToCandidate } from './core/global-domains.ts'
 import { SearchHintTracker } from './dsh/search-hint.ts'
 import { registerMagicCompactionEngine, type EngineHandle } from './dsh/compaction-engine.ts'
 import { liveJournal } from './dsh/live-journal.ts'
@@ -554,6 +555,46 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
             return pending.then(r => ({
               outcome: `审批完成：批准 ${String(r.approved)} / 改判 ${String(r.reclassified)} / 拒绝 ${String(r.rejected)}`
                 + ` / 跳过 ${String(r.skipped)} / 失败 ${String(r.failed)}；剩余待审 ${String(r.remaining)}`,
+              detail: r.lines.length === 0 ? undefined : r.lines.join('\n'),
+            }))
+          },
+          // L1① second leg, instant path: promote enqueues ONE project memory
+          // into a global domain and raises its card at once (onlyCandidateId)
+          // — the human-judged lane without the recurrence gate. Same asker
+          // binding as reviewGlobal: the lazy read survives the inject landing
+          // after this registration.
+          promoteGlobal: (input, exec) => {
+            if (memoryRecall === undefined) {
+              return Promise.resolve({ outcome: '共享记忆库未接线，无法提升。' })
+            }
+            const domainId = input.domain === undefined || input.domain === '' || input.domain === 'org'
+              ? 'dir:global:org'
+              : input.domain === 'machine' ? 'dir:global:machine' : input.domain
+            const promoted = promoteMemoryToCandidate(stores, {
+              contractDbPath: memoryRecall.dbPath,
+              memoryId: input.memoryId,
+              domainId,
+              now: Date.now(),
+            })
+            if (!promoted.ok) {
+              return Promise.resolve({ outcome: `提升失败：${promoted.error}` })
+            }
+            const ask = askGlobalReview
+            const review = reviewGlobalCandidates({
+              store: stores,
+              ...(ask === undefined
+                ? {}
+                : { ask: ({ questions, sessionId }) => ask({ questions, sessionId }) }),
+              ...memoryWriter === undefined || memoryWriter.status.ok !== true ? {} : { publisher: memoryWriter },
+              ...journal === undefined ? {} : { journal },
+              sessionId: exec?.agent?.session?.id,
+              now: () => Date.now(),
+              onlyCandidateId: promoted.candidate.id,
+            })
+            return review.then(r => ({
+              outcome: `候选 #${String(promoted.candidate.id)} 已入池（${domainId}），审批卡已弹出：`
+                + `批准 ${String(r.approved)} / 改判 ${String(r.reclassified)} / 拒绝 ${String(r.rejected)}`
+                + ` / 跳过 ${String(r.skipped)} / 失败 ${String(r.failed)}`,
               detail: r.lines.length === 0 ? undefined : r.lines.join('\n'),
             }))
           },

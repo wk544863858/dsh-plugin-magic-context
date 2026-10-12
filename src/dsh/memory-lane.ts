@@ -83,6 +83,7 @@ export interface MemoryLane {
     defineTool: MagicContextDshConfigDefineTool
     journal: Journal | undefined
     reviewGlobal?: Parameters<typeof defineCtxMemoryTool>[0]['reviewGlobal']
+    promoteGlobal?: Parameters<typeof defineCtxMemoryTool>[0]['promoteGlobal']
   }): Parameters<typeof defineCtxMemoryTool>[0]
 }
 
@@ -517,7 +518,7 @@ export function openMemoryLane(
     searchForSession,
     memoryScoring,
     describeMemoryWrite,
-    ctxMemoryRegistration: ({ activePolicy, defineTool, journal, reviewGlobal }) => {
+    ctxMemoryRegistration: ({ activePolicy, defineTool, journal, reviewGlobal, promoteGlobal }) => {
       // The shared-space gate runs inside the search closure below, so it needs
       // the journal this registration carries.
       laneJournal = journal
@@ -534,6 +535,7 @@ export function openMemoryLane(
         ...memoryWriter === undefined || config.memory?.write === false ? {} : { writer: memoryWriter },
         ...memorySearchForTool === undefined ? {} : { search: memorySearchForTool },
         ...reviewGlobal === undefined ? {} : { reviewGlobal },
+        ...promoteGlobal === undefined ? {} : { promoteGlobal },
         // A2: ctx_memory search suppresses rows this session's injected
         // block already renders (MC getVisibleMemoryIds).
         visibleMemoryIdsOf: exec => {

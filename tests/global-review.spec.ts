@@ -211,6 +211,46 @@ describe('reviewGlobalCandidates', () => {
     expect(store.getGlobalCandidate(first)?.state).toBe('pending')
   })
 
+  it('reviews ONLY the named candidate when onlyCandidateId is set (the instant promote path)', async () => {
+    const store = storeWithDomains()
+    stage(store, { category: 'CONSTRAINTS', sourceMemoryId: 1, content: 'earlier pending' })
+    const target = stage(store, { category: 'CONSTRAINTS', sourceMemoryId: 2, content: 'just promoted' })
+    stage(store, { category: 'CONSTRAINTS', sourceMemoryId: 3, content: 'later pending' })
+    const { port, calls } = fakePublisher()
+    const raised: GlobalReviewQuestion[][] = []
+    const outcome = await reviewGlobalCandidates({
+      store,
+      ask: fakeAsker(askId => ({ answers: [{ id: askId, selected: ['批准发布'] }] }), raised),
+      publisher: port,
+      now: () => NOW,
+      onlyCandidateId: target,
+    })
+    // One card, the promoted one, published; the rest of the pool untouched.
+    expect(raised).toHaveLength(1)
+    expect(raised[0][0]?.id).toBe(`global-candidate-${String(target)}`)
+    expect(outcome.approved).toBe(1)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ identity: 'dir:global:machine' })
+    expect(store.getGlobalCandidate(target)?.state).toBe('approved')
+    expect(outcome.remaining).toBe(2)
+  })
+
+  it('reports a vanished onlyCandidateId without touching the pool', async () => {
+    const store = storeWithDomains()
+    const pending = stage(store, { category: 'CONSTRAINTS', sourceMemoryId: 5 })
+    const outcome = await reviewGlobalCandidates({
+      store,
+      ask: fakeAsker(() => ({})),
+      publisher: fakePublisher().port,
+      now: () => NOW,
+      onlyCandidateId: 9999,
+    })
+    expect(outcome.failed).toBe(1)
+    expect(outcome.lines[0]).toContain('#9999 已不在待审池')
+    expect(store.getGlobalCandidate(pending)?.state).toBe('pending')
+    expect(outcome.remaining).toBe(1)
+  })
+
   it('treats an unparseable answer as a failure and leaves the candidate pending', async () => {
     const store = storeWithDomains()
     const id = stage(store, { category: 'CONSTRAINTS', sourceMemoryId: 9 })

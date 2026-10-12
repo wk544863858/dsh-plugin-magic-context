@@ -323,6 +323,18 @@ export interface MemoryToolDeps {
    */
   readonly reviewGlobal?: (exec?: MemoryToolRunContext) => Promise<{ outcome: string; detail?: string }>
   /**
+   * One-shot promotion (the `promote` action): enqueue one project memory into
+   * a global domain's pending pool and IMMEDIATELY raise its approval card —
+   * the human-judged lane with no recurrence gate, so a single fresh write can
+   * be shared the moment the user asks for it. Absent = not wired: the action
+   * reports that and touches no state.
+   */
+  readonly promoteGlobal?: (input: {
+    readonly memoryId: number
+    /** Short name (`machine`/`org`) or full `dir:global:*` identity; default org. */
+    readonly domain?: string
+  }, exec?: MemoryToolRunContext) => Promise<{ outcome: string; detail?: string }>
+  /**
    * Resolves an EXPLICIT project spec (absolute path or `git:`/`dir:` identity)
    * to an identity — the `project` argument's resolver. DSH has no OpenCode-style
    * per-turn working directory, so cross-project facts can only be scoped by the
@@ -376,13 +388,17 @@ export function defineCtxMemoryTool(deps: MemoryToolDeps): unknown {
         + 'get (by id), write (new memory), update (rewrite one), '
         + 'archive (retire one, optionally superseded by another), merge (fold duplicates into one), '
         + 'review_global (present pending global-domain candidates — machine and org — to the user as '
-        + 'approval cards, one at a time; an approved candidate is published into the shared domain). '
+        + 'approval cards, one at a time; an approved candidate is published into the shared domain), '
+        + 'promote (memory_id + optional domain machine|org: enqueue one project memory into that global '
+        + 'domain and IMMEDIATELY raise its approval card — approved publishes, rejected retires it for '
+        + 'good; the human-judged lane with no recurrence gate, so a single fresh write can be shared '
+        + 'right away). '
         + 'Writes are scoped to this project and deduplicated by normalized content. '
         + 'Every action accepts an optional project (an absolute path or git root): use it when the '
         + 'memory belongs to ANOTHER project than the one this session was opened in — reading a '
         + "project's memories or writing facts about it while you work on it from a different session.",
     parameters: {
-      action: { type: 'string', enum: ['list', 'search', 'get', 'write', 'update', 'archive', 'merge', 'review_global'] },
+      action: { type: 'string', enum: ['list', 'search', 'get', 'write', 'update', 'archive', 'merge', 'review_global', 'promote'] },
       query: { type: 'string' },
       limit: { type: 'integer' },
       from: { type: 'string' },
@@ -396,6 +412,8 @@ export function defineCtxMemoryTool(deps: MemoryToolDeps): unknown {
       superseded_by: { type: 'integer' },
       target_id: { type: 'integer' },
       project: { type: 'string' },
+      memory_id: { type: 'integer' },
+      domain: { type: 'string' },
     },
     output: {
       schema: { type: 'json' },
@@ -494,6 +512,23 @@ export function defineCtxMemoryTool(deps: MemoryToolDeps): unknown {
           return finish({ reason: 'global review is not wired in this host' })
         }
         const result = await deps.reviewGlobal(exec as MemoryToolRunContext)
+        return finish(result)
+      }
+
+      if (action === 'promote') {
+        if (deps.promoteGlobal === undefined) {
+          return finish({ reason: 'global promotion is not wired in this host' })
+        }
+        if (typeof args.memory_id !== 'number' || !Number.isInteger(args.memory_id)) {
+          return finish({
+            outcome: 'promote needs an integer memory_id (the project memory to enqueue for approval). '
+              + 'Nothing was promoted.',
+            ok: false,
+          })
+        }
+        const domain = typeof args.domain === 'string' && args.domain.trim() !== '' ? args.domain.trim() : undefined
+        const result = await deps.promoteGlobal({ memoryId: args.memory_id, ...(domain === undefined ? {} : { domain }) },
+          exec as MemoryToolRunContext)
         return finish(result)
       }
 

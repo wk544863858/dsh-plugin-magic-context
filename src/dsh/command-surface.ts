@@ -330,7 +330,8 @@ export function planGlobalCommand(
       kind: 'success',
       text: `Magic Context: memory #${String(memoryId)} is now candidate #${String(candidate.id)} for ${domainId}`
         + `${candidate.category === undefined ? '' : ` (category ${candidate.category})`}.\n`
-        + `It is human-judged, so /ctx-global approve ${String(candidate.id)} does not need the recurrence gate.`,
+        + `It is human-judged, so /ctx-global approve ${String(candidate.id)} does not need the recurrence gate.\n`
+        + `Instant path next time: ctx_memory action=promote (memory_id + domain) enqueues AND raises the card.`,
     }
   }
 
