@@ -61,6 +61,7 @@ import { ReduceNudgeTracker } from './dsh/reduce-guidance.ts'
 import { registerCtxStatusCommand } from './dsh/status-command.ts'
 import { registerCtxRecompCommand } from './dsh/recomp.ts'
 import { registerCtxGlobalCommand, registerCtxProfileCommand } from './dsh/command-surface.ts'
+import { reviewGlobalCandidates, type GlobalReviewAsker } from './dsh/global-review.ts'
 import { SearchHintTracker } from './dsh/search-hint.ts'
 import { registerMagicCompactionEngine, type EngineHandle } from './dsh/compaction-engine.ts'
 import { liveJournal } from './dsh/live-journal.ts'
@@ -493,6 +494,23 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
   })
 
   // ── Tools + command ────────────────────────────────────────────────────────
+  // Human approval for global-domain candidates (L1① second leg): the asker
+  // resolves the session's live root Agent and forwards the cards to the
+  // host's user-questions waterfall. Structural injection — the package is
+  // not a dependency; the asker stays undefined (fail-closed at call time)
+  // when the service is absent, e.g. headless.
+  let askGlobalReview: GlobalReviewAsker | undefined
+  ctx.inject(['userQuestions', 'agents'], (scope: unknown) => {
+    const { userQuestions, agents } = scope as {
+      userQuestions?: { ask(request: unknown): Promise<unknown> }
+      agents?: { get(id: string): unknown }
+    }
+    if (userQuestions === undefined || agents === undefined) return
+    askGlobalReview = async ({ questions, sessionId }) => {
+      const agent = sessionId === undefined ? undefined : agents.get(sessionId)
+      return userQuestions.ask({ questions, ...(agent === undefined ? {} : { agent }) })
+    }
+  })
   if (config.registerTools !== false) {
     // Constructor resolution: host-injected → dynamic import. The import is
     // the normal path (`@deepseek-ai/dsh-tools` is a hard dependency); when
@@ -514,7 +532,32 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
       registrar.register(defineCtxReduceTool(deps))
       registrar.register(defineCtxExpandTool(deps))
       if (memoryRecall !== undefined) {
-        registrar.register(defineCtxMemoryTool(lane.ctxMemoryRegistration({ activePolicy, defineTool, journal })))
+        registrar.register(defineCtxMemoryTool(lane.ctxMemoryRegistration({
+          activePolicy,
+          defineTool,
+          journal,
+          // L1① second leg: the review closure reads the asker binding lazily —
+          // the inject above may land after this registration runs.
+          reviewGlobal: exec => {
+            const ask = askGlobalReview
+            const pending = reviewGlobalCandidates({
+              store: stores,
+              ...(ask === undefined
+                ? {}
+                : { ask: ({ questions, sessionId }) => ask({ questions, sessionId }) }),
+              ...memoryWriter === undefined || memoryWriter.status.ok !== true ? {} : { publisher: memoryWriter },
+              ...journal === undefined ? {} : { journal },
+              batchLimit: liveNumber(config.memory?.global?.review?.batchLimit, 5),
+              sessionId: exec?.agent?.session?.id,
+              now: () => Date.now(),
+            })
+            return pending.then(r => ({
+              outcome: `审批完成：批准 ${String(r.approved)} / 拒绝 ${String(r.rejected)} / 跳过 ${String(r.skipped)}`
+                + ` / 失败 ${String(r.failed)}；剩余待审 ${String(r.remaining)}`,
+              detail: r.lines.length === 0 ? undefined : r.lines.join('\n'),
+            }))
+          },
+        })))
       }
       ctx.logger.info(`magic-context dsh adapter: ctx_reduce / ctx_expand registered (${toolMode})`)
     } catch (error) {

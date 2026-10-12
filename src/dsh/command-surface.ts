@@ -68,7 +68,8 @@ type CommandRegistrar = {
 const PROFILE_USAGE = 'list | show <id> | confirm <id> | reject <id> | retire <id> --yes'
 const GLOBAL_USAGE = 'domains | members [<domain>] | enable <domain> | disable <domain> --yes | '
   + 'add <domain> <identity> | remove <domain> <identity> --yes | candidates [<domain>] | '
-  + 'promote <memoryId> [--domain <domain>] | detect | approve <candidateId> --yes | reject-candidate <candidateId> --yes'
+  + 'promote <memoryId> [--domain <domain>] | detect | approve <candidateId> --yes | reject-candidate <candidateId> --yes | '
+  + 'review via ctx_memory action=review_global (approval cards)'
 
 function tokenize(rawInput: string | undefined): string[] {
   return (rawInput ?? '').trim().split(/\s+/).filter(token => token.length > 0)

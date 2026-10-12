@@ -46,6 +46,7 @@ export type JournalKind =
   | 'vector-lane'
   | 'search-hint'
   | 'memory-promote'
+  | 'global-review'
   | 'maintenance'
   | 'session-notice'
   | 'project-drift'

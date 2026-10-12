@@ -149,7 +149,7 @@ describe('ctx_memory under the real host defineTool', () => {
     expect(Object.keys(built.tool.parameters.properties)).toEqual(expect.arrayContaining([
       'action', 'query', 'id', 'ids', 'category', 'content', 'target_id', 'superseded_by',
     ]))
-    expect(built.tool.parameters.properties.action).toMatchObject({ enum: ['list', 'search', 'get', 'write', 'update', 'archive', 'merge'] })
+    expect(built.tool.parameters.properties.action).toMatchObject({ enum: ['list', 'search', 'get', 'write', 'update', 'archive', 'merge', 'review_global'] })
     expect(typeof built.tool.execute).toBe('function')
     expect(typeof built.tool.output.render).toBe('function')
   })

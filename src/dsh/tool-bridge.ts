@@ -316,6 +316,13 @@ export interface MemoryToolDeps {
     exec: { agent?: { session: { header: { cwd?: string } } } } | undefined,
   ) => string | undefined
   /**
+   * Human approval for global-domain candidates (machine + org alike): raises
+   * one `ctx.userQuestions` card per pending candidate and publishes only the
+   * approved ones. Absent = not wired (headless): the action reports that and
+   * touches no state.
+   */
+  readonly reviewGlobal?: (exec?: MemoryToolRunContext) => Promise<{ outcome: string; detail?: string }>
+  /**
    * Resolves an EXPLICIT project spec (absolute path or `git:`/`dir:` identity)
    * to an identity — the `project` argument's resolver. DSH has no OpenCode-style
    * per-turn working directory, so cross-project facts can only be scoped by the
@@ -367,13 +374,15 @@ export function defineCtxMemoryTool(deps: MemoryToolDeps): unknown {
         + 'Actions: list (optionally with query), search (hybrid keyword+semantic retrieval over the pool, '
         + 'optionally bounded by from/to dates), '
         + 'get (by id), write (new memory), update (rewrite one), '
-        + 'archive (retire one, optionally superseded by another), merge (fold duplicates into one). '
+        + 'archive (retire one, optionally superseded by another), merge (fold duplicates into one), '
+        + 'review_global (present pending global-domain candidates — machine and org — to the user as '
+        + 'approval cards, one at a time; an approved candidate is published into the shared domain). '
         + 'Writes are scoped to this project and deduplicated by normalized content. '
         + 'Every action accepts an optional project (an absolute path or git root): use it when the '
         + 'memory belongs to ANOTHER project than the one this session was opened in — reading a '
         + "project's memories or writing facts about it while you work on it from a different session.",
     parameters: {
-      action: { type: 'string', enum: ['list', 'search', 'get', 'write', 'update', 'archive', 'merge'] },
+      action: { type: 'string', enum: ['list', 'search', 'get', 'write', 'update', 'archive', 'merge', 'review_global'] },
       query: { type: 'string' },
       limit: { type: 'integer' },
       from: { type: 'string' },
@@ -478,6 +487,14 @@ export function defineCtxMemoryTool(deps: MemoryToolDeps): unknown {
           })
         }
         identity = resolved
+      }
+
+      if (action === 'review_global') {
+        if (deps.reviewGlobal === undefined) {
+          return finish({ reason: 'global review is not wired in this host' })
+        }
+        const result = await deps.reviewGlobal(exec as MemoryToolRunContext)
+        return finish(result)
       }
 
       if (action === 'list' || (action === 'get' && args.id === undefined)) {

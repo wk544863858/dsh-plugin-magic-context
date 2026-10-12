@@ -27,6 +27,7 @@ const PHASE_BASE = [
   'tests/config-schema.spec.ts',
   'tests/contract-bootstrap.spec.ts',
   'tests/global-autostage.spec.ts',
+  'tests/global-review.spec.ts',
   'tests/context-pressure.spec.ts',
   'tests/embedding-wasm.spec.ts',
   'tests/emergency-drop.spec.ts',

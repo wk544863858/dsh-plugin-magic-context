@@ -152,6 +152,16 @@ export interface MagicContextDshConfig {
          */
         autoStage?: boolean
       }
+      /**
+       * Human approval for global-domain candidates (machine + org alike):
+       * `ctx_memory action=review_global` presents pending candidates as
+       * user-questions cards, one at a time, and only the user-approved ones
+       * are published (source_type=user — the WP9 publishing semantics).
+       */
+      review?: {
+        /** Candidates one review_global call may put in front of the user (default 5). */
+        batchLimit?: number
+      }
     }
     /**
      * Workspace root for the evidence pass (schema v7): its greps run here.
