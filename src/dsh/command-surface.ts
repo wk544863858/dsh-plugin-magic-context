@@ -203,7 +203,12 @@ export function planGlobalCommand(
   contractDbPath?: string,
   publisher?: DomainWritePort,
 ): CommandResult {
-  const tokens = stripFlags(tokenize(rawInput))
+  // Flags must be read from the RAW tokens: stripFlags removes every
+  // `-`-prefixed token, so any flag looked up in `tokens` is invisible (the
+  // 2026-10-12 promote --domain bug: the flag was always "absent", so every
+  // promotion silently landed in org — even one naming an unknown domain).
+  const rawTokens = tokenize(rawInput)
+  const tokens = stripFlags(rawTokens)
   const verb = tokens[0] ?? 'domains'
 
   if (verb === 'domains') {
@@ -303,8 +308,15 @@ export function planGlobalCommand(
     if (contractDbPath === undefined) {
       return { kind: 'error', text: 'Magic Context: the shared store is unavailable, so a memory cannot be read.' }
     }
-    const domainFlag = tokens.indexOf('--domain')
-    const domainId = domainFlag >= 0 && tokens[domainFlag + 1] !== undefined ? tokens[domainFlag + 1] : ORG_DOMAIN_ID
+    const domainFlag = rawTokens.indexOf('--domain')
+    const domainValue = domainFlag >= 0 ? rawTokens[domainFlag + 1] : undefined
+    // A flag without a value (or followed by another flag) must FAIL, not fall
+    // back to org: a silent fallback publishes human-judged knowledge to the
+    // wrong audience, which is the one mistake this flag exists to prevent.
+    if (domainFlag >= 0 && (domainValue === undefined || domainValue.startsWith('-'))) {
+      return { kind: 'error', text: `Magic Context: --domain needs a value. Usage: ${GLOBAL_USAGE}` }
+    }
+    const domainId = domainValue ?? ORG_DOMAIN_ID
     const promoted = promoteMemoryToCandidate(store, {
       contractDbPath,
       memoryId,

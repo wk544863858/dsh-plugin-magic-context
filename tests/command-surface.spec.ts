@@ -10,14 +10,17 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openStores } from '../src/index.ts'
 import { planGlobalCommand, planProfileCommand } from '../src/dsh/command-surface.ts'
 import { gateProfileCandidate } from '../src/core/profile-confirmation.ts'
 import { defaultDomainCap } from '../src/core/domains.ts'
+import { makeMemoryDb } from './helpers/memory-db.ts'
 
 const NOW = 1_700_000_000_000
 const ORG = 'dir:global:org'
+const MACHINE = 'dir:global:machine'
 const DIRECTIVE = '未确认前必须先在 plan 模式内讨论，拿到确认后才能写文件。'
 
 const dirs: string[] = []
@@ -287,5 +290,111 @@ describe('/ctx-global', () => {
     const unknown = planGlobalCommand(s, 'nope', NOW)
     expect(unknown.kind).toBe('error')
     expect(unknown.text).toContain('domains | members')
+  })
+})
+
+describe('/ctx-global promote --domain', () => {
+  interface MemorySeed {
+    id: number
+    projectPath: string
+    content: string
+    category?: string
+  }
+
+  function seedMachineDomain(s: ReturnType<typeof openStores>) {
+    s.upsertDomain(
+      {
+        domainId: MACHINE,
+        kind: 'machine',
+        enabled: false, // promotion only requires the domain to EXIST, not to be on
+        budgetTokens: 512,
+        cap: defaultDomainCap('machine'),
+        shareCategories: ['CONSTRAINTS'],
+      },
+      NOW,
+    )
+  }
+
+  function makeContract(rows: MemorySeed[]): string {
+    const created = makeMemoryDb({ prefix: 'mc-cmd-contract-', schemaVersion: 94 })
+    dirs.push(created.dir)
+    const db = new DatabaseSync(created.path)
+    try {
+      const insert = db.prepare(
+        'INSERT INTO memories(id, project_path, category, content, normalized_hash, scope, shareable, '
+          + 'first_seen_at, created_at, updated_at, last_seen_at, status) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      for (const row of rows) {
+        insert.run(
+          row.id,
+          row.projectPath,
+          row.category ?? 'CONSTRAINTS',
+          row.content,
+          `hash-${String(row.id)}`,
+          'project',
+          0,
+          1,
+          1,
+          1,
+          1,
+          'active',
+        )
+      }
+    } finally {
+      db.close()
+    }
+    return created.path
+  }
+
+  it('honours --domain and stages the candidate into the named domain, not org', () => {
+    const s = store()
+    seedDomain(s)
+    seedMachineDomain(s)
+    const contract = makeContract([
+      { id: 7, projectPath: 'git:alpha', content: '依赖安装统一用 uv，不用裸 pip。' },
+    ])
+    const result = planGlobalCommand(s, `promote 7 --domain ${MACHINE}`, NOW, contract)
+    expect(result.kind, result.text).toBe('success')
+    const candidates = s.listGlobalCandidates()
+    expect(candidates).toHaveLength(1)
+    expect(candidates[0]!.domainId).toBe(MACHINE)
+    expect(candidates[0]!.sourceMemoryId).toBe(7)
+  })
+
+  it('keeps the default domain org when no flag is given', () => {
+    const s = store()
+    seedDomain(s)
+    seedMachineDomain(s)
+    const contract = makeContract([
+      { id: 8, projectPath: 'git:alpha', content: '共享只读口令走 bastion。' },
+    ])
+    const result = planGlobalCommand(s, 'promote 8', NOW, contract)
+    expect(result.kind, result.text).toBe('success')
+    expect(s.listGlobalCandidates()[0]!.domainId).toBe(ORG)
+  })
+
+  it('refuses a valueless --domain instead of silently falling back to org', () => {
+    const s = store()
+    seedDomain(s)
+    seedMachineDomain(s)
+    const contract = makeContract([
+      { id: 9, projectPath: 'git:alpha', content: '发布前必须过 gate。' },
+    ])
+    const result = planGlobalCommand(s, 'promote 9 --domain', NOW, contract)
+    expect(result.kind).toBe('error')
+    expect(result.text).toContain('--domain needs a value')
+    expect(s.listGlobalCandidates()).toEqual([])
+  })
+
+  it('refuses an unknown domain without creating a candidate', () => {
+    const s = store()
+    seedDomain(s)
+    seedMachineDomain(s)
+    const contract = makeContract([
+      { id: 10, projectPath: 'git:alpha', content: '提交信息走 <tmp>。' },
+    ])
+    const result = planGlobalCommand(s, 'promote 10 --domain dir:global:nope', NOW, contract)
+    expect(result.kind).toBe('error')
+    expect(s.listGlobalCandidates()).toEqual([])
   })
 })
