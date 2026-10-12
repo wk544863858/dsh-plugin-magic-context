@@ -168,12 +168,14 @@ export async function reviewGlobalCandidates(input: {
     // any field line in `detail` reads as a stray island (user feedback
     // 2026-10-12). `detail` therefore carries ONLY the memory body. An instant
     // promotion (onlyCandidateId) is the operator's OWN just-requested act —
-    // the question says so and drops the pool statistics and the "skip"
-    // non-option; a batch card stays neutral with all four choices.
+    // the header already names the action, so the question line itself is
+    // dropped (empty string: the host validates shape, not content) rather
+    // than parroting what the operator just typed; a batch card keeps a
+    // neutral question carrying the staging statistics.
     const instant = input.onlyCandidateId !== undefined
     const domainName = domainLabel(candidate.domainId)
     const question = instant
-      ? `把你刚提升的 memory #${String(candidate.sourceMemoryId ?? candidate.id)} 发布到${domainName}？`
+      ? ''
       : `发布这条自动暂存的 [${candidate.category ?? '未分类'}] 记忆到${domainName}？` +
         `（${String(candidate.distinctIdentities)} 个项目独立观察 / ${String(candidate.observationCount)} 次）`
     const llmNote = instant || candidate.suggestedDomain === undefined

@@ -236,10 +236,11 @@ describe('reviewGlobalCandidates', () => {
     // One card, the promoted one, published; the rest of the pool untouched.
     expect(raised).toHaveLength(1)
     expect(raised[0][0]?.id).toBe(`global-candidate-${String(target)}`)
-    // Instant-lane card copy: the operator's own act in the question, the bare
-    // body in the detail (no field-line islands), no "skip" non-option.
+    // Instant-lane card copy: the header names the action, no question line
+    // (it would only parrot what the operator just typed), the bare quoted
+    // body in the detail, no "skip" non-option.
     const card = raised[0]![0]!
-    expect(card.question).toBe('把你刚提升的 memory #2 发布到机器域？')
+    expect(card.question).toBe('')
     expect(card.header).toBe('记忆发布审批 · 机器域')
     expect(card.detail).toBe('> just promoted')
     expect(card.detail).not.toContain('来源')
