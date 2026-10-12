@@ -158,9 +158,14 @@ export interface MagicContextDshConfig {
     embedBackfill?: boolean
     /**
      * WP11: fill `memory_embeddings` for active rows the dominant space is
-     * missing. Default FALSE — this is the switch that WRITES vectors into the
-     * shared store, so it is opt-in, and it only ever writes after the
-     * shared-space parity gate has passed (see `vector-backfill.ts`).
+     * missing. Default TRUE (2026-10-12): the write path never embeds, so a
+     * default-off lane meant every NEW memory stayed vector-less and Chinese
+     * semantic recall silently decayed. Writes go into this machine's own
+     * single-writer store, bounded by `vectorBackfillLimit` per tick and
+     * behind the shared-space parity gate; set `false` to keep the store
+     * free of writes. (The original default was FALSE while the store was
+     * still MC's contract territory; the OpenCode/Pi retirement made this
+     * store single-writer ours, which removed the opt-in rationale.)
      */
     vectorBackfill?: boolean
     /**

@@ -101,6 +101,7 @@ const PHASE_D = [
   'tests/vector-backfill.spec.ts',
   'tests/report-classify.spec.ts',
   'tests/domain-checks.spec.ts',
+  'tests/profile-checks.spec.ts',
   'tests/cli-flags.spec.ts',
   'tests/route-health.spec.ts',
   'tests/report-hits.spec.ts',
@@ -167,11 +168,16 @@ export const PHASES = [
       '发布是"复制"而非"镜像"：源行改写不传播到域行——对账用例已钉（tests/domain-source-parity.spec.ts：'
       + '改写/归档源行后域行逐字节不变）；因此域行更新只能走产品路径（新候选→发布→归档旧行），没有镜像修复',
       '写开关线上实况（2026-10-10）：user.collect=on、vectorBackfill=on（已收口）、user.review=off、'
-      + 'machine.enabled=off——演练与线上的差距收窄到"画像评审注入"与"machine 域"两段未开',
+      + 'machine.enabled=off——演练与线上的差距收窄到"画像评审注入"与"machine 域"两段未开；'
+      + '2026-10-12 起 vectorBackfill 缺省=true（分发默认可用，显式 false 才关），'
+      + 'profile 需逐键重复的"必须为 true"清单收缩为 scoring/collect',
       'WP11 向量回填已真写并收口（2026-10-10 09:52 开启 → 15:19 dominant 100%）；'
       + '残余特性：缺口随新晋升行回升、靠 30 分钟维护拍清理，机器空闲时段不补跑',
       'doctor / mc-acceptance 的域判定已有 hermetic 正负样本（tests/domain-checks.spec.ts），'
       + '但真库采样仍是各一次：阈值与采样量的长期漂移只能靠趋势，不能靠这两条判据',
+      'profile 依赖卫生判据（tests/profile-checks.spec.ts，2026-10-11 启动失败后加）是静态检查：'
+      + '只看 profile 根 node_modules/@deepseek-ai/（Node 真能解析到的位置），看不到 .pnpm 内部未提升的副本；'
+      + '宿主包清单读不到时（app.asar 不可达）dependencies 一项降级为 WARN，不冒充绿灯',
     ],
   },
 ]

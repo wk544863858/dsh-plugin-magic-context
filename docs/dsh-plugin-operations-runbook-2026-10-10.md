@@ -133,7 +133,7 @@ npm run phase all                              # 阶段门 A–D
 | `memory.global.machine.enabled` | off | 写契约（本机共享） | 关掉即不写；**已有域行仍在**，退役要显式做 |
 | `memory.global.machine.excludeProjects` | `[]` | — | 只增不减语义：排除只是把项目移出域，**从不删除**其他数据 |
 | `memory.domains.source` | `adapter` | — | 改成 `contract` = 回退到旧的 workspace 查询（**一个版本的回滚杠杆，不是终态**） |
-| `memory.vectorBackfill` | off | 写契约 `memory_embeddings` | 关掉即停；已写的行留着（唯一的合法写入目标见 §7） |
+| `memory.vectorBackfill` | **on**（2026-10-12 起缺省=true；此前 off） | 写契约 `memory_embeddings` | 设 false 即停；已写的行留着（唯一的合法写入目标见 §7）。改缺省的理由：写入路径不嵌入 ⇒ 默认关=新记忆永远无向量、中文语义召回随行数静默衰减 |
 | `memory.vectorBackfillLimit` | 24 | — | 每拍回填上限 |
 | `memory.embedBackfill` | on | **不写库**（查询侧按需嵌入） | 与回填无关，别混淆 |
 
@@ -169,8 +169,9 @@ node -e 'const {DatabaseSync}=require("node:sqlite"); const p=process.env.USERPR
 4. **写入没生效但命令报成功** ⇒ 检查 `boot` 里的 `memoryWrite`：
    `read-only` 表示契约 fence 生效，**所有写路径都在失败**（这是历史上出现过的
    "全写失败却对外宣称 read-write"形态，acceptance 的 `fence.exposure` 专门盯它）。
-5. **向量覆盖率下降** ⇒ `memory.vectorBackfill` 默认 off；真库 dry-run 结论是
-   parity 1.000000 PASS。开启前先确认主导空间：
+5. **向量覆盖率下降** ⇒ `memory.vectorBackfill` 自 2026-10-12 起缺省 on
+   （写入路径不嵌入，默认关曾让新记忆永远无向量）；真库 dry-run 结论是
+   parity 1.000000 PASS。排查前先确认主导空间：
    **只允许写 dominant `model_id`**，写错就是第三个空间（见 §7）。
    本地模型的缓存在**适配器库同级的 `models/`**（`defaultEmbeddingCacheDir`），~87 MB；
    若在**别处**（例如仓库根）看到 `models/`，说明某次运行用了相对适配器路径

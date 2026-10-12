@@ -22,9 +22,11 @@
  *
  * So this module only reads: it reports coverage and hands back the id list a
  * backfill WOULD take. The write itself lives in `vector-backfill.ts` (WP11),
- * which consumes exactly this plan; what stays unexecuted is the live write,
- * because the switch (`memory.vectorBackfill`) defaults to off — that is the
- * blind spot phase D records, not a missing implementation.
+ * which consumes exactly this plan. The switch (`memory.vectorBackfill`)
+ * defaulted to off until 2026-10-12 and is on by default since (the write path
+ * never embeds, so an off-by-default lane let Chinese semantic recall decay
+ * with every new row); the phase-D blind spot that motivated the original
+ * wording is closed, the parity gate is not optional.
  */
 import { DatabaseSync } from 'node:sqlite'
 

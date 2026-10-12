@@ -28,6 +28,7 @@ import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { MockAdapter, textResponse } from './helpers/mock-adapter.ts'
 import mcDshPlugin from '../src/index.ts'
+import { vectorBackfillEnabled } from '../src/dsh/maintenance-wiring.ts'
 import { resolveIdentitySpec } from '../src/core/memory-bridge.ts'
 import { ROUTE_QUOTA_HOLD_MS } from '../src/core/route-health.ts'
 import { makeMemoryDb as makeBareMemoryDb } from './helpers/memory-db'
@@ -290,5 +291,17 @@ describe('maintenance sweep wiring (real plugin, fake clock)', () => {
     } finally {
       await ctx.fiber.dispose()
     }
+  })
+})
+
+describe('vectorBackfill default (WP11 gate)', () => {
+  it('is ON for a config that never mentions it — a fresh install backfills', () => {
+    expect(vectorBackfillEnabled(undefined)).toBe(true)
+    expect(vectorBackfillEnabled({})).toBe(true)
+  })
+
+  it('stays operator-off-able with an explicit false', () => {
+    expect(vectorBackfillEnabled({ vectorBackfill: false })).toBe(false)
+    expect(vectorBackfillEnabled({ vectorBackfill: true })).toBe(true)
   })
 })

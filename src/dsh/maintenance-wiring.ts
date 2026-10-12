@@ -27,6 +27,20 @@ import { quotaSkipSince, resolveMaintenanceRoute, ROUTE_QUOTA_HOLD_MS, RouteHeal
 
 /** WP11 default batch: how many vectors one maintenance tick may add. */
 export const VECTOR_BACKFILL_DEFAULT_LIMIT = 24
+
+/**
+ * WP11 gate. Default TRUE since 2026-10-12: the memory write path never embeds,
+ * so with the lane off every NEW memory stayed vector-less forever and Chinese
+ * semantic recall (the only channel with real recall on this corpus — FTS with
+ * unicode61 hits ~18%) silently decayed as rows accumulated. The vectors land
+ * in the machine's own single-writer store, bounded by
+ * `vectorBackfillLimit` per tick and gated by the shared-space parity check
+ * (a closed gate aborts the whole batch). Set the key to `false` to keep the
+ * shared store free of writes.
+ */
+export function vectorBackfillEnabled(memory: MagicContextDshConfig['memory']): boolean {
+  return liveBoolean(memory?.vectorBackfill, true)
+}
 /** Live maintenance tickers keyed by adapter DB path — a same-DB remount replaces its predecessor (see wireMaintenance). */
 const maintenanceTickers = new Map<string, () => void>()
 import type { MemoryWriter } from '../core/memory-write.ts'
@@ -183,12 +197,12 @@ export function wireMaintenance(input: {
         profileReviewLast = review
       }
 
-      // WP11: fill the vector lane. Also global, also once per tick, and off by
-      // default because it is the switch that writes vectors into the shared
-      // store. `vectorBackfill` returns undefined when the lane is unusable
-      // (no reader/embedder/writer), which is reported as "not run" rather than
-      // silently looking like "nothing missing".
-      if (liveBoolean(config.memory?.vectorBackfill, false) && vectorBackfill !== undefined) {
+      // WP11: fill the vector lane. Also global, also once per tick, and on by
+      // default since 2026-10-12 (see {@link vectorBackfillEnabled} for the
+      // reasoning). `vectorBackfill` returns undefined when the lane is
+      // unusable (no reader/embedder/writer), which is reported as "not run"
+      // rather than silently looking like "nothing missing".
+      if (vectorBackfillEnabled(config.memory) && vectorBackfill !== undefined) {
         const limit = Math.max(1, Math.floor(config.memory?.vectorBackfillLimit ?? VECTOR_BACKFILL_DEFAULT_LIMIT))
         const outcome = await vectorBackfill(limit, journal)
         if (outcome === undefined) {

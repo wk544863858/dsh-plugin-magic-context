@@ -2,7 +2,7 @@
 /**
  * `dsh-doctor` — 只读的适配器健康报告。
  *
- *   node scripts/dsh-doctor.mjs [--store <context.db>] [--adapter-dir <dir>] [--json]
+ *   node scripts/dsh-doctor.mjs [--store <context.db>] [--adapter-dir <dir>] [--json] [--host-asar <app.asar>]
  *
  * 与上游 `magic-context doctor` 的关系：上游 doctor 是**宿主感知**的，只认
  * opencode/opencode2/pi/omp（`packages/cli/src/adapters/`），没有 DSH lane，所以
@@ -19,18 +19,28 @@
  *      "挂载过却长期零 journal/usage 活动"是离线可观测的特征（启发式，只
  *      WARN 不阻断——DSH 没人用时同样安静）。
  *
+ *   6. profile 依赖卫生（2026-10-11 启动失败后加，**阻断**）：宿主核心包
+ *      （`@deepseek-ai/*`）的副本一旦落进 profile 的 node_modules，DSH 的
+ *      "profile 本地同名包优先"解析就会选中它，`agents`/`sessions`/`tools` 三个
+ *      服务不再注册，启动以 "1 required plugin did not activate" 失败。成因是
+ *      插件把宿主包写进了 `dependencies`——profile 的安装策略是
+ *      `nodeLinker: hoisted` + `autoInstallPeers: false`，在 profile 内跑
+ *      `pnpm add`（DSH 插件管理器的安装方式）会把它们提升到 profile 根。
+ *
  * `mc-memory-audit.mjs` 已经报了 adapter schema、MC 库 schema 与写模式等**原始值**；
  * 本脚本不重复那些数字，只补上面四类**裁决**与“下一步动作”。
  *
- * 退出码：0 = 无阻断问题；1 = 有（库比构建新、adapter schema 不一致、库缺失）。
+ * 退出码：0 = 无阻断问题；1 = 有（库比构建新、adapter schema 不一致、库缺失、
+ * profile 里出现宿主包副本、插件 dependencies 含宿主自带包）。
  * 只读：以 readOnly 打开两个库，不写任何文件。
  */
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { doctorDomainFindings } from './domain-checks.mjs'
+import { profileHygieneFindings } from './profile-checks.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PKG = join(HERE, '..')
@@ -45,6 +55,16 @@ const MC_STORE = value('--store', join(homedir(), '.local', 'share', 'cortexkit'
 const ADAPTER_DIR = value('--adapter-dir', join(homedir(), '.local', 'share', 'cortexkit', 'magic-context-dsh-poc'))
 const ADAPTER_DB = join(ADAPTER_DIR, 'dsh-magic-context.db')
 const ACTIVITY_LOG = join(ADAPTER_DIR, 'activity.log')
+
+/** Harness home：DSH 进程内由环境变量给出，脱离 DSH 直接运行时退回 ~/.dsh。 */
+const DSH_HOME = process.env.DSH_HOME ?? join(homedir(), '.dsh')
+const PROFILES_DIR = join(DSH_HOME, 'profiles')
+/** 宿主安装的归档：环境里没有现成路径，按安装器的默认位置找，找不到就问 --host-asar。 */
+const HOST_ASAR = value('--host-asar', [
+  join(process.env.LOCALAPPDATA ?? '', 'Programs', 'DeepSeek Harness', 'resources', 'app.asar'),
+  join(process.env.ProgramFiles ?? '', 'DeepSeek Harness', 'resources', 'app.asar'),
+  join(process.env['ProgramFiles(x86)'] ?? '', 'DeepSeek Harness', 'resources', 'app.asar'),
+].find((candidate) => existsSync(candidate)))
 
 const source = (file, pattern) => {
   const match = pattern.exec(readFileSync(join(PKG, file), 'utf8'))
@@ -260,7 +280,7 @@ if (existsSync(MC_STORE)) {
     }
     const plan = planBackfill(MC_STORE, { limit: 1 })
     if (plan !== undefined && plan.total > 0) {
-      say(' ', `待回填 ${plan.total} 条（车道已实现，开关 memory.vectorBackfill 默认 off ⇒ 无人值守）`)
+      say(' ', `待回填 ${plan.total} 条（memory.vectorBackfill 缺省=true（2026-10-12 起）；若线上为 off 属显式关闭或键丢失，查 boot 行）`)
     }
   }
 }
@@ -273,6 +293,98 @@ if (existsSync(ACTIVITY_LOG)) {
 } else {
   say('⚠', '没有 activity.log，无法判断本地模型是否加载过')
 }
+
+// ── 8. profile 依赖卫生（启动级） ──
+// 2026-10-11 的启动失败不是插件代码错：宿主核心包（@deepseek-ai/*）的副本落进了
+// profile 的 node_modules，被"profile 本地同名包优先"的解析选中，agents/sessions/
+// tools 三个服务不再注册。判定逻辑住 scripts/profile-checks.mjs（纯函数），这里只取数。
+/**
+ * 宿主安装里自带的 `@deepseek-ai/*` 包名。asar 的目录是一个 pickle 头 + JSON，
+ * 只读目录不读内容：121MB 的归档在这里也只是一次头部读取。读不出来返回 undefined
+ * ——判据会降级成 WARN，"没读到"不许被当成"没问题"。
+ */
+function readHostPackages(asarPath) {
+  const fd = openSync(asarPath, 'r')
+  try {
+    const head = Buffer.alloc(16)
+    readSync(fd, head, 0, 16, 0)
+    const jsonSize = head.readUInt32LE(12)
+    const json = Buffer.alloc(jsonSize)
+    readSync(fd, json, 0, jsonSize, 16)
+    const names = new Set()
+    const walk = (node, prefix) => {
+      for (const [key, child] of Object.entries(node.files ?? {})) {
+        const entry = prefix === '' ? key : `${prefix}/${key}`
+        if (child.files !== undefined) walk(child, entry)
+        else {
+          const match = /^dsh\/node_modules\/(@deepseek-ai\/[^/]+)\/package\.json$/.exec(entry)
+          if (match !== null) names.add(match[1])
+        }
+      }
+    }
+    walk(JSON.parse(json.toString('utf8')), '')
+    return names.size === 0 ? undefined : [...names]
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/** profile 根上 Node 真能解析到的宿主作用域副本（.pnpm 里未提升的副本不会遮蔽）。 */
+function shadowedHostPackages(profileDir) {
+  try {
+    return readdirSync(join(profileDir, 'node_modules', '@deepseek-ai'), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
+      .map((entry) => `@deepseek-ai/${entry.name}`)
+  } catch {
+    return []
+  }
+}
+
+/** profiles/ 下有 package.json 的目录才算 profile（那个目录里可能有别的东西）。 */
+function readProfileFacts() {
+  try {
+    return readdirSync(PROFILES_DIR, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && existsSync(join(PROFILES_DIR, entry.name, 'package.json')))
+      .map((entry) => ({
+        name: entry.name,
+        dir: join(PROFILES_DIR, entry.name),
+        shadow: shadowedHostPackages(join(PROFILES_DIR, entry.name)),
+      }))
+  } catch {
+    return []
+  }
+}
+
+const HOST_PACKAGES = HOST_ASAR === undefined ? undefined : (() => {
+  try {
+    return readHostPackages(HOST_ASAR)
+  } catch {
+    return undefined
+  }
+})()
+
+blocks.push({ title: '8. profile 依赖卫生（启动级）', lines: [] })
+say(' ', HOST_PACKAGES === undefined
+  ? `宿主包清单读不到（${HOST_ASAR ?? '未找到 app.asar'}）——dependencies 一项降级为 WARN`
+  : `宿主自带 ${String(HOST_PACKAGES.length)} 个 @deepseek-ai/* 包（${HOST_ASAR}）`)
+const profileFacts = readProfileFacts()
+if (profileFacts.length === 0) say(' ', `没有可检查的 profile（${PROFILES_DIR}）`)
+try {
+  const manifest = JSON.parse(readFileSync(join(PKG, 'package.json'), 'utf8'))
+  const hygieneGlyph = { ok: '✓', info: ' ', warn: '⚠' }
+  for (const finding of profileHygieneFindings({
+    profiles: profileFacts,
+    dependencies: manifest.dependencies ?? {},
+    hostPackages: HOST_PACKAGES,
+  })) {
+    if (finding.level === 'hard') bad(finding.text)
+    else say(hygieneGlyph[finding.level] ?? ' ', finding.text)
+  }
+} catch (error) {
+  bad(`profile 依赖卫生检查失败：${error.message}`)
+}
+say(' ', '覆盖面：只看 profile 根 node_modules/@deepseek-ai/（Node 真能解析到的位置）；'
+  + '.pnpm 内部未提升的副本不会遮蔽，故不报')
 
 // ── 输出 ──
 if (asJson) {
