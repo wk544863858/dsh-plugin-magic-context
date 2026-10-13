@@ -24,7 +24,7 @@
  */
 import { approvalGate, publishGlobalCandidate, type DomainWritePort } from '../core/global-domains.ts'
 import { normalizedMemoryHash } from '../core/memory-write.ts'
-import type { AdapterStores } from '../core/stores.ts'
+import type { AdapterStores, GlobalCandidateRow } from '../core/stores.ts'
 import type { Journal } from '../core/journal.ts'
 
 /** Revision rounds per candidate before the loop gives up and skips (operator typo loop guard). */
@@ -72,22 +72,24 @@ function domainLabel(domainId: string): string {
   return domainId
 }
 
-/** Extract the first answer's verdict from the raw `ask()` reply, or undefined when the shape is unrecognised. */
-function firstAnswer(answer: unknown, id: string): { readonly label: string; readonly custom?: string } | undefined {
-  if (answer === null || typeof answer !== 'object') return undefined
+/** Extract every candidate verdict from a raw `ask()` reply, keyed by candidate id. */
+function parseAnswers(answer: unknown): Map<number, { readonly label: string; readonly custom?: string }> {
+  const byId = new Map<number, { readonly label: string; readonly custom?: string }>()
+  if (answer === null || typeof answer !== 'object') return byId
   const answers = (answer as { answers?: unknown }).answers
-  if (!Array.isArray(answers)) return undefined
+  if (!Array.isArray(answers)) return byId
   for (const item of answers) {
     if (item === null || typeof item !== 'object') continue
     const record = item as { id?: unknown; selected?: unknown; custom?: unknown }
-    if (record.id !== id) continue
+    const match = /^global-candidate-(\d+)$/.exec(typeof record.id === 'string' ? record.id : '')
+    if (match === null) continue
     const selected = Array.isArray(record.selected)
       ? record.selected.filter((entry): entry is string => typeof entry === 'string')
       : []
     const custom = typeof record.custom === 'string' && record.custom.trim() !== '' ? record.custom.trim() : undefined
-    return { label: selected[0] ?? custom ?? '', ...(custom === undefined ? {} : { custom }) }
+    byId.set(Number(match[1]), { label: selected[0] ?? custom ?? '', ...(custom === undefined ? {} : { custom }) })
   }
-  return undefined
+  return byId
 }
 
 export async function reviewGlobalCandidates(input: {
@@ -139,6 +141,9 @@ export async function reviewGlobalCandidates(input: {
     return { approved: 0, rejected: 0, reclassified: 0, skipped: 0, failed: 0, lines: ['全局域待审队列为空。'], remaining: 0 }
   }
   const batch = pending.slice(0, Math.max(1, input.batchLimit ?? 5))
+  // Local const so the gate precheck's narrowing survives the awaits between
+  // here and the dispatch loop (TS drops property narrowing across calls).
+  const publisher = input.publisher
   const lines: string[] = []
   let approved = 0
   let rejected = 0
@@ -146,9 +151,13 @@ export async function reviewGlobalCandidates(input: {
   let skipped = 0
   let failed = 0
 
+  // Gate BEFORE the card: the user must never be asked to approve something
+  // no gate would publish. A refusal here is a report line, state untouched.
+  // Each entry carries its writer: the precheck proved the publisher live,
+  // and the const narrowing does not survive the awaits between here and
+  // the dispatch loop.
+  const cardable: Array<{ readonly candidate: GlobalCandidateRow; readonly writer: DomainWritePort }> = []
   for (const candidate of batch) {
-    // Gate BEFORE the card: the user must never be asked to approve something
-    // no gate would publish. A refusal here is a report line, state untouched.
     const gate = approvalGate(input.store, candidate)
     if (!gate.ok) {
       failed += 1
@@ -162,21 +171,28 @@ export async function reviewGlobalCandidates(input: {
       }, input.sessionId)
       continue
     }
-    if (input.publisher === undefined) {
+    if (publisher === undefined) {
       failed += 1
       lines.push(`#${String(candidate.id)} ✗ 共享库当前不可写（无发布器），候选保留待审`)
       continue
     }
-    // Card copy differs by LANE, and ALL metadata lives in the `question`: the
-    // host renders `detail` flush-left while header/question are indented, so
-    // any field line in `detail` reads as a stray island (user feedback
-    // 2026-10-12). `detail` therefore carries ONLY the memory body. An instant
-    // promotion (onlyCandidateId) is the operator's OWN just-requested act —
-    // the header already names the action, so the question line itself is
-    // dropped (empty string: the host validates shape, not content) rather
-    // than parroting what the operator just typed; a batch card keeps a
-    // neutral question carrying the staging statistics.
-    const instant = input.onlyCandidateId !== undefined
+    cardable.push({ candidate, writer: publisher })
+  }
+
+  // ONE card for the whole batch: the host modal pages through multiple
+  // questions natively, so N pending candidates must not surface as N
+  // stacked modals (user feedback 2026-10-13). Answers come back keyed by
+  // question id; card copy differs by LANE, and ALL metadata lives in the
+  // `question`: the host renders `detail` flush-left while header/question
+  // are indented, so any field line in `detail` reads as a stray island
+  // (user feedback 2026-10-12). `detail` therefore carries ONLY the memory
+  // body. An instant promotion (onlyCandidateId) is the operator's OWN
+  // just-requested act — the header already names the action, so the
+  // question line itself is dropped (empty string: the host validates
+  // shape, not content) rather than parroting what the operator just typed;
+  // a batch card keeps a neutral question carrying the staging statistics.
+  const instant = input.onlyCandidateId !== undefined
+  const buildQuestion = (candidate: GlobalCandidateRow, bodyText: string, revised: boolean): GlobalReviewQuestion => {
     const domainName = domainLabel(candidate.domainId)
     const question = instant
       ? ''
@@ -213,50 +229,63 @@ export async function reviewGlobalCandidates(input: {
       ...instant ? [] : [{ label: OPTION_SKIP, description: '留在待审池，下次再决定' }],
       { label: OPTION_REJECT, description: instant ? '终局拒绝，不再进入待审' : '标记 rejected，不再进入待审' },
     ]
-    const id = `global-candidate-${String(candidate.id)}`
     // The host renders `detail` nearly flush-left (margin 0 2px) while the
     // question sits at 24px — bare body text reads as misaligned (user
     // feedback, two rounds). detail goes through MarkdownText, whose
     // blockquote style indents 16px with a rule: wrapping the body in a
     // quote block lines it up under the question and reads as quoted
     // review content.
-    //
+    const quoted = bodyText.split('\n').map(line => `> ${line}`).join('\n')
+    const revisedTag = revised ? '\n>\n> ✎ 已按你的意见修改，请确认' : ''
+    return {
+      id: `global-candidate-${String(candidate.id)}`,
+      question,
+      detail: `${quoted}${revisedTag}${llmNote}`,
+      header: `记忆发布审批 · ${domainName}`,
+      options,
+    }
+  }
+
+  const verdicts = new Map<number, { readonly label: string; readonly custom?: string }>()
+  if (cardable.length > 0) {
+    let answer: unknown
+    try {
+      answer = await input.ask({
+        sessionId: input.sessionId,
+        questions: cardable.map(entry => buildQuestion(entry.candidate, entry.candidate.content, false)),
+      })
+    } catch (error) {
+      // One modal for the batch means one failure surface for the batch:
+      // nothing settled, everything stays pending.
+      failed += cardable.length
+      lines.push(`✗ 审批卡未能送达（${String(cardable.length)} 条保留待审）：${error instanceof Error ? error.message : String(error)}`)
+      const remaining = input.store.listGlobalCandidates({ state: 'pending' }).length
+      return { approved, rejected, reclassified, skipped, failed, lines, remaining }
+    }
+    for (const [candidateId, parsed] of parseAnswers(answer)) verdicts.set(candidateId, parsed)
+  }
+
+  for (const { candidate, writer } of cardable) {
+    let verdict = verdicts.get(candidate.id)
+    if (verdict === undefined) {
+      failed += 1
+      lines.push(`#${String(candidate.id)} ✗ 答案缺失或无法解析，候选保留待审`)
+      continue
+    }
     // A typed answer with NO option selected is a REVISION OPINION (user
     // decision 2026-10-12): the typed text becomes the new body and the card
-    // is re-raised for confirmation, looping until an option is chosen or
-    // MAX_REVISION_ROUNDS is hit (skip, stay pending). Approve and reject
-    // themselves stay pure: an option click settles the card on the body
-    // currently shown.
+    // is re-raised — for THIS candidate alone, as a single-question card —
+    // looping until an option is chosen or MAX_REVISION_ROUNDS is hit (skip,
+    // stay pending). Approve and reject stay pure: an option click settles
+    // the candidate on the body currently shown.
     let body = candidate.content
     let revised = false
-    let exhausted = false
-    let verdict: { readonly label: string; readonly custom?: string } | undefined
-    for (let round = 1; ; round += 1) {
-      const quoted = body.split('\n').map(line => `> ${line}`).join('\n')
-      const revisedTag = revised ? '\n>\n> ✎ 已按你的意见修改，请确认' : ''
-      let answer: unknown
-      try {
-        answer = await input.ask({
-          sessionId: input.sessionId,
-          questions: [{
-            id,
-            question,
-            detail: `${quoted}${revisedTag}${llmNote}`,
-            header: `记忆发布审批 · ${domainName}`,
-            options,
-          }],
-        })
-      } catch (error) {
-        failed += 1
-        lines.push(`#${String(candidate.id)} ✗ 审批卡未能送达：${error instanceof Error ? error.message : String(error)}`)
-        verdict = undefined
-        break
-      }
-      verdict = firstAnswer(answer, id)
-      if (verdict === undefined) break
-      if (verdict.custom === undefined) break
+    let settled = true
+    for (let round = 1; verdict.custom !== undefined; round += 1) {
       if (round >= MAX_REVISION_ROUNDS) {
-        exhausted = true
+        skipped += 1
+        lines.push(`#${String(candidate.id)} → 修改轮次达上限（${String(MAX_REVISION_ROUNDS)}），跳过留池`)
+        settled = false
         break
       }
       body = verdict.custom
@@ -269,17 +298,35 @@ export async function reviewGlobalCandidates(input: {
         round,
         note: verdict.custom,
       }, input.sessionId)
+      let answer: unknown
+      try {
+        answer = await input.ask({
+          sessionId: input.sessionId,
+          questions: [buildQuestion(candidate, body, true)],
+        })
+      } catch (error) {
+        failed += 1
+        lines.push(`#${String(candidate.id)} ✗ 修订卡未能送达，候选保留待审：${error instanceof Error ? error.message : String(error)}`)
+        settled = false
+        break
+      }
+      const next = parseAnswers(answer).get(candidate.id)
+      if (next === undefined) {
+        failed += 1
+        lines.push(`#${String(candidate.id)} ✗ 修订答案无法解析，候选保留待审`)
+        settled = false
+        break
+      }
+      verdict = next
     }
-    if (verdict === undefined) {
-      failed += 1
-      lines.push(`#${String(candidate.id)} ✗ 无法解析审批答案，候选保留待审`)
-      continue
-    }
-    if (exhausted) {
-      skipped += 1
-      lines.push(`#${String(candidate.id)} → 修改轮次达上限（${String(MAX_REVISION_ROUNDS)}），跳过留池`)
-      continue
-    }
+    if (!settled) continue
+    // Reclassification precheck for the dispatch below (the card builder
+    // computes the same fact for the option list).
+    const otherDomain = input.store.listDomains()
+      .find(domain => domain.enabled && domain.domainId !== candidate.domainId
+        && (domain.kind === 'machine' || domain.kind === 'org'))
+    const rerouteOption = otherDomain === undefined ? undefined
+      : otherDomain.kind === 'org' ? OPTION_REROUTE_ORG : OPTION_REROUTE_MACHINE
     const journalDecision = (decision: string, extra?: Record<string, unknown>): void => {
       input.journal?.info('global-review', `candidate #${String(candidate.id)} ${decision}`, {
         phase: 'global-review',
@@ -298,7 +345,7 @@ export async function reviewGlobalCandidates(input: {
       // the other domain (idempotent per domain+hash), gated, published; the
       // ORIGINAL candidate retires as rejected — journal carries the verdict.
       const targetDomainId = otherDomain?.domainId
-      if (targetDomainId === undefined || input.publisher === undefined) {
+      if (targetDomainId === undefined || publisher === undefined) {
         failed += 1
         lines.push(`#${String(candidate.id)} ✗ 改判目标域不可用，候选保留待审`)
         continue
@@ -334,7 +381,7 @@ export async function reviewGlobalCandidates(input: {
       }
       const published = publishGlobalCandidate(input.store, {
         candidateId: rerouted.id,
-        writer: input.publisher,
+        writer,
         now: input.now(),
       })
       if (!published.ok) {
@@ -357,7 +404,7 @@ export async function reviewGlobalCandidates(input: {
     if (verdict.label === OPTION_APPROVE || verdict.label.startsWith('批准')) {
       const published = publishGlobalCandidate(input.store, {
         candidateId: candidate.id,
-        writer: input.publisher,
+        writer,
         now: input.now(),
         ...(revised ? { contentOverride: body } : {}),
       })

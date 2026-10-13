@@ -86,9 +86,16 @@ function fakeAsker(
 ): GlobalReviewAsker {
   return async input => {
     calls.push([...input.questions])
-    const question = input.questions[0]
-    if (question === undefined) throw new Error('no question raised')
-    return answerFor(question.id)
+    // Single question: pass the answer through verbatim (also covers
+    // deliberately unparseable shapes). Multi-question batch card: one
+    // answer item per raised question, settled in one Submit.
+    if (input.questions.length === 1) return answerFor(input.questions[0]!.id)
+    return {
+      answers: input.questions.map(question => {
+        const answered = answerFor(question.id) as { answers?: [Record<string, unknown>] } | undefined
+        return answered?.answers?.[0] ?? { id: question.id, selected: [] }
+      }),
+    }
   }
 }
 
@@ -237,6 +244,31 @@ describe('reviewGlobalCandidates', () => {
     expect(store2.getGlobalCandidate(id2)?.state).toBe('pending')
   })
 
+  it('raises ONE card for the whole batch, one question per candidate', async () => {
+    const store = storeWithDomains()
+    const approveId = stage(store, { category: 'CONSTRAINTS', sourceMemoryId: 7 })
+    const rejectId = stage(store, { category: 'CONSTRAINTS', sourceMemoryId: 8, content: '另一条事实' })
+    const { port, calls } = fakePublisher()
+    const raisedCards: GlobalReviewQuestion[][] = []
+    const outcome = await reviewGlobalCandidates({
+      store,
+      ask: fakeAsker(askId => (askId === `global-candidate-${String(approveId)}`
+        ? { answers: [{ id: askId, selected: ['批准发布'] }] }
+        : { answers: [{ id: askId, selected: ['拒绝'] }] }), raisedCards),
+      publisher: port,
+      now: () => NOW,
+    })
+    expect(raisedCards).toHaveLength(1)
+    expect(raisedCards[0]).toHaveLength(2)
+    // Pool order is updated_at DESC (newest first) — compare as a set.
+    expect(raisedCards[0]?.map(question => question.id).sort())
+      .toEqual([`global-candidate-${String(approveId)}`, `global-candidate-${String(rejectId)}`].sort())
+    expect(outcome.approved).toBe(1)
+    expect(outcome.rejected).toBe(1)
+    expect(outcome.failed).toBe(0)
+    expect(calls).toHaveLength(1)
+  })
+
   it('rejects without publishing and skips without touching state', async () => {
     const store = storeWithDomains()
     const rejectId = stage(store, { category: 'CONSTRAINTS', sourceMemoryId: 7, content: 'A' })
@@ -298,7 +330,8 @@ describe('reviewGlobalCandidates', () => {
       batchLimit: 2,
       now: () => NOW,
     })
-    expect(calls).toHaveLength(2)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toHaveLength(2)
     expect(outcome.skipped).toBe(2)
     // Skipped candidates stay pending BY DESIGN — remaining counts them.
     expect(outcome.remaining).toBe(3)
