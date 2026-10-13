@@ -27,7 +27,7 @@ import {
   type MemoryUpdateLine,
 } from '../src/core/compartments.ts'
 import {
-  legacySharedMemoryDbPath,
+  defaultMemoryDbPath,
   openMemoryBridge,
 } from '../src/core/memory-bridge.ts'
 import { DEFAULT_POLICY } from '../src/core/policy.ts'
@@ -571,15 +571,14 @@ describe('memory bridge: the mutation cursor (read-only)', () => {
     expect(readFileSync(path).equals(before)).toBe(true)
   })
 
-  // 30s: this case VACUUM INTOs the real 134MB store and reads it back, which
+  // 30s: this case VACUUM INTOs the real corpus and reads it back, which
   // measured ~5.0s on its own — the default 5s budget lost a photo-finish race
   // against parallel suite load and flaked ~1 run in 3.
   it('reads the real production log off a read-only VACUUM INTO snapshot', { timeout: 30_000 }, () => {
-    // Post-cutover (2026-10-13) the plugin's own corpus starts empty; the
-    // real production mutation log this case exercises lives in the LEGACY
-    // shared store, read once here off a snapshot. Machines without the
-    // legacy file skip via the guard below.
-    const realDb = legacySharedMemoryDbPath()
+    // Post-cutover (2026-10-13): the real production log lives in the OWN
+    // corpus (imported 520 mutation rows and growing). Machines with a fresh,
+    // empty corpus skip via the guards below.
+    const realDb = defaultMemoryDbPath()
     if (!existsSync(realDb) || statSync(realDb).size > 400 * 1024 * 1024) return
     const snapshot = join(tempDir('mc-delta-real-'), 'snapshot.db')
     const source = new DatabaseSync(realDb, { readOnly: true })
@@ -596,7 +595,10 @@ describe('memory bridge: the mutation cursor (read-only)', () => {
     try {
       const row = probe.prepare(
         'SELECT project_path, COUNT(*) AS c FROM memory_mutation_log GROUP BY project_path ORDER BY c DESC LIMIT 1',
-      ).get() as { project_path: string; c: number }
+      ).get() as { project_path: string; c: number } | undefined
+      // A fresh corpus (or one whose log never grew past the import) has
+      // nothing to assert against — skip rather than dereference nothing.
+      if (row === undefined) return
       project = row.project_path
       expectedRows = row.c
     } finally {
@@ -605,7 +607,8 @@ describe('memory bridge: the mutation cursor (read-only)', () => {
     const bridge = openMemoryBridge({ dbPath: snapshot, logger: captureLogger() })
     try {
       expect(bridge.status.ok).toBe(true)
-      expect(bridge.status.schemaVersion).toBe(94)
+      // The own corpus stamps its own lineage marker (v95).
+      expect(bridge.status.schemaVersion).toBe(95)
       // `project` is already a resolved identity (`git:`/`dir:`), as MC requires.
       expect(project).toMatch(/^(git|dir):/)
       const result = bridge.mutations({ project, afterId: 0, now: Date.now() })!

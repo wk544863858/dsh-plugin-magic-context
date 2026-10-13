@@ -65,12 +65,6 @@ export function defaultMemoryDbPath(): string {
   return join(homedir(), '.local', 'share', 'cortexkit', 'magic-context-dsh-poc', 'memories.db')
 }
 
-/** Upstream MC's legacy shared store — read ONLY by the one-shot importer
- * (`scripts/mc-import-corpus.mjs`). No runtime code may resolve this path. */
-export function legacySharedMemoryDbPath(): string {
-  return join(homedir(), '.local', 'share', 'cortexkit', 'magic-context', 'context.db')
-}
-
 export interface MemoryRow {
   readonly id: number
   readonly projectPath: string

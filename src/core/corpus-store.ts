@@ -7,7 +7,8 @@
  * (0.47/0.48/0.49 within four days), the fence had zero version margin, and
  * MC 0.48's indexCoordination treats every non-MC connection as a foreign
  * body. The corpus now lives in the plugin's OWN data dir; the legacy file is
- * read exactly once, by the importer (`scripts/mc-import-corpus.mjs`), and
+ * read exactly once, by the importer (2026-10-13, retired after the run; the
+ * recipe lives in git history at 5c45d04e6), and
  * never touched again. Upstream is followed for FEATURES only, never for
  * storage compatibility.
  *
