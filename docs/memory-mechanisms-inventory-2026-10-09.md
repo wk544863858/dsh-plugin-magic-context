@@ -10,6 +10,17 @@
 > §9 中带 ★ 的条目由 Lead 逐条回读代码确认（不是转述）。
 >
 > 日期：2026-10-09。适配器自有库 schema **v7**；共享 MC 库契约上限 **v95**。
+>
+> **状态更新（2026-10-13，HEAD `4570fee22`）**——本文件是 2026-10-09 的代码快照（v0.4.3），此后以下事实已变，
+> 正文照旧只作历史记录、**不要再据此实施**：
+> ① **M3 evidence-verify 已整体退役**（commit `6ceeeac45`）：文中所有 `evidence-verify` /
+>    `maintenance.evidenceVerify.{mode,maxRows}` / `memory.evidenceRoot` 条目**作废**（该机制从未离开 off，
+>    shadow 零有效数据）；`evidenceMode` boot 开关项与 `evidence-verify` journal kind 同时删除；
+> ② S(t) 评分线上已开（profile `memory.scoring.enabled: true`），代码默认值仍 false；
+> ③ 全局域 **org 与 machine 均已启用**（machine 另有 LLM 域分类 `autoStage`，adapter 自有库 schema **v10**）；
+>    用户画像 collect 与 review 均已开；
+> ④ 契约库仍 v94（`MEMORY_SCHEMA_MAX_VERSION=95`，无迁移）；巡检 prompt 已到 v8。
+> 现行判据以代码 + [patrol-prompt-v8.md](patrol-prompt-v8.md) 为准。
 
 ---
 
