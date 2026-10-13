@@ -1,6 +1,6 @@
 # The adapter's test suite
 
-30 specs plus the shared fixtures under `helpers/`. They run in this repository,
+72 specs plus the shared fixtures under `helpers/`. They run in this repository,
 against this repository's `src/`:
 
 ```bash
