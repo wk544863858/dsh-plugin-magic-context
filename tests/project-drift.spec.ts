@@ -6,10 +6,14 @@
  * These tests run real `git init` fixtures — the root resolution is the
  * component under test, stubbing it would prove nothing. Everything fails
  * open: any uncertainty must read as "no drift", never a throw.
+ *
+ * Fixtures land under `homedir()`, not `tmpdir()`: the detector's POSIX
+ * branch only scans likely project prefixes (/home, /Users, /mnt, …) —
+ * /tmp would be invisible on Linux, leaving this spec vacuous there.
  */
 import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { detectProjectDrift } from '../src/dsh/project-drift.ts'
@@ -22,7 +26,7 @@ vi.setConfig({ testTimeout: 30_000 })
 const tempDirs: string[] = []
 
 function makeRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'mc-drift-'))
+  const dir = mkdtempSync(join(homedir(), '<tmp>'))
   tempDirs.push(dir)
   writeFileSync(join(dir, 'file.txt'), 'seed\n')
   execFileSync('git', ['init', '-q'], { cwd: dir })
@@ -32,7 +36,7 @@ function makeRepo(): string {
 }
 
 function makePlainDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'mc-drift-plain-'))
+  const dir = mkdtempSync(join(homedir(), '<tmp>'))
   tempDirs.push(dir)
   return dir
 }
@@ -42,7 +46,7 @@ afterEach(() => {
     try {
       rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 30 })
     } catch {
-      /* the OS temp sweep covers residue */
+      /* best-effort: residue under homedir has no OS temp sweep */
     }
   }
 })

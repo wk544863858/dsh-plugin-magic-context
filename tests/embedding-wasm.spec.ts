@@ -9,6 +9,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   EMBEDDING_ASSETS,
@@ -113,7 +114,7 @@ function fakeFetch(bodies: Map<string, string>, failures = new Set<string>()): t
 
 describe('the WASM wiring is lazy, real, and fail-open', () => {
   it('embeds through a fake session end-to-end (import → assets → tokenize → run → pool)', async () => {
-    const cacheDir = join(process.env.TEMP!, 'embedding-wasm-spec')
+    const cacheDir = join(tmpdir(), 'embedding-wasm-spec')
     const warns: string[] = []
     const embedder = openLocalEmbedder({
       cacheDir,
@@ -134,7 +135,7 @@ describe('the WASM wiring is lazy, real, and fail-open', () => {
   })
 
   it('正例: the huggingface.co mirror fallback engages on a 500', async () => {
-    const cacheDir = join(process.env.TEMP!, 'embedding-wasm-spec-mirror')
+    const cacheDir = join(tmpdir(), 'embedding-wasm-spec-mirror')
     const bodies = fakeAssetBodies()
     const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {
       const path = String(url)
@@ -154,7 +155,7 @@ describe('the WASM wiring is lazy, real, and fail-open', () => {
   it('反例: a broken ORT import degrades to [] with a readable warn, never throws', async () => {
     const warns: string[] = []
     const embedder = openLocalEmbedder({
-      cacheDir: process.env.TEMP!,
+      cacheDir: tmpdir(),
       ortUrl: 'data:text/javascript,throw new Error("no wasm runtime here")',
       logger: { warn: (m) => warns.push(m) },
     })
@@ -168,7 +169,7 @@ describe('the WASM wiring is lazy, real, and fail-open', () => {
 
   it('反例: empty input short-circuits before any loading', async () => {
     const embedder = openLocalEmbedder({
-      cacheDir: process.env.TEMP!,
+      cacheDir: tmpdir(),
       ortUrl: 'data:text/javascript,throw new Error("must not be reached")',
     })
     await expect(embedder.embed([])).resolves.toEqual([])
