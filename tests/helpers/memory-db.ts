@@ -87,40 +87,6 @@ export const PROJECT_STATE_DDL = `
 /** Both delta-lane tables together (contract §5.1, §6.1). */
 export const SUPPORT_DDL = `${MUTATION_LOG_DDL}${PROJECT_STATE_DDL}`
 
-/** The authority tables and their three triggers, verbatim (contract §8.4). */
-export const AUTHORITY_DDL = `
-  CREATE TABLE authority_managed (
-    project_path TEXT PRIMARY KEY, context_store_uuid TEXT NOT NULL, marked_at INTEGER NOT NULL);
-  CREATE TABLE authority_repair_pending (
-    project_path TEXT PRIMARY KEY, started_at INTEGER NOT NULL);
-  CREATE TABLE context_privilege_state (
-    id INTEGER PRIMARY KEY CHECK(id = 1),
-    enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)));
-  INSERT INTO context_privilege_state(id, enabled) VALUES(1, 0);
-
-  CREATE TRIGGER memories_authority_guard_insert
-  BEFORE INSERT ON memories
-  WHEN (EXISTS (SELECT 1 FROM authority_managed WHERE project_path = NEW.project_path)
-     OR EXISTS (SELECT 1 FROM authority_repair_pending WHERE project_path = NEW.project_path))
-    AND COALESCE((SELECT enabled FROM context_privilege_state WHERE id = 1), 0) = 0
-  BEGIN SELECT RAISE(ABORT, 'context.db memory writes are managed by the Rust module'); END;
-
-  CREATE TRIGGER memories_authority_guard_update
-  BEFORE UPDATE ON memories
-  WHEN (EXISTS (SELECT 1 FROM authority_managed WHERE project_path = OLD.project_path)
-     OR EXISTS (SELECT 1 FROM authority_managed WHERE project_path = NEW.project_path)
-     OR EXISTS (SELECT 1 FROM authority_repair_pending WHERE project_path = OLD.project_path)
-     OR EXISTS (SELECT 1 FROM authority_repair_pending WHERE project_path = NEW.project_path))
-    AND COALESCE((SELECT enabled FROM context_privilege_state WHERE id = 1), 0) = 0
-  BEGIN SELECT RAISE(ABORT, 'context.db memory writes are managed by the Rust module'); END;
-
-  CREATE TRIGGER memories_authority_guard_delete
-  BEFORE DELETE ON memories
-  WHEN (EXISTS (SELECT 1 FROM authority_managed WHERE project_path = OLD.project_path)
-     OR EXISTS (SELECT 1 FROM authority_repair_pending WHERE project_path = OLD.project_path))
-    AND COALESCE((SELECT enabled FROM context_privilege_state WHERE id = 1), 0) = 0
-  BEGIN SELECT RAISE(ABORT, 'context.db memory writes are managed by the Rust module'); END;
-`
 
 /** The FTS external-content table and its sync triggers, verbatim (contract §1.5). */
 export const FTS_DDL = `
@@ -164,18 +130,12 @@ export const ARTEFACT_DDL = `
     PRIMARY KEY(memory_id, file_path));
 `
 
-/** Workspace sharing tables (workspaces.ts layout) for cross-project visibility specs. */
-export const WORKSPACES_DDL = `
-  CREATE TABLE workspaces(id INTEGER PRIMARY KEY, name TEXT, share_categories TEXT, created_at INTEGER, updated_at INTEGER);
-  CREATE TABLE workspace_members(workspace_id INTEGER, project_path TEXT, display_name TEXT, display_path TEXT, added_at INTEGER);
-`
-
 /**
- * The user-profile tables, verbatim from the live contract (2026-10-10):
+ * The user-profile tables, verbatim from the live corpus (2026-10-10):
  * `user_memory_candidates` is the staging pool the historian feeds (WP5) and
  * `user_memories` is the promoted profile the render lane reads (WP7/WP8).
  * `project_state['__global__'].project_user_profile_version` is NOT created
- * here — MC keeps it in `project_state`, which callers request separately.
+ * here — it lives in `project_state`, which callers request separately.
  */
 export const PROFILE_DDL = `
   CREATE TABLE user_memory_candidates(
@@ -209,10 +169,8 @@ export function makeMemoryDb(input: {
   schemaVersion?: number | null
   mutationLog?: boolean
   projectState?: boolean
-  authority?: boolean
   fts?: boolean
   artefacts?: boolean
-  workspaces?: boolean
   profile?: boolean
 }): { path: string; dir: string } {
   const dir = mkdtempSync(join(tmpdir(), input.prefix ?? 'mc-db-'))
@@ -222,10 +180,8 @@ export function makeMemoryDb(input: {
     let ddl = MEMORIES_DDL
     if (input.mutationLog) ddl += MUTATION_LOG_DDL
     if (input.projectState) ddl += PROJECT_STATE_DDL
-    if (input.authority) ddl += AUTHORITY_DDL
     if (input.fts) ddl += FTS_DDL
     if (input.artefacts) ddl += ARTEFACT_DDL
-    if (input.workspaces) ddl += WORKSPACES_DDL
     if (input.profile) ddl += PROFILE_DDL
     if (input.schemaVersion !== null) {
       ddl += '  CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER);\n'

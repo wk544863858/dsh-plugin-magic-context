@@ -90,18 +90,16 @@ export interface MemoryLane {
 /**
  * WP3 — THE activation function, exported so the lane and its tests cannot drift
  * apart. Answers which domains a reader is inside, reading the adapter's own
- * tables; `undefined` means "nothing is configured yet", which the bridge reads
- * as "fall back to the contract's workspace membership" rather than as "no peers"
- * (the distinction that kept cross-project sharing alive through the migration).
+ * tables; `undefined` means "nothing is configured yet" (no enabled domain at
+ * all). Since the 2026-10-13 corpus cutover that answer simply resolves no
+ * peers — cross-project sharing is exclusively domain-driven.
  */
 export function makeDomainResolver(
   stores: AdapterStores,
 ): (identity: string) => readonly ActivePeerDomain[] | undefined {
   return (identity: string) => {
     const domains = stores.activeDomainIdentities(identity)
-    // Nothing configured yet (the pre-import state): answer `undefined` so the
-    // bridge keeps reading the contract's workspace membership instead of
-    // concluding "no peers" and silently ending cross-project sharing.
+    // Nothing configured yet: answer `undefined` (distinct from `[]`).
     if (stores.listDomains().every(domain => !domain.enabled)) return undefined
     return domains.map(domain => ({
       identity: domain.identity,
@@ -120,11 +118,9 @@ export function openMemoryLane(
   const memoryEnabled = memorySettings !== undefined && liveBoolean(memorySettings.enabled, true)
   // WP3: ONE activation source for every consumer inside the bridge (recall, the
   // visibility watermark, the search space, the mutation lane, the epoch
-  // fingerprint). The domain resolver reads the adapter's own table; `contract`
-  // keeps the old workspace lookup reachable as a rollback lever for one
-  // release, since the contract's tables lost their only writer with the
-  // dashboard.
-  const domainSource = memorySettings?.domains?.source === 'contract' ? 'contract' : 'adapter'
+  // fingerprint). The domain resolver reads the adapter's own tables
+  // (design v2: no workspace takeover; the `contract` source lever was retired
+  // with the 2026-10-13 corpus cutover).
   // D1, post-cutover: without this bootstrap a fresh machine has NO corpus
   // file, and every opener below would silently degrade (0-byte file, no
   // schema_migrations, dead lane). Lay the OWN corpus schema down FIRST; an
@@ -171,7 +167,7 @@ export function openMemoryLane(
     : openMemoryBridge({
       ...memorySettings?.dbPath === undefined ? {} : { dbPath: memorySettings.dbPath },
       logger: ctx.logger,
-      ...domainSource === 'contract' ? {} : { domainResolver: makeDomainResolver(stores) },
+      domainResolver: makeDomainResolver(stores),
     })
   if (memoryRecall !== undefined) {
     ctx.logger.info(

@@ -34,7 +34,6 @@ import { homedir } from 'node:os'
 import { join, normalize, resolve } from 'node:path'
 import { estimateTokens, MEMORY_VISIBILITY_SENTINEL, type MemoryMutationType, type MemoryUpdateLine } from './compartments.ts'
 import { memoryCategoryOrder } from './memory-categories.ts'
-import { parseShareCategories } from './domains.ts'
 import { scoreMemory, type MemoryRecallScoring } from './memory-scoring.ts'
 import { errText } from './types.ts'
 
@@ -297,20 +296,15 @@ interface MemoryBridgeOptions {
   readonly logger: MemoryBridgeLogger
   /**
    * WP3 — the ONE activation source for global domains. Supplied by the
-   * composition root from the adapter's own store; when absent (tests, embedded
-   * use) activation falls back to the contract's `workspaces` tables, which have
-   * no writer left once the dashboard is gone.
+   * composition root from the adapter's own store; when absent (tests,
+   * embedded use) the bridge resolves NO peers — cross-project sharing is
+   * exclusively domain-driven since the 2026-10-13 corpus cutover.
    *
    * Every consumer — recall, the visibility watermark, the search space, the
    * mutation lane and the epoch fingerprint — resolves peers through the same
    * call. Two different answers is the phantom-`<new-memories>` failure: rows
    * the session cannot see still advance its watermark, and later visible rows
    * land below it and are swallowed silently.
-   *
-   * `undefined` is a distinct answer from `[]`: it means "no adapter domains are
-   * configured yet", and the bridge keeps using the contract's workspace tables
-   * instead of silently dropping cross-project sharing during the migration.
-   * `[]` means "definitively none activated for this identity".
    */
   readonly domainResolver?: (identity: string) => readonly ActivePeerDomain[] | undefined
 }
@@ -541,52 +535,6 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
       + ` AND status IN ('active','permanent') AND (expires_at IS NULL OR expires_at > ?)`,
     )
 
-    // Workspace resolution lives in the shared database (Magic Context's
-    // `workspaces` / `workspace_members`), so a member session picks up its
-    // peers without hand-listing them in config.
-    let workspaceStatement: ReturnType<typeof db.prepare> | undefined
-    let memberStatement: ReturnType<typeof db.prepare> | undefined
-    const hasWorkspaceTables = db.prepare(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('workspaces','workspace_members')",
-    ).all().length === 2
-    if (hasWorkspaceTables) {
-      workspaceStatement = db.prepare(
-        `SELECT w.id AS id, w.name AS name, w.share_categories AS share_categories
-         FROM workspace_members m JOIN workspaces w ON w.id = m.workspace_id
-         WHERE m.project_path = ? LIMIT 1`,
-      )
-      memberStatement = db.prepare('SELECT project_path FROM workspace_members WHERE workspace_id = ?')
-    }
-    const contractWorkspaceFor = (identities: readonly string[]): {
-      workspace?: string
-      members: string[]
-      shareCategories?: string[]
-    } => {
-      if (workspaceStatement === undefined || memberStatement === undefined) return { members: [] }
-      for (const identity of identities) {
-        const row = workspaceStatement.get(identity) as
-          | { id: number; name: string | null; share_categories: string | null }
-          | undefined
-        if (row === undefined) continue
-        // The fail-closed allowlist convention now lives in ONE place
-        // (core/domains.ts parseShareCategories), shared with the adapter-owned
-        // domains: a malformed payload or any unknown category shares NOTHING,
-        // only a missing column falls back to the default allowlist.
-        const categories: string[] | undefined = typeof row.share_categories === 'string'
-          ? parseShareCategories(row.share_categories)
-          : undefined
-        const members = (memberStatement.all(row.id) as Array<{ project_path: string }>)
-          .map(member => member.project_path)
-          .filter(member => !identities.includes(member))
-        return {
-          ...row.name === null ? {} : { workspace: row.name },
-          members,
-          ...categories === undefined ? {} : { shareCategories: categories },
-        }
-      }
-      return { members: [] }
-    }
-
     /** WP3: THE activation function (see MemoryBridgeOptions.domainResolver). */
     const peersFor = (identities: readonly string[]): {
       workspace?: string
@@ -595,9 +543,7 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
       domains: readonly ActivePeerDomain[]
     } => {
       const resolve = options.domainResolver
-      if (resolve === undefined) {
-        return { ...contractWorkspaceFor(identities), domains: [] }
-      }
+      if (resolve === undefined) return { members: [], domains: [] }
       const domains: ActivePeerDomain[] = []
       let answered = false
       for (const identity of identities) {
@@ -608,9 +554,11 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
           if (!domains.some(existing => existing.identity === domain.identity)) domains.push(domain)
         }
       }
-      // Nobody has configured a domain yet: stay on the contract's membership
-      // rather than reporting "no peers" and silently ending sharing.
-      if (!answered) return { ...contractWorkspaceFor(identities), domains: [] }
+      // No domain has this identity yet: no peers. The old fallback to the
+      // shared store's `workspaces` membership died with the 2026-10-13
+      // corpus cutover — the own corpus carries no workspace tables, and
+      // cross-project sharing is exclusively domain-driven.
+      if (!answered) return { members: [], domains: [] }
       const members = domains.map(domain => domain.identity).filter(identity => !identities.includes(identity))
       if (members.length === 0) return { members: [], domains: [] }
       // The SQL filter is a single `category IN (...)`, so the effective

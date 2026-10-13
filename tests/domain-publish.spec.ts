@@ -62,7 +62,6 @@ function contractDb(): string {
     mutationLog: true,
     projectState: true,
     fts: true,
-    workspaces: true,
   })
   dirs.push(dir)
   return path

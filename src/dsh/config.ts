@@ -89,17 +89,6 @@ export interface MagicContextDshConfig {
       halfLives?: Record<string, number | null>
     }
     /**
-     * Global-domain activation (adapter schema v8). `adapter` (default) resolves
-     * the domains a project activates from the ADAPTER's own table — the contract
-     * workspace tables have no writer left once Magic Context's dashboard goes.
-     * `contract` keeps the old lookup for one release so the two sources can be
-     * compared; it is a rollback lever, not a supported end state.
-     */
-    domains?: {
-      /** Default 'adapter'. */
-      source?: 'adapter' | 'contract'
-    }
-    /**
      * The `user` (profile) lane. It has no activation rule because it is about
      * the person, not a project — which is exactly why its two halves are
      * separate switches: rendering reads the shared store, collecting writes it.

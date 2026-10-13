@@ -25,7 +25,6 @@ const PHASE_BASE = [
   'tests/compaction-engine.spec.ts',
   'tests/compartments.spec.ts',
   'tests/config-schema.spec.ts',
-  'tests/corpus-store.spec.ts',
   'tests/global-autostage.spec.ts',
   'tests/global-review.spec.ts',
   'tests/context-pressure.spec.ts',
@@ -65,13 +64,11 @@ const PHASE_BASE = [
   'tests/wire-repair.spec.ts',
 ]
 
-/** Phase A: the substrate. Contract frozen, adapter schema v9, domains activate. */
+/** Phase A: the substrate. Own corpus (v95 lineage), adapter schema v9, domains activate. */
 const PHASE_A = [
-  'tests/contract-freeze.spec.ts',
+  'tests/corpus-store.spec.ts',
   'tests/store-schema-v8.spec.ts',
-  'tests/domain-import.spec.ts',
   'tests/domain-visibility.spec.ts',
-  'tests/domain-source-parity.spec.ts',
   'tests/memory-delta.spec.ts',
   'tests/memory-sharing.spec.ts',
 ]
@@ -111,7 +108,6 @@ const PHASE_D = [
   'tests/report-hits.spec.ts',
   'tests/historian-pairing.spec.ts',
   'tests/report-dilution.spec.ts',
-  'tests/strip-drill.spec.ts',
 ]
 
 export const PHASES = [
@@ -124,15 +120,14 @@ export const PHASES = [
   },
   {
     id: 'a',
-    title: 'A 地基（契约冻结 / schema v9 / 域激活）',
+    title: 'A 地基（自有语料 / schema v9 / 域激活）',
     specs: PHASE_A,
     /** Extra commands that must pass for the gate, run after the specs. */
-    checks: [{ label: 'contract freeze', script: 'scripts/mc-contract-freeze.mjs', args: ['verify', '--allow-missing'] }],
+    checks: [],
     blind: [
       'WP4 共享属性维护已在合成库验证；真库共享行更新已执行（2026-10-10 org #1420→#1431、10-13 #1528 现行；machine #1527 误归域已归档迁 org）',
-      'A-7 双源对照已证明（tests/domain-source-parity.spec.ts）：同一契约库上 contract 与 adapter 两源的'
-      + '召回集合/digest/水位/searchSpace/epoch 指纹全等，且带分叉敏感度负向对照；'
-      + '回滚杠杆=纯配置切换——线上尚未演练过切换动作本身（只动 profile 配置，无代码路径）',
+      'A-7 双源对照随契约源退役（2026-10-13 corpus 切换）：域激活唯一来源=adapter 表，'
+      + '契约源与回滚杠杆一并删除——现世界无"切换动作"可演练',
     ],
   },
   {
@@ -163,14 +158,16 @@ export const PHASES = [
   },
   {
     id: 'd',
-    title: 'D 运维面（命令 / 观测 / 回填 / 剥离演练）',
+    title: 'D 运维面（命令 / 观测 / 回填）',
     specs: PHASE_D,
     checks: [],
     blind: [
-      'D-5 剥离演练已做（tests/strip-drill.spec.ts + docs/strip-drill-report-2026-10-10.md）；'
-      + '白名单=两条闭环都走完 5 步：org 域（建域→候选→批准→注入→退役）+ user 域（采集→评审→注入→退役）',
-      '发布是"复制"而非"镜像"：源行改写不传播到域行——对账用例已钉（tests/domain-source-parity.spec.ts：'
-      + '改写/归档源行后域行逐字节不变）；因此域行更新只能走产品路径（新候选→发布→归档旧行），没有镜像修复',
+      'D-5 剥离演练随 2026-10-13 corpus 切换退役（前提"保护共享库"消失；现世界=corpus 自包含，'
+      + '卸载即带走/删除 memories.db，无第三方库可损）；白名单=两条闭环都走完 5 步：'
+      + 'org 域（建域→候选→批准→注入→退役）+ user 域（采集→评审→注入→退役）',
+      '发布是"复制"而非"镜像"：源行改写不传播到域行——该对账语义随 domain-source-parity.spec '
+      + '（契约源对照）一并退役后，由 memory-gate-fence.spec 的"改写/归档源行不传播"用例继续钉住；'
+      + '域行更新只能走产品路径（新候选→发布→归档旧行），没有镜像修复',
       '写开关线上实况（2026-10-13）：user.collect=on、review=on（13:15 生效）、vectorBackfill=on（已收口）、'
       + 'machine.enabled+autoStage=on——演练与线上的差距只剩"画像评审首轮未跑"与"域命中观察窗未满"；'
       + '2026-10-12 起 vectorBackfill 缺省=true（分发默认可用，显式 false 才关），'

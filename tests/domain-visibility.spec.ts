@@ -21,7 +21,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { openMemoryBridge, type ActivePeerDomain } from '../src/core/memory-bridge.ts'
 import { openStores } from '../src/index.ts'
 import { makeMemoryDb } from './helpers/memory-db.ts'
-import { importWorkspacePlan, readWorkspacePlan } from '../src/core/domain-import.ts'
+
 import { defaultDomainCap } from '../src/core/domains.ts'
 
 const NOW = 1_700_000_000_000
@@ -70,10 +70,6 @@ function seed(): Seeded {
   let storeDir = ''
   let db = new DatabaseSync(contract.path)
   try {
-    db.exec(`
-      CREATE TABLE workspaces(id INTEGER PRIMARY KEY, name TEXT, share_categories TEXT, created_at INTEGER, updated_at INTEGER);
-      CREATE TABLE workspace_members(workspace_id INTEGER, project_path TEXT, display_name TEXT, display_path TEXT, added_at INTEGER);
-    `)
     const insert = db.prepare(
       'INSERT INTO memories(id, project_path, category, content, normalized_hash, scope, shareable, '
         + 'first_seen_at, created_at, updated_at, last_seen_at, status) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -217,41 +213,12 @@ describe('domain visibility matrix', () => {
     expect([...company.rows, ...company.newRows].map(row => row.id).sort((a, b) => a - b)).toEqual([1, 3, 7])
     expect(bridge.maxMemoryId('git:company')).toBe(7)
   })
-})
 
-describe('contract fallback', () => {
-  it('still resolves workspace membership when no domain resolver is supplied', () => {
+  it('an unconfigured adapter answers "no opinion" and resolves no peers', () => {
+    // Post-cutover semantics: `undefined` from the resolver (no enabled domain
+    // at all) means NO peers — the old workspace-table fallback died with the
+    // shared store. Sharing must be configured, not inherited.
     const seeded = seed()
-    // The contract's workspace tables have no writer left, but the fallback path
-    // must keep working for embedded use and for the dual-source check.
-    const raw = new DatabaseSync(seeded.contractPath)
-    raw.exec(`
-      INSERT INTO workspaces(id, name, share_categories, created_at, updated_at) VALUES(1, 'code', '["CONSTRAINTS"]', 0, 0);
-      INSERT INTO workspace_members(workspace_id, project_path, display_name, display_path, added_at)
-        VALUES(1, 'git:company', 'company', '', 0), (1, 'git:peer', 'peer', '', 0);
-    `)
-    raw.close()
-
-    const contractBridge = bridgeFor(seeded, false)
-    expect(contractBridge.searchSpace('git:company')!.foreignIdentities).toEqual(['git:peer'])
-    // And it sees the peer row the domain model deliberately no longer reads.
-    const seen = [
-      ...recall(contractBridge, 'git:company')!.rows,
-      ...recall(contractBridge, 'git:company')!.newRows,
-    ].map(row => row.id)
-    expect(seen).toContain(6)
-  })
-
-  it('an unconfigured adapter answers "no opinion", so sharing is not silently lost', () => {
-    const seeded = seed()
-    const raw = new DatabaseSync(seeded.contractPath)
-    raw.exec(`
-      INSERT INTO workspaces(id, name, share_categories, created_at, updated_at) VALUES(1, 'code', '["CONSTRAINTS"]', 0, 0);
-      INSERT INTO workspace_members(workspace_id, project_path, display_name, display_path, added_at)
-        VALUES(1, 'git:company', 'company', '', 0), (1, 'git:peer', 'peer', '', 0);
-    `)
-    raw.close()
-    // Disable every domain: this is exactly the state before the import runs.
     seeded.store.setDomainEnabled(ORG, false, NOW)
     seeded.store.setDomainEnabled(MACHINE, false, NOW)
 
@@ -264,26 +231,6 @@ describe('contract fallback', () => {
         ? undefined
         : empty.activeDomainIdentities(identity)),
     })
-    expect(bridge.searchSpace('git:company')!.foreignIdentities).toEqual(['git:peer'])
-  })
-
-  it('after importing the same membership, the domain source takes over', () => {    const seeded = seed()
-    const raw = new DatabaseSync(seeded.contractPath)
-    raw.exec(`
-      INSERT INTO workspaces(id, name, share_categories, created_at, updated_at) VALUES(1, 'code', '["CONSTRAINTS"]', 0, 0);
-      INSERT INTO workspace_members(workspace_id, project_path, display_name, display_path, added_at)
-        VALUES(1, 'git:company', 'company', '', 0), (1, 'git:peer', 'peer', '', 0);
-    `)
-    raw.close()
-
-    const plan = readWorkspacePlan(seeded.contractPath)
-    importWorkspacePlan(seeded.store, plan, { now: NOW, enable: true })
-
-    const bridge = bridgeFor(seeded, true)
-    // The org domain replaces the raw workspace membership: same reader, a
-    // named provider identity instead of the peer project's own identity. The
-    // machine domain is also active for this reader (seeded above), so the peer
-    // set is both providers.
-    expect([...bridge.searchSpace('git:company')!.foreignIdentities].sort()).toEqual([MACHINE, ORG])
+    expect(bridge.searchSpace('git:company')!.foreignIdentities).toEqual([])
   })
 })

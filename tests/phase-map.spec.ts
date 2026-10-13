@@ -72,10 +72,10 @@ describe('the phase map', () => {
 
   it('covers the phase-A substrate with specs that actually exercise it', () => {
     const phaseA = PHASES.find(phase => phase.id === 'a')!
-    expect(phaseA.specs).toContain('tests/contract-freeze.spec.ts')
+    // Post-cutover (2026-10-13): contract-freeze and the workspace-import specs
+    // retired with the legacy store; the substrate is the own corpus + domains.
+    expect(phaseA.specs).toContain('tests/corpus-store.spec.ts')
     expect(phaseA.specs).toContain('tests/domain-visibility.spec.ts')
-    // Phase A carries the contract-freeze detector as a check, so a phase-A pass
-    // also asserts the frozen store has not drifted.
-    expect(phaseA.checks.map(check => check.script)).toContain('scripts/mc-contract-freeze.mjs')
+    expect(phaseA.specs).toContain('tests/memory-sharing.spec.ts')
   })
 })

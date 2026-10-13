@@ -15,11 +15,9 @@ import { makeMemoryDb } from './helpers/memory-db'
 
 const OWN = 'git:1111111111111111111111111111111111111111'
 const OTHER = 'git:2222222222222222222222222222222222222222'
-const RACE = 'git:3333333333333333333333333333333333333333'
 
 const T0 = 1_700_000_000_000
 const DAY_MS = 24 * 60 * 60 * 1000
-const AUTHORITY_ABORT = 'context.db memory writes are managed by the Rust module'
 /** MC's storage version, and the version this adapter understands. */
 const SCHEMA_VERSION = 94
 const WRITER_SOURCE = fileURLToPath(new URL('../src/core/memory-write.ts', import.meta.url))
@@ -60,7 +58,7 @@ function makeTempDir(prefix: string): string {
 function createDb(): string {
   const { path, dir } = makeMemoryDb({
     prefix: 'mc-mw-', schemaVersion: SCHEMA_VERSION,
-    mutationLog: true, projectState: true, authority: true, fts: true, artefacts: true,
+    mutationLog: true, projectState: true, fts: true, artefacts: true,
   })
   tempDirs.push(dir)
   return path
@@ -755,103 +753,6 @@ describe('agent write path (contract §11)', () => {
         .toMatchObject({ ok: false, reason: 'unavailable' })
       expect(writer.getMemory(OWN, 1)).toBeUndefined()
       expect(writer.listMemories(OWN)).toEqual([])
-    } finally {
-      writer.close()
-    }
-  })
-})
-
-describe('authority guard (contract §8.4)', () => {
-  it('yields to authority_managed and leaves the data untouched', () => {
-    const path = createDb()
-    const logger = collectingLogger()
-    const writer = openMemoryWriter({ dbPath: path, logger, now: () => T0 })
-    try {
-      const id = createdId(writer.writeMemory({ identity: OWN, category: 'ARCHITECTURE', content: 'before management' }))
-      run(path, 'INSERT INTO authority_managed(project_path, context_store_uuid, marked_at) VALUES(?, ?, ?)', OWN, 'store-uuid', T0)
-
-      const write = writer.writeMemory({ identity: OWN, category: 'ARCHITECTURE', content: 'after management' })
-      expect(write).toMatchObject({ ok: false, reason: 'authority-blocked' })
-      if (write.ok) throw new Error('expected a refusal')
-      expect(write.detail).toContain('must use the Rust ctx_memory module facade')
-
-      expect(writer.updateMemory({ identity: OWN, id, content: 'rewritten' }))
-        .toMatchObject({ ok: false, reason: 'authority-blocked' })
-      expect(writer.archiveMemory({ identity: OWN, id }))
-        .toMatchObject({ ok: false, reason: 'authority-blocked' })
-      expect(writer.mergeMemory({ identity: OWN, targetId: id, sourceIds: [id + 1], content: 'merged' }))
-        .toMatchObject({ ok: false, reason: 'authority-blocked' })
-
-      // Nothing changed, and nothing was logged.
-      expect(writer.stats(OWN).rows).toBe(1)
-      expect(writer.stats(OWN).mutationLog).toBe(0)
-      expect(writer.getMemory(OWN, id)).toMatchObject({
-        content: 'before management',
-        status: 'active',
-        updatedAt: T0,
-      })
-      expect(logger.messages.some(message => message.includes('module-managed'))).toBe(true)
-      // A refused write must not disable the writer for other projects.
-      expect(writer.writeMemory({ identity: OTHER, category: 'ARCHITECTURE', content: 'other project still writes' }))
-        .toMatchObject({ ok: true })
-    } finally {
-      writer.close()
-    }
-  })
-
-  it('yields to authority_repair_pending as well', () => {
-    const path = createDb()
-    const writer = openMemoryWriter({ dbPath: path, logger: silentLogger, now: () => T0 })
-    try {
-      run(path, 'INSERT INTO authority_repair_pending(project_path, started_at) VALUES(?, ?)', OWN, T0)
-      expect(writer.writeMemory({ identity: OWN, category: 'NAMING', content: 'during repair' }))
-        .toMatchObject({ ok: false, reason: 'authority-blocked' })
-      expect(writer.stats(OWN).rows).toBe(0)
-    } finally {
-      writer.close()
-    }
-  })
-
-  it('still yields when the privilege window is open, and never flips it', () => {
-    const path = createDb()
-    const writer = openMemoryWriter({ dbPath: path, logger: silentLogger, now: () => T0 })
-    try {
-      run(path, 'INSERT INTO authority_managed(project_path, context_store_uuid, marked_at) VALUES(?, ?, ?)', OWN, 'store-uuid', T0)
-      run(path, 'UPDATE context_privilege_state SET enabled = 1 WHERE id = 1')
-
-      // `enabled = 1` disarms the trigger, but that window belongs to the Rust
-      // module's own transaction protocol — we yield rather than impersonate it.
-      expect(writer.writeMemory({ identity: OWN, category: 'NAMING', content: 'privileged window' }))
-        .toMatchObject({ ok: false, reason: 'authority-blocked' })
-      expect(one<{ enabled: number }>(path, 'SELECT enabled FROM context_privilege_state WHERE id = 1')?.enabled).toBe(1)
-      expect(writer.stats(OWN).rows).toBe(0)
-    } finally {
-      writer.close()
-    }
-  })
-
-  it('converts a database-level authority abort into a refusal, not a crash', () => {
-    const path = createDb()
-    const logger = collectingLogger()
-    const writer = openMemoryWriter({ dbPath: path, logger, now: () => T0 })
-    try {
-      // The project is NOT in the authority tables, so the pre-write probe lets
-      // the statement through; the trigger simulates MC marking it managed in
-      // the window between the probe and the INSERT.
-      run(path, `CREATE TRIGGER test_authority_race BEFORE INSERT ON memories
-        WHEN NEW.project_path = '${RACE}'
-        BEGIN SELECT RAISE(ABORT, '${AUTHORITY_ABORT}'); END`)
-
-      const raced = writer.writeMemory({ identity: RACE, category: 'NAMING', content: 'raced write' })
-      expect(raced).toMatchObject({ ok: false, reason: 'authority-blocked' })
-      if (raced.ok) throw new Error('expected a refusal')
-      expect(raced.detail).toBe(AUTHORITY_ABORT)
-      // The ROLLBACK left no row and the writer survived the abort.
-      expect(writer.stats(RACE).rows).toBe(0)
-      expect(writer.status.ok).toBe(true)
-      expect(logger.messages.some(message => message.includes('authority guard refused'))).toBe(true)
-      expect(writer.writeMemory({ identity: OWN, category: 'NAMING', content: 'unaffected project' }))
-        .toMatchObject({ ok: true })
     } finally {
       writer.close()
     }

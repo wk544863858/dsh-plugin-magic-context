@@ -18,8 +18,7 @@
  *    timestamps equal to `now`, and `expires_at` only for the TTL categories;
  *  - promotion is a PURE APPEND: it writes neither `memory_mutation_log` nor
  *    `project_memory_epoch`. New rows become visible through the
- *    `maxMemoryId` watermark in m[1], never by rebuilding m[0];
- *  - module-managed projects (`authority_managed`) are never written directly.
+ *    `maxMemoryId` watermark in m[1], never by rebuilding m[0].
  *
  * Deliberate divergence, recorded for the review: MC promotes inside the
  * compartment publish transaction, so a failed promotion rolls the publish
@@ -30,12 +29,12 @@
  * The agent write path below (`writeMemory` / `updateMemory` / `archiveMemory`
  * / `mergeMemory` / `getMemory` / `listMemories`) replicates §11 of the same
  * contract and adds the non-additive machinery promotion deliberately omits:
- * `memory_mutation_log` deltas for `update`/`archive`/`superseded`, the §4.5
- * clear-on-content-change invariants, and the §8.4 authority guard hardened
- * with the `context_privilege_state` probe. It never bumps
+ * `memory_mutation_log` deltas for `update`/`archive`/`superseded` and the
+ * §4.5 clear-on-content-change invariants. It never bumps
  * `project_memory_epoch` (contract §5.2: in-session mutations route through
- * m[1]) and never touches `context_privilege_state`, FTS or the embedding
- * tables beyond invalidation.
+ * m[1]) and never touches FTS or the embedding tables beyond invalidation.
+ * (The §8.4 module-authority guard was retired with the 2026-10-13 corpus
+ * cutover — no authority tables exist in the own corpus.)
  */
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
@@ -62,8 +61,6 @@ export interface PromoteOutcome {
   readonly skipped: ReadonlyArray<{ category: string; content: string; reason: string }>
   /** Highest memory id for this project after the write (the new watermark). */
   readonly maxMemoryId: number
-  /** Whether the project is module-managed and was therefore left untouched. */
-  readonly authorityBlocked: boolean
 }
 
 /**
@@ -107,8 +104,6 @@ export type MemoryWriteFailureReason =
   | 'empty-content'
   /** `source_type = 'user'` is reserved for the dashboard (contract §1.3). */
   | 'source-type-reserved'
-  /** The project is module-managed; the TS write path yields (contract §8.4). */
-  | 'authority-blocked'
   | 'not-found'
   /** The row exists but belongs to another project identity (§8.1 OWNED). */
   | 'not-owned'
@@ -263,7 +258,7 @@ export interface MemoryRetrievalInput {
 
 /**
  * `retrieval_count` / `last_retrieved_at` telemetry. Telemetry is not
- * correctness (contract §9.1): a fenced/authority-blocked/database failure is
+ * correctness (contract §9.1): a fenced/database failure is
  * reported, never thrown, and never fails the tool call that triggered it.
  */
 export type MemoryRetrievalOutcome =
@@ -360,7 +355,7 @@ export interface MemoryWriter {
    * Maintenance: ids of this project's active rows whose TTL has lapsed
    * (`expires_at <= now`). The caller archives them through `archiveMemory`
    * (the contract action — expiry is a plain archive with a reason), which
-   * keeps the mutation log and authority guard in the loop.
+   * keeps the mutation log in the loop.
    */
   listExpired(identity: string, now: number, limit?: number): readonly number[]
   /**
@@ -600,19 +595,9 @@ const LIST_MEMORIES = listMemoriesSql(false)
  * the queue (see listMemoriesSql). */
 const LIST_MEMORIES_UNVERIFIED = listMemoriesSql(true, true)
 
-/** The trigger's RAISE text (§8.4) — the database-level second gate. */
-const AUTHORITY_ABORT_TEXT = 'context.db memory writes are managed by the Rust module'
-
-/** MC's `ModuleMemoryAuthorityError` text (§8.4), reused for the pre-write yield. */
-function authorityYieldDetail(identity: string): string {
-  return `memory writes for module-managed project ${identity} must use the Rust ctx_memory module facade`
-}
-
-/** True when SQLite aborted the statement through the authority guard trigger. */
-function isAuthorityAbort(error: unknown): boolean {
-  const message = errText(error)
-  return message.includes(AUTHORITY_ABORT_TEXT)
-}
+// (The 2026-10-13 corpus cutover removed the module-managed authority guard:
+//  the own corpus carries no authority tables and no Rust module exists —
+//  the writer's §8.4 yield/abort translation went with it.)
 
 /**
  * Merge an `archive_reason` into `metadata_json` exactly like MC's
@@ -659,9 +644,9 @@ function asMemoryRecords(rows: unknown): MemoryRecord[] {
 }
 
 /**
- * Open the shared memory database read-write. Missing file / newer schema /
- * authority problems disable writing with a warning instead of throwing: the
- * adapter must never break a turn because memory is unavailable.
+ * Open the memory corpus read-write. Missing file / newer schema disable
+ * writing with a warning instead of throwing: the adapter must never break a
+ * turn because memory is unavailable.
  */
 export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
   const now = options.now ?? Date.now
@@ -683,7 +668,6 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
         seenAgain: [],
         skipped: [],
         maxMemoryId: 0,
-        authorityBlocked: true,
       }),
       stats: () => ({ rows: 0, mutationLog: 0, epoch: 0, verified: 0, unverified: 0 }),
       writeMemory: () => refused,
@@ -728,7 +712,6 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
       db.close()
       return unavailable('memories table missing')
     }
-    const hasAuthority = tables.has('authority_managed') || tables.has('authority_repair_pending')
 
     // Contract fence: MC's storage version, read exactly like the bridge reads
     // it (main lane `version < 10000`). A NEWER database downgrades this writer
@@ -762,13 +745,6 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
     const insert = db.prepare(INSERT_MEMORY)
     const insertDomain = db.prepare(INSERT_DOMAIN_MEMORY)
     const maxId = db.prepare('SELECT MAX(id) AS id FROM memories WHERE project_path = ?')
-    const authorityManaged = hasAuthority
-      ? db.prepare(
-        `SELECT 1 AS hit FROM authority_managed WHERE project_path = ?
-         UNION ALL SELECT 1 AS hit FROM authority_repair_pending WHERE project_path = ?
-         LIMIT 1`,
-      )
-      : undefined
     const statsRows = db.prepare('SELECT COUNT(*) AS c FROM memories WHERE project_path = ?')
     const statsMutations = db.prepare('SELECT COUNT(*) AS c FROM memory_mutation_log WHERE project_path = ?')
     const statsEpoch = db.prepare('SELECT project_memory_epoch AS e FROM project_state WHERE project_path = ?')
@@ -802,12 +778,6 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
     const listMemoriesLimited = db.prepare(`${LIST_MEMORIES} LIMIT ?`)
     const listUnverifiedAll = db.prepare(LIST_MEMORIES_UNVERIFIED)
     const listUnverifiedLimited = db.prepare(`${LIST_MEMORIES_UNVERIFIED} LIMIT ?`)
-    // The guard's second half: sees whether the trigger is armed. The privileged
-    // writer flips this inside its own IMMEDIATE transaction, so a second
-    // connection can only ever observe `enabled = 0` (contract §8.4).
-    const privilegeState = tables.has('context_privilege_state')
-      ? db.prepare('SELECT enabled FROM context_privilege_state WHERE id = 1')
-      : undefined
     // Content changes invalidate the classify/verify artefacts (§4.5). Both
     // tables are absent on trimmed databases, hence the table guard.
     const deleteEmbeddings = tables.has('memory_embeddings')
@@ -826,33 +796,9 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
       ? db.prepare('DELETE FROM memory_verifications WHERE memory_id = ?')
       : undefined
 
-    const isAuthorityManaged = (identity: string): boolean => {
-      if (authorityManaged === undefined) return false
-      try {
-        return authorityManaged.get(identity, identity) !== undefined
-      } catch {
-        // A malformed/absent authority schema must not block a normal write.
-        return false
-      }
-    }
     const maxFor = (identity: string): number => {
       const row = maxId.get(identity) as { id: number | null } | undefined
       return row?.id ?? 0
-    }
-
-    /**
-     * The trigger's `WHEN` clause, probed on the connection: managed/repair-
-     * pending is necessary, `COALESCE(enabled, 0) = 0` is what actually arms the
-     * abort. We never write `context_privilege_state` to change the answer.
-     */
-    const privilegeWindowOpen = (): boolean => {
-      if (privilegeState === undefined) return false
-      try {
-        const row = privilegeState.get() as { enabled: number } | undefined
-        return (row?.enabled ?? 0) !== 0
-      } catch {
-        return false
-      }
     }
 
     /** A refused write: logged, never thrown (the caller owns the turn). */
@@ -885,24 +831,8 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
     )
 
     /**
-     * The §8.4 pre-write yield. A managed project is never written from the TS
-     * path — even if the privilege window is open, because that window belongs
-     * to the Rust module's own transaction protocol.
-     */
-    const authorityYield = (identity: string): MemoryWriteFailure | undefined => {
-      if (!isAuthorityManaged(identity)) return undefined
-      const armed = !privilegeWindowOpen()
-      options.logger.warn(
-        `magic-context memory: ${identity} is module-managed (context_privilege_state guard ${armed ? 'armed' : 'disarmed'}); the TypeScript write path yields`,
-      )
-      return { ok: false, reason: 'authority-blocked', detail: authorityYieldDetail(identity) }
-    }
-
-    /**
      * `BEGIN IMMEDIATE` (contract §10.2): a read-then-write must take the write
      * lock up front, and SQLite does not honour `busy_timeout` while upgrading.
-     * An authority ABORT raised between our probe and the write is converted to
-     * a refusal — the trigger winning the race is a "yield", not a crash.
      */
     const runImmediate = <T>(body: () => T): T | MemoryWriteFailure => {
       db.exec('BEGIN IMMEDIATE')
@@ -915,12 +845,6 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
           db.exec('ROLLBACK')
         } catch {
           /* the transaction may already be gone */
-        }
-        if (isAuthorityAbort(error)) {
-          options.logger.warn(
-            `magic-context memory: the authority guard refused the write (${AUTHORITY_ABORT_TEXT})`,
-          )
-          return { ok: false, reason: 'authority-blocked', detail: AUTHORITY_ABORT_TEXT }
         }
         throw error
       }
@@ -959,20 +883,13 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
           inserted: [] as Array<{ id: number; category: string; content: string }>,
           seenAgain: [] as Array<{ id: number; category: string }>,
           skipped: [] as Array<{ category: string; content: string; reason: string }>,
-          authorityBlocked: false,
         }
         if (contractFenced) {
           options.logger.warn(
             `magic-context memory: promotion refused, schema v${String(contractVersion)} is newer than `
               + `the adapter understands (v${String(MEMORY_SCHEMA_MAX_VERSION)})`,
           )
-          return { ...outcomeBase, authorityBlocked: true, maxMemoryId: maxFor(input.identity) }
-        }
-        if (isAuthorityManaged(input.identity)) {
-          options.logger.info(
-            `magic-context memory: ${input.identity} is module-managed; promotion skipped`,
-          )
-          return { ...outcomeBase, authorityBlocked: true, maxMemoryId: maxFor(input.identity) }
+          return { ...outcomeBase, maxMemoryId: maxFor(input.identity) }
         }
         // Validated first, so an invalid fact neither aborts the batch nor
         // leaves a half-written row behind.
@@ -1057,8 +974,6 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
           )
         }
         if (contractFenced) return fenceRefusal('write')
-        const blocked = authorityYield(input.identity)
-        if (blocked !== undefined) return blocked
         const category = input.category
         const hash = normalizedMemoryHash(input.content)
         const timestamp = now()
@@ -1111,8 +1026,6 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
           return refusal('publish-domain', 'invalid-argument', 'Error: a domain memory needs an identity.')
         }
         if (contractFenced) return fenceRefusal('publish-domain')
-        const blocked = authorityYield(input.identity)
-        if (blocked !== undefined) return blocked
         const hash = normalizedMemoryHash(content)
         try {
           const outcome = runImmediate<DomainPublishResult>(() => {
@@ -1172,8 +1085,6 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
             'Error: this contract has no memory_embeddings table, so the vector lane cannot be filled.',
           )
         }
-        const blocked = authorityYield('store-embedding')
-        if (blocked !== undefined) return blocked
         try {
           return runImmediate<EmbeddingStoreResult>(() => {
             // The contract keys this table `(memory_id, model_id)`; checking
@@ -1208,8 +1119,6 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
           return refusal('update', 'invalid-category', `Unknown memory category '${String(input.category)}'.`)
         }
         if (contractFenced) return fenceRefusal('update')
-        const blocked = authorityYield(input.identity)
-        if (blocked !== undefined) return blocked
         const hash = normalizedMemoryHash(input.content)
         try {
           return runImmediate<MemoryWriteResult>(() => {
@@ -1272,8 +1181,6 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
           return refusal('archive', 'invalid-argument', "Error: 'supersededBy' must be an integer memory ID.")
         }
         if (contractFenced) return fenceRefusal('archive')
-        const blocked = authorityYield(input.identity)
-        if (blocked !== undefined) return blocked
         const reason = typeof input.reason === 'string' && input.reason.trim().length > 0
           ? input.reason.trim()
           : undefined
@@ -1350,8 +1257,6 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
           return refusal('merge', 'invalid-category', `Unknown memory category '${String(input.category)}'.`)
         }
         if (contractFenced) return fenceRefusal('merge')
-        const blocked = authorityYield(input.identity)
-        if (blocked !== undefined) return blocked
         const hash = normalizedMemoryHash(input.content)
         try {
           return runImmediate<MemoryMergeResult>(() => {
@@ -1502,9 +1407,6 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
           )
           return { ok: false, recorded, skipped: requested, reason: 'contract-version-unsupported' }
         }
-        if (isAuthorityManaged(input.identity)) {
-          return { ok: false, recorded, skipped: requested, reason: 'authority-blocked' }
-        }
         const skipped = (): number[] => requested.filter(id => !recorded.includes(id))
         try {
           const outcome = runImmediate<{ ok: true }>(() => {
@@ -1544,7 +1446,6 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
         if (ids.length === 0) return 0
         try {
           if (contractFenced) return 0
-          if (isAuthorityManaged(identity)) return 0
           const stamp = runImmediate<{ ok: true; changed: number }>(() => {
             // MC writes verification_status and verified_at as a pair
             // (storage-memory.ts:464) — writing only verified_at left rows
@@ -1570,7 +1471,6 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
         if (entries.length === 0) return 0
         try {
           if (contractFenced) return 0
-          if (isAuthorityManaged(identity)) return 0
           const scored = runImmediate<{ ok: true; changed: number }>(() => {
             const statement = db.prepare(CLASSIFY_MEMORY)
             let changed = 0

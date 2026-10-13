@@ -75,7 +75,7 @@ function collectingLogger(): { readonly messages: string[]; info: (m: string) =>
  */
 function createDb(version: number | null = SUPPORTED): string {
   const { path, dir } = makeMemoryDb({
-    prefix: 'mc-fence-', schemaVersion: version, mutationLog: true, projectState: true, authority: true,
+    prefix: 'mc-fence-', schemaVersion: version, mutationLog: true, projectState: true,
   })
   tempDirs.push(dir)
   return path
@@ -227,7 +227,6 @@ describe('the storage-contract fence (task-9 ③)', () => {
       })
       expect(promoted.inserted).toHaveLength(0)
       expect(promoted.skipped).toHaveLength(0)
-      expect(promoted.authorityBlocked).toBe(true)
 
       // Nothing moved except the row we seeded by hand.
       expect(count(path, 'SELECT COUNT(*) AS c FROM memories')).toBe(1)
@@ -379,29 +378,6 @@ describe('explicit-retrieval telemetry (task-9 ②)', () => {
         recorded: [],
         skipped: [0, -1],
       })
-    } finally {
-      writer.close()
-    }
-  })
-
-  it('skips the bump under module authority instead of failing the caller (§9.1)', () => {
-    const path = createDb()
-    const id = seedMemory(path, { project: OWN, content: 'module managed' })
-    run(
-      path,
-      'INSERT INTO authority_managed(project_path, context_store_uuid, marked_at) VALUES(?, ?, ?)',
-      OWN,
-      'store-uuid',
-      T0,
-    )
-    const writer = openMemoryWriter({ dbPath: path, logger: silentLogger, now: () => T0 })
-    try {
-      const outcome = writer.recordRetrieval({ identity: OWN, ids: [id] })
-      expect(outcome.ok).toBe(false)
-      if (outcome.ok) throw new Error('unreachable')
-      expect(outcome.reason).toBe('authority-blocked')
-      expect(outcome.skipped).toEqual([id])
-      expect(telemetry(path, id).retrieval_count).toBe(0)
     } finally {
       writer.close()
     }

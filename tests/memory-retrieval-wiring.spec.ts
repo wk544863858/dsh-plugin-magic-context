@@ -57,7 +57,7 @@ afterEach(() => {
 
 function createDb(version: number = SUPPORTED): string {
   const { path, dir } = makeMemoryDb({
-    prefix: 'mc-retrieval-', schemaVersion: version, mutationLog: true, projectState: true, authority: true,
+    prefix: 'mc-retrieval-', schemaVersion: version, mutationLog: true, projectState: true,
   })
   tempDirs.push(dir)
   return path

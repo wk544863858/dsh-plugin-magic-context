@@ -85,7 +85,7 @@ afterEach(async () => {
 /** An isolated v94-compatible `context.db` (contract §1.1, §5.1, §6.1, §8.4). */
 function makeMemoryDb(): string {
   const { path, dir } = makeBareMemoryDb({
-    prefix: 'mc-toolbridge-', schemaVersion: 94, mutationLog: true, projectState: true, authority: true,
+    prefix: 'mc-toolbridge-', schemaVersion: 94, mutationLog: true, projectState: true,
   })
   cleanups.push(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 40 }))
   return path
@@ -315,28 +315,6 @@ describe('ctx_memory under the real host defineTool', () => {
     expect(count(path, 'SELECT COUNT(*) AS c FROM memory_mutation_log')).toBe(4)
     // Additive writes never touch the epoch, and the tool never bumps it.
     expect(count(path, 'SELECT COUNT(*) AS c FROM project_state')).toBe(0)
-  })
-
-  it('refuses writes for a module-managed project through the tool, leaving the store untouched', async () => {
-    const path = makeMemoryDb()
-    const bridge = openMemoryBridge({ dbPath: path, logger: silentLogger })
-    cleanups.push(() => bridge.close())
-    const built = buildTool(path, request => (request.identity === undefined
-      ? undefined
-      : bridge.recall({ project: request.identity, budgetTokens: 8_000, limit: 20, now: Date.now() })))
-    cleanups.push(built.close)
-    const exec = fakeExec('D:/work/project')
-
-    run(path, 'INSERT INTO authority_managed(project_path, context_store_uuid, marked_at) VALUES(?, ?, ?)', IDENTITY, 'store-uuid', Date.now())
-    const result = await built.tool.execute(
-      { action: 'write', category: 'NAMING', content: 'this must not be written' },
-      exec,
-    ) as { outcome?: string; detail?: string }
-    expect(result.outcome).toBe('write refused (authority-blocked).')
-    expect(result.detail).toContain('must use the Rust ctx_memory module facade')
-    expect(count(path, 'SELECT COUNT(*) AS c FROM memories')).toBe(0)
-    // A foreign project is still writable: the guard is per identity.
-    expect(count(path, 'SELECT COUNT(*) AS c FROM memories WHERE project_path = ?', OTHER_IDENTITY)).toBe(0)
   })
 })
 

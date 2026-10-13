@@ -34,7 +34,7 @@ import { DEFAULT_POLICY } from '../src/core/policy.ts'
 import { SCHEMA_VERSION, openStores } from '../src/core/stores.ts'
 import { runManagementPass } from '../src/dsh/management-pass.ts'
 import type { Session } from '../src/dsh/seams.ts'
-import { MUTATION_LOG_DDL, makeMemoryDb, PROJECT_STATE_DDL, WORKSPACES_DDL } from './helpers/memory-db'
+import { MUTATION_LOG_DDL, makeMemoryDb, PROJECT_STATE_DDL } from './helpers/memory-db'
 
 const tempDirs: string[] = []
 
@@ -239,7 +239,6 @@ function makeContextDb(input: {
   memories: Seed[]
   mutations?: SeedMutation[]
   epochs?: Record<string, number>
-  workspace?: { name: string; shareCategories: string[]; members: string[] }
   withMutationLog?: boolean
   withProjectState?: boolean
 }): string {
@@ -299,14 +298,6 @@ function makeContextDb(input: {
     for (const [project, epoch] of Object.entries(input.epochs ?? {})) insertEpoch.run(project, epoch)
   }
 
-  if (input.workspace !== undefined) {
-    db.exec(WORKSPACES_DDL)
-    db.prepare('INSERT INTO workspaces(id, name, share_categories, created_at, updated_at) VALUES(1, ?, ?, 0, 0)')
-      .run(input.workspace.name, JSON.stringify(input.workspace.shareCategories))
-    for (const member of input.workspace.members) {
-      db.prepare('INSERT INTO workspace_members(workspace_id, project_path, added_at) VALUES(1, ?, 0)').run(member)
-    }
-  }
   db.close()
   return path
 }
@@ -470,9 +461,14 @@ describe('memory bridge: the mutation cursor (read-only)', () => {
         { id: 2, project: peer, type: 'update', target: 2, category: 'NAMING' },
         { id: 3, project: peer, type: 'archive', target: 1, category: null, newContent: null },
       ],
-      workspace: { name: 'code', shareCategories: ['CONSTRAINTS'], members: [mine, peer] },
     })
-    const bridge = openMemoryBridge({ dbPath: path, logger: captureLogger() })
+    // Post-cutover: peers come from the domain resolver, never from workspace
+    // tables (the own corpus carries none).
+    const bridge = openMemoryBridge({
+      dbPath: path,
+      logger: captureLogger(),
+      domainResolver: () => [{ identity: peer, shareCategories: ['CONSTRAINTS'] }],
+    })
     try {
       const result = bridge.mutations({ project: mine, afterId: 0, now: 10_000 })!
       // NAMING is filtered out; both CONSTRAINTS changes coalesce (the later
@@ -494,9 +490,13 @@ describe('memory bridge: the mutation cursor (read-only)', () => {
       memories: [{ id: 1, project: mine, content: 'x' }],
       mutations: [],
       epochs: { [mine]: 3, [peer]: 1 },
-      workspace: { name: 'code', shareCategories: ['CONSTRAINTS'], members: [mine, peer] },
     })
-    const bridge = openMemoryBridge({ dbPath: path, logger: captureLogger() })
+    // Post-cutover: the peer domain comes from the resolver (no workspace tables).
+    const bridge = openMemoryBridge({
+      dbPath: path,
+      logger: captureLogger(),
+      domainResolver: () => [{ identity: peer, shareCategories: ['CONSTRAINTS'] }],
+    })
     let before: string
     try {
       const first = bridge.mutations({ project: mine, afterId: 0, now: 10_000 })!
@@ -509,12 +509,16 @@ describe('memory bridge: the mutation cursor (read-only)', () => {
     } finally {
       bridge.close()
     }
-    // Move the PEER's epoch in place: the workspace fingerprint must change even
+    // Move the PEER's epoch in place: the domain fingerprint must change even
     // though this project's own epoch did not (MC workspaces.ts:312-334).
     const db = new DatabaseSync(path)
     db.prepare('UPDATE project_state SET project_memory_epoch = 2 WHERE project_path = ?').run(peer)
     db.close()
-    const reopened = openMemoryBridge({ dbPath: path, logger: captureLogger() })
+    const reopened = openMemoryBridge({
+      dbPath: path,
+      logger: captureLogger(),
+      domainResolver: () => [{ identity: peer, shareCategories: ['CONSTRAINTS'] }],
+    })
     try {
       const after = reopened.mutations({ project: mine, afterId: 0, now: 10_000 })!
       expect(after.projectEpoch).toBe(3)

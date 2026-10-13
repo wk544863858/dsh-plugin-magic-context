@@ -73,7 +73,7 @@ const cleanups: Array<() => Promise<void> | void> = []
  */
 function makeMemoryDb(): string {
   const { path, dir } = makeBareMemoryDb({
-    prefix: 'mc-memwrite-', schemaVersion: 94, mutationLog: true, projectState: true, authority: true,
+    prefix: 'mc-memwrite-', schemaVersion: 94, mutationLog: true, projectState: true,
   })
   cleanups.push(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 40 }))
   return path

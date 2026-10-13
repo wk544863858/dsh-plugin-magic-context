@@ -77,15 +77,8 @@ if (full) {
   run('acceptance', process.execPath, [join(PKG, 'scripts', 'mc-acceptance.mjs')])
   run('memory audit', process.execPath, [join(PKG, 'scripts', 'mc-memory-audit.mjs'), '--json'])
   run('records check', process.execPath, [join(PKG, 'scripts', 'mc-records-check.mjs')])
-  // The shared contract database is frozen by agreement (see
-  // docs/dsh-plugin-platform-takeover-and-global-domains-2026-10-09.md). The
-  // check is skipped LOUDLY when the store is absent, so a pass here always
-  // states which of the two it was.
-  run('contract freeze', process.execPath, [
-    join(PKG, 'scripts', 'mc-contract-freeze.mjs'),
-    'verify',
-    '--allow-missing',
-  ])
+  // (The contract-freeze step was retired with the 2026-10-13 corpus cutover:
+  //  the plugin no longer reads or writes the legacy shared store.)
 }
 
 report()

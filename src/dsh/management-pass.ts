@@ -127,7 +127,6 @@ export interface ManagementPassInput {
     readonly inserted: ReadonlyArray<{ id: number; category: string }>
     readonly seenAgain: ReadonlyArray<{ id: number }>
     readonly skipped: ReadonlyArray<{ category: string; reason: string }>
-    readonly authorityBlocked: boolean
   }
   /** The project identity facts belong to (required for promotion). */
   readonly memoryIdentity?: string
@@ -402,15 +401,13 @@ function publishCompartments(input: PublishCompartmentsInput): {
         input.journal?.info(
           'memory-promote',
           `promoted ${String(outcome.inserted.length)} fact(s) into project memory`
-            + `${outcome.seenAgain.length > 0 ? `, ${String(outcome.seenAgain.length)} already known` : ''}`
-            + `${outcome.authorityBlocked ? ' (module-managed project: left untouched)' : ''}`,
+            + `${outcome.seenAgain.length > 0 ? `, ${String(outcome.seenAgain.length)} already known` : ''}`,
           {
             compartmentId: compartment.compartmentId,
             identity: input.memoryIdentity,
             inserted: outcome.inserted.map(row => ({ id: row.id, category: row.category })),
             seenAgain: outcome.seenAgain.map(row => row.id),
             skipped: outcome.skipped,
-            authorityBlocked: outcome.authorityBlocked,
           },
           input.sessionId,
         )

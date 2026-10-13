@@ -25,7 +25,7 @@ const tempDirs: string[] = []
 
 function createDb(schemaVersion = 95): string {
   const { path, dir } = makeMemoryDb({
-    prefix: 'mc-maintenance-', schemaVersion, mutationLog: true, projectState: true, authority: true,
+    prefix: 'mc-maintenance-', schemaVersion, mutationLog: true, projectState: true,
   })
   tempDirs.push(dir)
   return path
