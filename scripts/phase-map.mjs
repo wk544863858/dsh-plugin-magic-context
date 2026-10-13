@@ -129,7 +129,7 @@ export const PHASES = [
     /** Extra commands that must pass for the gate, run after the specs. */
     checks: [{ label: 'contract freeze', script: 'scripts/mc-contract-freeze.mjs', args: ['verify', '--allow-missing'] }],
     blind: [
-      'WP4 共享属性维护已在合成库验证；真库首次共享行更新尚未执行',
+      'WP4 共享属性维护已在合成库验证；真库共享行更新已执行（2026-10-10 org #1420→#1431、10-13 #1528 现行；machine #1527 误归域已归档迁 org）',
       'A-7 双源对照已证明（tests/domain-source-parity.spec.ts）：同一契约库上 contract 与 adapter 两源的'
       + '召回集合/digest/水位/searchSpace/epoch 指纹全等，且带分叉敏感度负向对照；'
       + '回滚杠杆=纯配置切换——线上尚未演练过切换动作本身（只动 profile 配置，无代码路径）',
@@ -141,8 +141,8 @@ export const PHASES = [
     specs: PHASE_B,
     checks: [],
     blind: [
-      'WP5/WP7 已实现并有用例；开关线上实况（2026-10-10）：collect=on（线上仍 0 条 staged）、review=off'
-      + '——真机端到端（真实会话产出候选 → 评审 → 注入）尚未跑过',
+      'WP5/WP7 已实现并有用例；开关线上实况（2026-10-13）：collect=on（采集侧仍 0 条 staged）、review=on（13:15 重启生效）；'
+      + '渲染半边已活（profile-recall 每步注入 14 行）——真机端到端（真实会话产出候选 → 评审 → 注入）尚未跑过',
       'B-8 端到端（合成会话全链路可 journal 回溯）仍缺',
     ],
   },
@@ -152,10 +152,10 @@ export const PHASES = [
     specs: PHASE_C,
     checks: [],
     blind: [
-      '三个域都有实现与用例，但真库上只导入过 org 成员（machine 域 off；user 写侧 collect=on、review=off）',
+      '三个域都有实现与用例；真库上 org 5 成员、machine 6 成员且 machine 已 enabled+autoStage（2026-10-12 裁决开），user 写侧 collect=on、review=on（10-13 生效）',
       '复现检测在真实语料上是空门（1292 行 / 33 项目 / 0 共享 hash）——见 global-domain-source-finding',
-      '真库已发布 org 域行（2026-10-10：#1431 现行、#1420 归档+superseded ⇒ 发布/退役/改写各走通一次）；'
-      + 'machine 域 0 行；跨项目真实注入（域命中）尚未发生——可见性证明来自合成桥接调用，非真实 foreign 会话',
+      '真库已发布域行（org：16 现行 + 1 归档，含 2026-10-10 #1431 与 10-13 #1528；machine：3 现行 + 1 归档，'
+      + '#1527 误归域已归档迁 org）；跨项目真实注入已发生——域命中 14d：machine 15 次/2 读者、org 7 次/1 读者',
       'C-7 产品判据埋点已落地（scripts/report-hits.mjs + mc-report「域命中(14d)」行 + tests/report-hits.spec.ts）；'
       + '剩余盲区=观察期未满：org 域 2026-10-10 启用、14 天窗到 2026-10-24，期间域命中=0 属"未起算"，'
       + 'WP9 判据（<2 读取项目 ⇒ 停止投入）到 10-24 才能出结论',
@@ -171,14 +171,14 @@ export const PHASES = [
       + '白名单=两条闭环都走完 5 步：org 域（建域→候选→批准→注入→退役）+ user 域（采集→评审→注入→退役）',
       '发布是"复制"而非"镜像"：源行改写不传播到域行——对账用例已钉（tests/domain-source-parity.spec.ts：'
       + '改写/归档源行后域行逐字节不变）；因此域行更新只能走产品路径（新候选→发布→归档旧行），没有镜像修复',
-      '写开关线上实况（2026-10-10）：user.collect=on、vectorBackfill=on（已收口）、user.review=off、'
-      + 'machine.enabled=off——演练与线上的差距收窄到"画像评审注入"与"machine 域"两段未开；'
+      '写开关线上实况（2026-10-13）：user.collect=on、review=on（13:15 生效）、vectorBackfill=on（已收口）、'
+      + 'machine.enabled+autoStage=on——演练与线上的差距只剩"画像评审首轮未跑"与"域命中观察窗未满"；'
       + '2026-10-12 起 vectorBackfill 缺省=true（分发默认可用，显式 false 才关），'
       + 'profile 需逐键重复的"必须为 true"清单收缩为 scoring/collect',
       'WP11 向量回填已真写并收口（2026-10-10 09:52 开启 → 15:19 dominant 100%）；'
       + '残余特性：缺口随新晋升行回升、靠 30 分钟维护拍清理，机器空闲时段不补跑',
       'doctor / mc-acceptance 的域判定已有 hermetic 正负样本（tests/domain-checks.spec.ts），'
-      + '但真库采样仍是各一次：阈值与采样量的长期漂移只能靠趋势，不能靠这两条判据',
+      + '真库采样已积累（候选 21 批准 / 5 拒绝、域注入 22 次）：阈值与采样量的长期漂移仍只能靠趋势，不能靠这两条判据',
       'profile 依赖卫生判据（tests/profile-checks.spec.ts，2026-10-11 启动失败后加）是静态检查：'
       + '只看 profile 根 node_modules/@deepseek-ai/（Node 真能解析到的位置），看不到 .pnpm 内部未提升的副本；'
       + '宿主包清单读不到时（app.asar 不可达）dependencies 一项降级为 WARN，不冒充绿灯',
