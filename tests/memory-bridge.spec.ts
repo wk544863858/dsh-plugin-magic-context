@@ -114,7 +114,7 @@ describe('memory bridge (read-only recall)', () => {
     try {
       const recall = bridge.recall({
         project: 'git:mine',
-        workspaceProjects: ['git:sibling'],
+        domainProjects: ['git:sibling'],
         shareCategories: ['CONSTRAINTS'],
         budgetTokens: 8000,
         limit: 40,

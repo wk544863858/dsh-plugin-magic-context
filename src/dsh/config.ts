@@ -49,9 +49,9 @@ export interface MagicContextDshConfig {
      * with no configuration at all.
      */
     project?: string
-    /** Extra identities to read shared rows from; unset uses the DB's workspace. */
-    workspaceProjects?: readonly string[]
-    /** Category whitelist for shared rows; unset uses the workspace's policy. */
+    /** Extra identities to read shared rows from; unset uses the active domains. */
+    domainProjects?: readonly string[]
+    /** Category allowlist for shared rows; unset uses the active domains' union policy. */
     shareCategories?: readonly string[]
     /**
      * Promote the historian's facts into project memory (Magic Context's

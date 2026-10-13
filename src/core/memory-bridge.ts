@@ -5,17 +5,17 @@
  * Facts this module is built on (shape inherited verbatim from Magic
  * Context's v95 storage layer; the schema is OURS now — see corpus-store.ts):
  *  - `memories` has NO `harness` column: project memories are shared across
- *    sessions and hosts on this machine through the corpus;
+ *    sessions on this machine through the corpus;
  *  - `project_path` stores an IDENTITY (`git:<root-commit-sha>` or
  *    `dir:<hash>`), not a path; legacy rows may still hold raw paths, so the
  *    bridge matches the identity and the normalized path;
  *  - the schema version lives in `schema_migrations` (lane `< 10000`);
- *    Magic Context's LATEST_SUPPORTED_VERSION is 94 — a newer database is
+ *    a database newer than `MEMORY_SCHEMA_MAX_VERSION` is
  *    fail-closed (read nothing) rather than guessed at;
  *  - injectable rows are `status IN ('active','permanent')` and not expired;
- *    workspace-shared rows additionally need `shareable = 1`,
+ *    domain-shared rows additionally need `shareable = 1`,
  *    `scope IN ('project','ecosystem','universe')` and a category in the
- *    workspace's `share_categories` whitelist;
+ *    active domains' `share_categories` allowlist;
  *  - selection priority is permanent → importance → max(last_seen_at,
  *    verified_at) → id, trimmed to a token budget.
  *
@@ -55,7 +55,7 @@ export const MAX_MEMORY_REPLACEMENT_DEPTH = 8
 /** Default page size for one cursor read (the real log holds hundreds of rows). */
 export const DEFAULT_MUTATION_PAGE_LIMIT = 1_000
 
-/** The default workspace sharing whitelist when `share_categories` is absent. */
+/** The default domain sharing allowlist when `share_categories` is absent. */
 export const DEFAULT_SHARE_CATEGORIES = ['CONSTRAINTS'] as const
 
 /** The plugin's OWN corpus, next to the adapter store in its own data dir
@@ -80,8 +80,8 @@ export interface MemoryRow {
 export interface MemoryRecallRequest {
   /** Identity (`git:<sha>` / `dir:<hash>`) or a directory to match loosely. */
   readonly project?: string
-  /** Workspace-shared identities. */
-  readonly workspaceProjects?: readonly string[]
+  /** Domain-shared identities. */
+  readonly domainProjects?: readonly string[]
   readonly shareCategories?: readonly string[]
   readonly budgetTokens: number
   readonly limit: number
@@ -113,7 +113,7 @@ export interface MemoryRecallResult {
   /** The m[1] additions: rows above the watermark. */
   readonly newRows: readonly MemoryRow[]
   readonly newLines: readonly string[]
-  /** Highest memory id visible to this project (and its workspace peers). */
+  /** Highest memory id visible to this project (and its domain peers). */
   readonly currentMaxMemoryId: number
   /**
    * B1/A1: every currently-visible row id (pre-budget) — MC's
@@ -124,8 +124,8 @@ export interface MemoryRecallResult {
   readonly eligibleRows: readonly MemoryRow[]
   /** The identity the recall resolved (recorded in the activity journal). */
   readonly identity?: string
-  /** The workspace whose members contributed, when one was found. */
-  readonly workspace?: string
+  /** The domains that contributed shared rows, when any are active. */
+  readonly domains?: string
   /** Member identities whose shared rows were considered. */
   readonly members?: readonly string[]
 }
@@ -134,8 +134,8 @@ export interface MemoryBridge {
   readonly dbPath: string
   recall(request: MemoryRecallRequest): MemoryRecallResult | undefined
   /**
-   * The identity/workspace expansion the search lane shares with recall: one
-   * resolution for `git:`/`dir:`/directory specs, the workspace's member list
+   * The identity/domain expansion the search lane shares with recall: one
+   * resolution for `git:`/`dir:`/directory specs, the domain member list
    * and its normalized category allowlist (memory-search.ts consumes this).
    */
   searchSpace(project?: string): {
@@ -144,11 +144,11 @@ export interface MemoryBridge {
     readonly ownIdentities: readonly string[]
     readonly foreignIdentities: readonly string[]
     readonly members: readonly string[]
-    readonly workspace?: string
+    readonly domains?: string
     readonly shareCategories?: readonly string[]
   } | undefined
   /**
-   * The additive watermark for a project (its own rows plus its workspace
+   * The additive watermark for a project (its own rows plus its domain
    * peers'). Frozen at every HARD rebuild so later writes land in m[1].
    */
   maxMemoryId(project?: string): number
@@ -160,7 +160,7 @@ export interface MemoryBridge {
    */
   mutations(request: MemoryMutationRequest): MemoryMutationResult | undefined
   /**
-   * `MAX(memory_mutation_log.id)` for the project (and its workspace peers) —
+   * `MAX(memory_mutation_log.id)` for the project (and its domain peers) —
    * the value a HARD rebuild freezes as `maxMemoryMutationId`.
    */
   maxMemoryMutationId(project?: string): number
@@ -201,8 +201,8 @@ export interface MemoryMutationRow {
 export interface MemoryMutationRequest {
   /** Identity (`git:<sha>` / `dir:<hash>`) or a directory to match loosely. */
   readonly project?: string
-  /** Workspace-shared identities (defaults to the database's membership). */
-  readonly workspaceProjects?: readonly string[]
+  /** Domain-shared identities (defaults to the active domains' membership). */
+  readonly domainProjects?: readonly string[]
   readonly shareCategories?: readonly string[]
   /** The persisted per-session cursor: read rows with `id > afterId`. */
   readonly afterId: number
@@ -219,7 +219,7 @@ export interface MemoryMutationResult {
   readonly cursor: number
   /** `MAX(id)` right now — what a HARD rebuild freezes (§7.5). */
   readonly currentCursor: number
-  /** Epoch fingerprint over the project and its workspace peers. */
+  /** Epoch fingerprint over the project and its domain peers. */
   readonly projectEpochFingerprint: string
   /** The project's own `project_memory_epoch` (journaling). */
   readonly projectEpoch: number
@@ -456,7 +456,7 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
       status: { ok: false, detail },
       recall: () => undefined,
       // No space resolution without a store: recall is off, and so is every
-      // workspace-scoped read that would have used this.
+      // domain-scoped read that would have used this.
       searchSpace: () => undefined,
       maxMemoryId: () => 0,
       mutations: () => undefined,
@@ -530,13 +530,13 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
 
     /** WP3: THE activation function (see MemoryBridgeOptions.domainResolver). */
     const peersFor = (identities: readonly string[]): {
-      workspace?: string
+      domains?: string
       members: string[]
       shareCategories?: string[]
-      domains: readonly ActivePeerDomain[]
+      peers: readonly ActivePeerDomain[]
     } => {
       const resolve = options.domainResolver
-      if (resolve === undefined) return { members: [], domains: [] }
+      if (resolve === undefined) return { members: [], peers: [] }
       const domains: ActivePeerDomain[] = []
       let answered = false
       for (const identity of identities) {
@@ -551,9 +551,9 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
       // shared store's `workspaces` membership died with the 2026-10-13
       // corpus cutover — the own corpus carries no workspace tables, and
       // cross-project sharing is exclusively domain-driven.
-      if (!answered) return { members: [], domains: [] }
+      if (!answered) return { members: [], peers: [] }
       const members = domains.map(domain => domain.identity).filter(identity => !identities.includes(identity))
-      if (members.length === 0) return { members: [], domains: [] }
+      if (members.length === 0) return { members: [], peers: [] }
       // The SQL filter is a single `category IN (...)`, so the effective
       // allowlist is the union of the activated domains'. That cannot widen what
       // a domain is allowed to share because publishing pre-checks the category
@@ -561,10 +561,10 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
       const categories = [...new Set(domains.flatMap(domain => [...domain.shareCategories]))]
         .sort((left, right) => left.localeCompare(right))
       return {
-        workspace: members.join('+'),
+        domains: domains.map(domain => domain.identity).join('+'),
         members,
         shareCategories: categories,
-        domains,
+        peers: domains,
       }
     }
 
@@ -704,7 +704,7 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
     }
     /**
      * The epoch identity of a baseline. A bare epoch integer is not enough:
-     * workspace membership changes move the epoch of a *peer*, and MC compares
+     * domain membership changes move the epoch of a *peer*, and MC compares
      * a fingerprint that hashes every member's epoch (`workspaces.ts:312-334`).
      */
     const epochFingerprint = (identities: readonly string[]): string => {
@@ -841,7 +841,7 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
       try {
         const identities = identityCandidates(request.project)
         const auto = peersFor(identities)
-        const peers = request.workspaceProjects ?? auto.members
+        const peers = request.domainProjects ?? auto.members
         const peerIdentities = peers.flatMap(candidate => identityCandidates(candidate))
         const allIdentities = [...identities, ...peerIdentities]
         const shared = new Set(request.shareCategories ?? auto.shareCategories ?? DEFAULT_SHARE_CATEGORIES)
@@ -907,7 +907,7 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
             ownIdentities: identities,
             foreignIdentities,
             members: auto.members,
-            ...auto.workspace === undefined ? {} : { workspace: auto.workspace },
+            ...auto.domains === undefined ? {} : { domains: auto.domains },
             ...auto.shareCategories === undefined ? {} : { shareCategories: auto.shareCategories },
           }
         } catch {
@@ -1017,7 +1017,7 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
               }
             }
             const shared = new Set(request.shareCategories ?? auto.shareCategories ?? DEFAULT_SHARE_CATEGORIES)
-            const peers = request.workspaceProjects ?? auto.members
+            const peers = request.domainProjects ?? auto.members
             const peerIdentities = peers.flatMap(candidate => identityCandidates(candidate))
             for (const identity of peerIdentities) {
               for (const raw of foreignStatement.all(identity, request.now) as unknown as MemoryTableRow[]) {
@@ -1031,7 +1031,7 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
             }
             const context = {
               ...identities[0] === undefined ? {} : { identity: identities[0] },
-              ...auto.workspace === undefined ? {} : { workspace: auto.workspace },
+              ...auto.domains === undefined ? {} : { domains: auto.domains },
               members: peers,
             }
             if (rows.length === 0) return undefined

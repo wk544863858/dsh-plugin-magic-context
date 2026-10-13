@@ -93,7 +93,7 @@ bundle 自带配置只有一行：`registerCompactionEngine: false`（保守首�
 | 压缩接缝 | `registerCompactionEngine`（代码默认可解析即挂；**bundle 随发 false**）· `compactionBase`（宿主注入基类） | 接管需同时禁用 compaction-basic；pre-step 每步 `reconcileEngine` 动态挂/卸 |
 | 压力策略 | `policy.*`：`executeThreshold` (65) · `forceThreshold` (85) · `ttlMs` (5 min) · `assumedContextWindow` (256k) · `protectedToolResults` (8) · `historianTimeoutMs` (120 s) · `historianMaxTokens` (8192，低于会被抬到 8192) · `historianMaxTokensCeiling` (32768) · `baselineTokens` (2000) · `memoryBudgetTokens` (8000) · `memoryLimit` (40) · `compartmentGuardMode` (observe) · `forceWaitReadyMs` (0) | 阈值在下一个决策点生效（含 `/ctx-status` 与 compaction engine 路径） |
 | historian | `historianEnabled` (true) · `historian.{provider, model}`（默认会话最后路由的模型） | 带外运行；verify 之外的唯一 LLM 消耗点 |
-| 项目记忆 | `memory.{}`：`enabled` · `dbPath` · `project`（省略用会话 cwd）· `workspaceProjects` · `shareCategories` · `autoPromote` (true) · `write` (true) | `memory: {}` 即可用；`write: false` 让 `ctx_memory` 退回只读 |
+| 项目记忆 | `memory.{}`：`enabled` · `dbPath` · `project`（省略用会话 cwd）· `domainProjects` · `shareCategories` · `autoPromote` (true) · `write` (true) | `memory: {}` 即可用；`write: false` 让 `ctx_memory` 退回只读 |
 | 检索 / 向量 | `memory.embedBackfill` (true，查询侧内嵌补分) · `memory.vectorBackfill` (true，维护 tick 回填) · `memory.vectorBackfillLimit` (24 行/tick) | 向量车道任何失败 fail-open 降级 FTS |
 | S(t) 衰减 | `memory.scoring.{enabled (false)，alpha (0.4)，beta (0.2)，archiveThreshold (2)，halfLives}` | 默认只收集统计、不接管排序；profile-JSON only，不进设置卡片 |
 | 全局域 | `memory.global.machine.{enabled (false)，excludeProjects，autoStage (false)}` · `memory.global.review.batchLimit` (50) | 入队可自动化（≤3 条/pass、≥10 候选待审时暂停），发布永远是人 |

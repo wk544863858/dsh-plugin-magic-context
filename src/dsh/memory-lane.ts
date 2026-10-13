@@ -577,7 +577,7 @@ export function openMemoryLane(
           }
           const recalled = bridge.recall({
           ...project === undefined ? {} : { project },
-          workspaceProjects: config.memory?.workspaceProjects,
+          domainProjects: config.memory?.domainProjects,
           shareCategories: config.memory?.shareCategories,
           budgetTokens: activePolicy().memoryBudgetTokens,
           limit: request.limit ?? activePolicy().memoryLimit,

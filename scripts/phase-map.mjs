@@ -74,9 +74,9 @@ const PHASE_A = [
 ]
 
 /**
- * Phase B: the `user` domain. Collection and review WRITE the frozen contract
+ * Phase B: the `user` domain. Collection and review WRITE the own corpus
  * and stay behind their own switches (`memory.global.user.collect` / `.review`,
- * both default off), so the specs below use a synthetic contract database.
+ * both default off), so the specs below use a synthetic corpus database.
  */
 const PHASE_B = [
   'tests/directive-detect.spec.ts',
@@ -87,7 +87,7 @@ const PHASE_B = [
   'tests/profile-review.spec.ts',
 ]
 
-/** Phase C: org/machine domains. Publishing writes the contract. */
+/** Phase C: org/machine domains. Publishing writes the corpus. */
 const PHASE_C = [
   'tests/org-domain.spec.ts',
   'tests/domain-publish.spec.ts',

@@ -476,7 +476,7 @@ describe('memory bridge: the mutation cursor (read-only)', () => {
       expect(result.updates.map(line => line.targetMemoryId)).toEqual([1])
       expect(result.updates[0]?.mutationType).toBe('archive')
       expect(result.members).toEqual([peer])
-      expect(bridge.mutations({ project: mine, workspaceProjects: [], shareCategories: [], afterId: 0, now: 10_000 })!.updates)
+      expect(bridge.mutations({ project: mine, domainProjects: [], shareCategories: [], afterId: 0, now: 10_000 })!.updates)
         .toEqual([])
     } finally {
       bridge.close()

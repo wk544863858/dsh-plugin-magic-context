@@ -52,7 +52,7 @@ export interface BaselineState {
   readonly maxMemoryMutationId?: number
   /**
    * The project's `project_state.project_memory_epoch` identity (a fingerprint
-   * over the project and its workspace peers). A change means an external
+   * over the project and its domain peers). A change means an external
    * writer moved the memory epoch, so the m[0] snapshot AND the mutation
    * cursor are invalid: the pass rebuilds hard and re-freezes both.
    */
@@ -536,13 +536,13 @@ const MIGRATIONS: readonly Migration[] = [
     // project identities activate them, the cross-project candidate pool for
     // org/machine, and the confirmation queue that directive-shaped profile
     // candidates must pass through. All of it lives HERE (the adapter's own
-    // store) because the shared `context.db` contract is frozen.
+    // store) — the own corpus (memories.db) deliberately carries none of it.
     //
     //  - domains: one row per global domain. `cap` is DERIVED from a token
     //    target by the caller, so the admission limit and the budget cannot
     //    drift apart.
-    //  - domain_members: the activation rule, replacing the contract's
-    //    workspace tables (which have no writer left once the dashboard goes).
+    //  - domain_members: the activation rule (the only sharing membership
+    //    since the 2026-10-13 corpus cutover).
     //  - global_candidates / global_candidate_observations: the cross-project
     //    recurrence gate — a fact promoted to a global domain must have been
     //    observed independently by at least two DIFFERENT project identities.

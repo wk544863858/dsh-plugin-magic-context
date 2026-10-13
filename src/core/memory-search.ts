@@ -15,7 +15,7 @@ import { errText } from './types.ts';
  *   sort    = score DESC, id ASC; preview = 220 chars with `…`.
  *
  * Lanes: FTS5 (`memories_fts MATCH`, sanitize → strict AND, 0 rows → relaxed
- * OR — storage-memory-fts.ts:63-123) over the pool (workspace visibility rules
+ * OR — storage-memory-fts.ts:63-123) over the pool (domain visibility rules
  * identical to recall: own rows full, foreign rows need shareable + scope +
  * category allowlist — buildWorkspaceMemorySqlFilter:783-840), plus the
  * semantic lane over `memory_embeddings` vectors read-only.
@@ -47,7 +47,7 @@ export interface MemorySearchSpace {
   readonly ownIdentities: readonly string[];
   /** Workspace peer identities: shared categories only. */
   readonly foreignIdentities: readonly string[];
-  /** The workspace's normalized allowlist (`[]` shares nothing). */
+  /** The active domains' normalized allowlist union (`[]` shares nothing). */
   readonly shareCategories: readonly string[];
 }
 
@@ -165,9 +165,9 @@ function normalizeCosineScore(score: number): number {
 
 /** Workspace visibility predicate (MC buildWorkspaceMemorySqlFilter:783-840):
  *  own identities see everything, foreign rows must be shareable + scope
- *  project/ecosystem/universe + in the workspace's category allowlist.
+ *  project/ecosystem/universe + in the active domains' category allowlist.
  *  `table` qualifies the column refs (the vector join aliases memories as m). */
-export function workspaceVisibilityPredicate(
+export function domainVisibilityPredicate(
   space: MemorySearchSpace,
   table = 'memories',
 ): {
@@ -266,9 +266,9 @@ export function openMemorySearch(options: {
           suppressedVisible: 0,
         };
       }
-      const { clause, params } = workspaceVisibilityPredicate(request.space);
+      const { clause, params } = domainVisibilityPredicate(request.space);
       // The embeddings join aliases memories as `m` — requalify the predicate.
-      const vectorVisibility = workspaceVisibilityPredicate(request.space, 'm');
+      const vectorVisibility = domainVisibilityPredicate(request.space, 'm');
 
       // ── Direct id lookup (MC parseIdShapedQuery short-circuit) ────────────
       const idShape = parseIdShapedQuery(trimmed);

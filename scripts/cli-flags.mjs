@@ -4,9 +4,10 @@
  *
  * Why this exists as a module instead of four lines inside each script: a script
  * that acts on flags it did not understand is a script nobody can reason about,
- * and that is a judgement worth testing. `mc-import-workspace.mjs` is the case
- * that forced it — `--help` silently performed the import, because every
- * unrecognised token fell through to "no flags given, do the work".
+ * and that is a judgement worth testing. (mc-import-workspace.mjs — retired
+ * with the 2026-10-13 corpus cutover — was the case that forced it: `--help`
+ * silently performed the import, because every unrecognised token fell through
+ * to "no flags given, do the work".)
  *
  * `parseFlags` reports what it did NOT understand (`unknown`) instead of
  * dropping it, so each caller decides: refuse, or warn. It never decides for

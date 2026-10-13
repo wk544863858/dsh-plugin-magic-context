@@ -123,7 +123,7 @@ export function doctorDomainFindings(db) {
     return findings
   }
   if (summary.domains.length === 0) {
-    push(LEVEL_WARN, '没有任何全局域：跨项目共享仍在走契约回落（node scripts/mc-import-workspace.mjs 幂等导入）')
+    push(LEVEL_WARN, '没有任何全局域：跨项目共享未配置（/ctx-global create <domain> --kind org|machine 建域）')
   }
   for (const domain of summary.domains) {
     push(
@@ -193,7 +193,7 @@ export function acceptanceDomainItems(adapterDb, contractDb = null, now = Date.n
     'domain.members',
     withMembers.length > 0
       ? `${String(withMembers.length)} 个域有成员（${withMembers.map((d) => `${d.id}=${String(d.members)}`).join(', ')}）`
-      : '没有任何域拥有成员：导入未执行或成员被清空（node scripts/mc-import-workspace.mjs）',
+      : '没有任何域拥有成员（/ctx-global add <domain> <identity> 加成员）',
     { members: summary.domains.map((d) => ({ id: d.id, members: d.members })) },
   )
 

@@ -344,7 +344,7 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
         }
         const memories = memoryRecall?.recall({
           ...projectSpec === undefined ? {} : { project: projectSpec },
-          workspaceProjects: config.memory?.workspaceProjects,
+          domainProjects: config.memory?.domainProjects,
           shareCategories: config.memory?.shareCategories,
           budgetTokens: policy.memoryBudgetTokens,
           limit: policy.memoryLimit,
@@ -421,7 +421,7 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
         // previous fingerprint and this one are present.
         const mutations = memoryRecall?.mutations({
           ...projectSpec === undefined ? {} : { project: projectSpec },
-          workspaceProjects: config.memory?.workspaceProjects,
+          domainProjects: config.memory?.domainProjects,
           shareCategories: config.memory?.shareCategories,
           afterId: stores.baselineState(sessionId)?.maxMemoryMutationId ?? 0,
           limit: policy.memoryLimit,
@@ -439,7 +439,7 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
               estTokens: memories.lines.reduce((total, line) => total + estimateTokens(line), 0),
               identity: memories.identity,
               maxMemoryId: memories.currentMaxMemoryId,
-              workspace: memories.workspace,
+              domains: memories.domains,
               members: memories.members?.length,
               projects: [...new Set(memories.rows.map(row => row.projectPath.slice(0, 24)))],
             },

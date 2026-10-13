@@ -468,7 +468,7 @@ function refreshBaseline(
     && memories !== undefined
     && previous.memoriesDigest !== memories.digest
   // The external-writer signal: Magic Context bumps
-  // `project_state.project_memory_epoch` when a dashboard edit (or a workspace
+  // `project_state.project_memory_epoch` when an external edit (or a domain
   // /identity change) invalidates a running session's snapshot. Both the m[0]
   // pool AND the mutation cursor were built against the old epoch, so this is
   // a HARD rebuild — reusing the old cursor would render a misaligned delta.

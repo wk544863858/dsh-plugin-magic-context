@@ -1449,22 +1449,22 @@ function buildHealth(ctx) {  const { db, opened, dbExists, openError, valid, sch
     }
   }
 
-  // 域已导入却全停用 ⇒ 跨项目共享仍在走契约回落，接管的最后一步没做完；
+  // 域已建却全停用 ⇒ 跨项目共享整体关闭（corpus 时代没有回落，停用即无共享）；
   // 确认队列积压 ⇒ 约束型候选在等人回答，没人回答它们就永远不会生效。
   const ds = metrics.domainStats
   if (ds !== null && ds !== undefined) {
     if (ds.domains.length > 0 && ds.enabledDomains === 0) {
       push(
         'domains-imported-not-enabled',
-        `已定义 ${fmtInt(ds.domains.length)} 个全局域但全部停用：跨项目共享仍在使用契约回落（workspaces 表）。`
-          + '确认成员无误后用 /ctx-global enable <domain> 接管。',
+        `已定义 ${fmtInt(ds.domains.length)} 个全局域但全部停用：跨项目共享整体关闭。`
+          + '确认成员无误后用 /ctx-global enable <domain> 开启。',
       )
     }
     if (ds.domains.length === 0) {
       push(
         'no-domains-configured',
-        '适配器库里没有任何全局域：域车道尚未接管。若契约工作区仍有成员，'
-          + '先跑 node scripts/mc-import-workspace.mjs（幂等、可回滚）。',
+        '适配器库里没有任何全局域：跨项目共享未配置。'
+          + '需要共享时用 /ctx-global create <domain> --kind org|machine 建域，再 /ctx-global add <domain> <identity> 加成员。',
       )
     }
     if (ds.confirmations.pending >= 3) {

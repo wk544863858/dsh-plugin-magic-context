@@ -31,7 +31,7 @@ import {
   previewText,
   relaxedFtsQuery,
   sanitizeFtsQuery,
-  workspaceVisibilityPredicate,
+  domainVisibilityPredicate,
   type MemorySearchSpace,
 } from '../src/core/memory-search.ts'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -283,7 +283,7 @@ describe('hybrid scoring is MC search.ts', () => {
   })
 })
 
-describe('workspace visibility matches the recall rules', () => {
+describe('domain visibility matches the recall rules', () => {
   it('own rows are fully visible; foreign rows need share + scope + category', async () => {
     const path = createDb()
     addFtsTable(path)
@@ -316,7 +316,7 @@ describe('workspace visibility matches the recall rules', () => {
   })
 
   it('exposes the predicate shape the tests and callers can pin', () => {
-    const { clause, params } = workspaceVisibilityPredicate({
+    const { clause, params } = domainVisibilityPredicate({
       ownIdentities: [OWN],
       foreignIdentities: [PEER],
       shareCategories: ['CONSTRAINTS'],

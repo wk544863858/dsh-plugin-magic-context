@@ -277,7 +277,7 @@ describe('a published domain row is visible to peers — and retirable', () => {
     const bridge = bridgeFor(path)
     const result = bridge.recall({
       project,
-      workspaceProjects: peers,
+      domainProjects: peers,
       shareCategories: ['CONSTRAINTS'],
       budgetTokens: 8_000,
       limit: 40,
