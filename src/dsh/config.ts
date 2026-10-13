@@ -155,11 +155,12 @@ export interface MagicContextDshConfig {
       /**
        * Human approval for global-domain candidates (machine + org alike):
        * `ctx_memory action=review_global` presents pending candidates as
-       * user-questions cards, one at a time, and only the user-approved ones
-       * are published (source_type=user — the WP9 publishing semantics).
+       * user-questions cards — five questions per modal, chained within the
+       * call until the queue drains — and only the user-approved ones are
+       * published (source_type=user — the WP9 publishing semantics).
        */
       review?: {
-        /** Candidates one review_global call may put in front of the user (default 5). */
+        /** Candidates one review_global call may process (default 50, the auto-stage pool cap). */
         batchLimit?: number
       }
     }

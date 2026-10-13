@@ -548,7 +548,11 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
                 : { ask: ({ questions, sessionId }) => ask({ questions, sessionId }) }),
               ...memoryWriter === undefined || memoryWriter.status.ok !== true ? {} : { publisher: memoryWriter },
               ...journal === undefined ? {} : { journal },
-              batchLimit: liveNumber(config.memory?.global?.review?.batchLimit, 5),
+              // Default 50 = the auto-stage pool cap: one review_global call
+              // drains the whole pending queue through chained 5-question
+              // cards (2026-10-13). The old call-site pin of 5 sliced a batch
+              // into one card per invocation.
+              batchLimit: liveNumber(config.memory?.global?.review?.batchLimit, 50),
               sessionId: exec?.agent?.session?.id,
               now: () => Date.now(),
             })

@@ -332,17 +332,40 @@ function publishCompartments(input: PublishCompartmentsInput): {
     }
     const first = range[0] as SurfaceNode
     const last = range[range.length - 1] as SurfaceNode
-    const landedSeq = replaceSurfaceRange(
-      input.session,
-      first.seq,
-      last.seq,
-      [{ type: 'text', text: compactedPlaceholder(compartment.compartmentId) }],
-      range.map(node => node.seq),
-      syntheticNodeId(`mc-compacted-${String(compartment.compartmentId)}`),
-      magicContextSource(
-        `Magic Context · compartment §C${String(compartment.compartmentId)}§ replaced ${String(range.length)} node(s) on the wire`,
-      ),
-    )
+    // A host validator refusal here (2026-10-08 live incident: the pre-fix
+    // shadow list missed range entrants, 69 journal errors across 2 sessions —
+    // the same poisoned draft threw on EVERY pass) must be terminal for THIS
+    // draft, never a retry loop, and must never starve the drafts behind it:
+    // retire it as rejected (covered claims stay claimed, no re-digest flood;
+    // the span stays on the wire, honestly) and let the loop move on.
+    let landedSeq: SessionSeq
+    try {
+      landedSeq = replaceSurfaceRange(
+        input.session,
+        first.seq,
+        last.seq,
+        [{ type: 'text', text: compactedPlaceholder(compartment.compartmentId) }],
+        range.map(node => node.seq),
+        syntheticNodeId(`mc-compacted-${String(compartment.compartmentId)}`),
+        magicContextSource(
+          `Magic Context · compartment §C${String(compartment.compartmentId)}§ replaced ${String(range.length)} node(s) on the wire`,
+        ),
+      )
+    } catch (error) {
+      input.stores.markCompartmentRejected(input.sessionId, compartment.compartmentId, 'replace-failed')
+      input.journal?.error(
+        'compartment-published',
+        `compartment §C${String(compartment.compartmentId)}§ replace refused; retired as rejected (span stays on the wire)`,
+        {
+          compartmentId: compartment.compartmentId,
+          reason: 'replace-failed',
+          nodes: range.length,
+          error: errText(error),
+        },
+        input.sessionId,
+      )
+      continue
+    }
     input.stores.markCompartmentLanded(input.sessionId, compartment.compartmentId, landedSeq)
     published.push(compartment.compartmentId)
     input.journal?.info(

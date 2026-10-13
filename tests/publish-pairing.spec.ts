@@ -100,7 +100,7 @@ function compartment(partial: Partial<Compartment> & { coveredSeqs: readonly num
   } as Compartment
 }
 
-function storesFor(compartments: readonly Compartment[], landed: SessionSeq[]): AdapterStores {
+function storesFor(compartments: readonly Compartment[], landed: SessionSeq[], rejected: string[] = []): AdapterStores {
   return {
     listPendingDrops: () => [],
     getTag: () => undefined,
@@ -108,6 +108,7 @@ function storesFor(compartments: readonly Compartment[], landed: SessionSeq[]): 
     listUnlandedCompartments: () => [...compartments],
     listCompartments: () => [...compartments],
     markCompartmentLanded: (_sessionId: string, _id: number, seq: number) => { landed.push(SessionSeq(seq)) },
+    markCompartmentRejected: (_sessionId: string, id: number, reason: string) => { rejected.push(`${String(id)}:${reason}`) },
     saveBaselineState: () => {},
   } as unknown as AdapterStores
 }
@@ -236,5 +237,56 @@ describe('publish ranges close over tool pairs', () => {
     expect(warns.length).toBe(1)
     expect((warns[0]?.data as { reason?: string }).reason).toBe('baseline-in-range')
     expect(strandedResults(session)).toEqual([])
+  })
+
+  it('a replace refusal retires its draft terminally and never starves the siblings behind it', () => {
+    // 2026-10-08 live shape: the host validator rejected the publish replace
+    // and the SAME poisoned draft threw on every pass (69 errors / 2 sessions)
+    // while every draft behind it starved. Pin the containment: one refusal =
+    // one rejected draft (claims stay covered), the loop moves on.
+    const session = Session.create(SessionId('mc-publish-replace-fail'))
+    appendUser(session, 'turn one')                                          // seq 0
+    const a1 = appendAssistant(session, 1, 2, ['c1'])                        // seq 1
+    const r1 = appendResult(session, 1, 2, 'c1', 'output 1')                 // seq 2
+    appendUser(session, 'turn two')                                          // seq 3
+    const a2 = appendAssistant(session, 2, 2, ['c2'])                        // seq 4
+    const r2 = appendResult(session, 2, 2, 'c2', 'output 2')                 // seq 5
+
+    let replaces = 0
+    const poisoned = new Proxy(session, {
+      get(target, prop) {
+        if (prop === 'append') {
+          return (type: 'user/message', data: never, options?: { surfaceOp?: unknown }) => {
+            const op = options?.surfaceOp
+            const isReplace = typeof op === 'object' && op !== null && (op as { op?: string }).op === 'replace'
+            if (isReplace) {
+              replaces += 1
+              if (replaces === 1) {
+                throw new Error('surface replace: sourceEventSeqs must include every shadowed surface node; missing 1028')
+              }
+            }
+            return target.append(type, data, options as never)
+          }
+        }
+        const value = Reflect.get(target, prop, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+
+    const landed: SessionSeq[] = []
+    const rejected: string[] = []
+    const entries: Recorded[] = []
+    const result = runPass(poisoned as unknown as Session, storesFor([
+      compartment({ compartmentId: 1, coveredSeqs: [0, a1, r1] }),
+      compartment({ compartmentId: 2, coveredSeqs: [3, a2, r2] }),
+    ], landed, rejected), entries)
+
+    expect(rejected).toEqual(['1:replace-failed'])
+    expect(result.published).toEqual([2])
+    expect(landed).toHaveLength(1)
+    expect(replaces).toBeGreaterThanOrEqual(2) // the sibling got its replace; later sweeps may add more
+    const errRow = entries.find(entry => entry.level === 'error' && entry.kind === 'compartment-published')
+    expect(errRow?.summary).toContain('retired as rejected')
+    expect((errRow?.data as { reason?: string }).reason).toBe('replace-failed')
   })
 })
