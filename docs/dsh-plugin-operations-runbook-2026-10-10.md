@@ -140,7 +140,6 @@ npm run phase all                              # 阶段门 A–D
 | `memory.vectorBackfillLimit` | 24 | — | 每拍回填上限 |
 | `memory.embedBackfill` | on | **不写库**（查询侧按需嵌入） | 与回填无关，别混淆 |
 | `policy.compartmentGuardMode` | observe | 发布守卫模式（enforce=drift/no-gain 终态退役） | 行为策略非功能开关，维持保守缺省 |
-| `maintenance.evidenceVerify.mode` | off | 证据型验证（shadow=只观察，enforce=可破坏） | 高级维护模式，按需开启 |
 
 **建议打开顺序**（每步之后跑 acceptance + doctor，并做一次备份）：
 
