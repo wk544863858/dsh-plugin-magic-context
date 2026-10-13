@@ -27,6 +27,12 @@ import {
   publishGlobalCandidate,
   type DomainWritePort,
 } from '../core/global-domains.ts'
+import {
+  DEFAULT_DOMAIN_BUDGET_TOKENS,
+  DEFAULT_SHARE_CATEGORIES,
+  defaultDomainCap,
+  isDomainKind,
+} from '../core/domains.ts'
 
 import type { ProfileWriter } from '../core/profile-write.ts'
 
@@ -66,10 +72,16 @@ type CommandRegistrar = {
 }
 
 const PROFILE_USAGE = 'list | show <id> | confirm <id> | reject <id> | retire <id> --yes'
-const GLOBAL_USAGE = 'domains | members [<domain>] | enable <domain> | disable <domain> --yes | '
+const GLOBAL_USAGE = 'domains | create <domain> --kind org|machine | members [<domain>] | enable <domain> | disable <domain> --yes | '
   + 'add <domain> <identity> | remove <domain> <identity> --yes | candidates [<domain>] | '
   + 'promote <memoryId> [--domain <domain>] | detect | approve <candidateId> --yes | reject-candidate <candidateId> --yes | '
   + 'review via ctx_memory action=review_global (approval cards)'
+
+/** Flag value extractor: `--kind org` → 'org'. */
+function flagValue(tokens: readonly string[], name: string): string | undefined {
+  const index = tokens.indexOf(name)
+  return index === -1 || index + 1 >= tokens.length ? undefined : tokens[index + 1]
+}
 
 function tokenize(rawInput: string | undefined): string[] {
   return (rawInput ?? '').trim().split(/\s+/).filter(token => token.length > 0)
@@ -218,10 +230,37 @@ export function planGlobalCommand(
       return {
         kind: 'success',
         text: 'Magic Context: no global domain is defined yet. '
-          + 'Import the existing organisation membership with: node scripts/mc-import-workspace.mjs',
+          + 'Create one with: /ctx-global create <domain-id> --kind org|machine '
+          + '(e.g. /ctx-global create dir:global:org --kind org), then add members with: /ctx-global add <domain-id> <identity>',
       }
     }
     return { kind: 'success', text: ['Global domains:', ...domains.map(domain => domainLine(store, domain))].join('\n') }
+  }
+
+  if (verb === 'create') {
+    const rawTokens = tokenize(rawInput)
+    const domainId = tokens[1]
+    const kind = flagValue(rawTokens, '--kind') ?? 'org'
+    if (domainId === undefined) {
+      return { kind: 'error', text: `Magic Context: /ctx-global create needs <domain>. Usage: ${GLOBAL_USAGE}` }
+    }
+    if (!isDomainKind(kind)) {
+      return { kind: 'error', text: `Magic Context: --kind must be org or machine (got '${kind}'). Usage: ${GLOBAL_USAGE}` }
+    }
+    if (store.getDomain(domainId) !== undefined) {
+      return { kind: 'error', text: `Magic Context: domain '${domainId}' already exists.` }
+    }
+    // Born with the derived defaults, exactly like the machine bootstrap
+    // (machine-domain.ts) — the operator can edit budget/cap/allowlist later.
+    store.upsertDomain({
+      domainId,
+      kind,
+      enabled: true,
+      budgetTokens: DEFAULT_DOMAIN_BUDGET_TOKENS[kind],
+      cap: defaultDomainCap(kind),
+      shareCategories: [...DEFAULT_SHARE_CATEGORIES],
+    }, now)
+    return { kind: 'success', text: `Magic Context: domain ${domainId} (kind ${kind}) created and enabled. Add members with: /ctx-global add ${domainId} <identity>` }
   }
 
   if (verb === 'members') {

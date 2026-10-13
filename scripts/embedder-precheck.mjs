@@ -20,7 +20,7 @@ import { meanPoolNormalize } from '../src/core/embedding-local.ts'
 import { relaxedFtsQuery, sanitizeFtsQuery } from '../src/core/memory-search.ts'
 import { loadQueries, requiredTermOf, termsOf } from './retrieval-eval.mjs'
 
-const CONTRACT = join(homedir(), '.local', 'share', 'cortexkit', 'magic-context', 'context.db')
+const CORPUS = join(homedir(), '.local', 'share', 'cortexkit', 'magic-context-dsh-poc', 'memories.db')
 const LIVE_CACHE = join(homedir(), '.local', 'share', 'cortexkit', 'magic-context-dsh-poc', 'models')
 const OUT_ROOT = join(process.cwd(), '<tmp>')
 const MAX_SEQ = 512
@@ -128,7 +128,7 @@ async function main() {
   const only = onlyIdx >= 0 ? process.argv[onlyIdx + 1] : null
   const ort = await import(new URL('../vendor/onnx/ort.node.min.mjs', import.meta.url).href)
 
-  const db = new DatabaseSync(CONTRACT, { readOnly: true })
+  const db = new DatabaseSync(CORPUS, { readOnly: true })
   const NOW = Date.now()
   const active = db.prepare("SELECT id, content FROM memories WHERE status IN ('active','permanent') AND (expires_at IS NULL OR expires_at > ?)").all(NOW)
   const poolIds = active.map(row => Number(row.id))

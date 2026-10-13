@@ -128,7 +128,7 @@ function runThresholdSweep() {
   const now = Date.now()
   const config = DEFAULT_MEMORY_SCORING
   const statsById = loadStatsById()
-  const contractPath = join(homedir(), '.local', 'share', 'cortexkit', 'magic-context', 'context.db')
+  const contractPath = join(homedir(), '.local', 'share', 'cortexkit', 'magic-context-dsh-poc', 'memories.db')
   const cdb = new DatabaseSync(contractPath, { readOnly: true })
   const poolRows = cdb.prepare("SELECT id, category, importance FROM memories WHERE status IN ('active','permanent')").all()
   cdb.close()

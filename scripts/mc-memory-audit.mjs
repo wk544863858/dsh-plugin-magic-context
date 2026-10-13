@@ -18,7 +18,7 @@
  *
  * Usage:
  *   node scripts/mc-memory-audit.mjs
- *   node scripts/mc-memory-audit.mjs --memory <context.db> --adapter <dsh.db>
+ *   node scripts/mc-memory-audit.mjs --memory <memories.db> --adapter <dsh.db>
  *   node scripts/mc-memory-audit.mjs --json
  *
  * It never writes: the memory store is opened readOnly, and every statement is
@@ -36,7 +36,7 @@ const flag = (name, fallback) => {
 }
 const asJson = args.includes('--json')
 
-const memoryDb = flag('memory', join(homedir(), '.local', 'share', 'cortexkit', 'magic-context', 'context.db'))
+const memoryDb = flag('memory', join(homedir(), '.local', 'share', 'cortexkit', 'magic-context-dsh-poc', 'memories.db'))
 const adapterDb = flag('adapter', join(homedir(), '.local', 'share', 'cortexkit', 'magic-context-dsh-poc', 'dsh-magic-context.db'))
 
 /** Categories the contract defines; anything else is drift. */

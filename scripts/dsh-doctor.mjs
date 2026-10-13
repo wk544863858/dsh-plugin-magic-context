@@ -2,7 +2,7 @@
 /**
  * `dsh-doctor` — 只读的适配器健康报告。
  *
- *   node scripts/dsh-doctor.mjs [--store <context.db>] [--adapter-dir <dir>] [--json] [--host-asar <app.asar>]
+ *   node scripts/dsh-doctor.mjs [--store <memories.db>] [--adapter-dir <dir>] [--json] [--host-asar <app.asar>]
  *
  * 与上游 `magic-context doctor` 的关系：上游 doctor 是**宿主感知**的，只认
  * opencode/opencode2/pi/omp（`packages/cli/src/adapters/`），没有 DSH lane，所以

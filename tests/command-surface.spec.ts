@@ -132,10 +132,22 @@ describe('/ctx-profile', () => {
 })
 
 describe('/ctx-global', () => {
-  it('points at the import when nothing is defined yet', () => {
+  it('points at create when nothing is defined yet, and create works end to end', () => {
     const s = store()
     const result = planGlobalCommand(s, undefined, NOW)
-    expect(result.text).toContain('mc-import-workspace.mjs')
+    expect(result.text).toContain('/ctx-global create')
+
+    // The org domain has NO other creation channel since the workspace-import
+    // tool was retired (2026-10-13): this command is the only way a fresh
+    // install can ever share across projects.
+    const created = planGlobalCommand(s, 'create dir:global:org --kind org', NOW)
+    expect(created.kind).toBe('success')
+    const domain = s.getDomain('dir:global:org')
+    expect(domain).toMatchObject({ kind: 'org', enabled: true, budgetTokens: 768, cap: 30 })
+    expect(s.listDomainMembers('dir:global:org')).toEqual([])
+    // Idempotence guard: a second create refuses instead of resetting edits.
+    expect(planGlobalCommand(s, 'create dir:global:org --kind org', NOW).kind).toBe('error')
+    expect(planGlobalCommand(s, 'create dir:global:x --kind nope', NOW).kind).toBe('error')
   })
 
   it('prints the derived cap next to the budget it came from', () => {
@@ -289,7 +301,7 @@ describe('/ctx-global', () => {
 
     const unknown = planGlobalCommand(s, 'nope', NOW)
     expect(unknown.kind).toBe('error')
-    expect(unknown.text).toContain('domains | members')
+    expect(unknown.text).toContain('domains | create <domain> --kind org|machine | members')
   })
 })
 

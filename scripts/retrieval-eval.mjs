@@ -18,7 +18,7 @@ import { homedir } from 'node:os'
 import { relaxedFtsQuery, sanitizeFtsQuery } from '../src/core/memory-search.ts'
 import { defaultEmbeddingCacheDir, openLocalEmbedder } from '../src/core/embedding-local.ts'
 
-const CONTRACT = join(homedir(), '.local', 'share', 'cortexkit', 'magic-context', 'context.db')
+const CORPUS = join(homedir(), '.local', 'share', 'cortexkit', 'magic-context-dsh-poc', 'memories.db')
 const ADAPTER = join(homedir(), '.local', 'share', 'cortexkit', 'magic-context-dsh-poc', 'dsh-magic-context.db')
 const NOW = Date.now()
 const CONFIGS = [
@@ -77,7 +77,7 @@ function cosine(a, b) {
 const clamp01 = (v) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0)
 
 async function main() {
-  const db = new DatabaseSync(CONTRACT, { readOnly: true })
+  const db = new DatabaseSync(CORPUS, { readOnly: true })
   const active = db.prepare("SELECT id, content FROM memories WHERE status IN ('active','permanent') AND (expires_at IS NULL OR expires_at > ?)").all(NOW)
   const contents = new Map(active.map(row => [Number(row.id), String(row.content)]))
 

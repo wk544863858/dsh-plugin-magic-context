@@ -1188,7 +1188,7 @@ function queryDilutionState(adapterDb, now) {
       : {}
     // 契约库（只读，缺席即降级）：max id 对照、近 30 天新行、活跃池行（S(t)
     // 退役现场计算的输入）、TTL 行数。一次打开全部取齐。
-    const contractPath = join(homedir(), '.local', 'share', 'cortexkit', 'magic-context', 'context.db')
+    const contractPath = join(homedir(), '.local', 'share', 'cortexkit', 'magic-context-dsh-poc', 'memories.db')
     let contract = {}
     let poolRows = []
     let recentIdList = []
