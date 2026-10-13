@@ -222,7 +222,7 @@ export function openProfileWriter(options: ProfileWriterOptions): ProfileWriter 
     if (version !== null && version > MEMORY_SCHEMA_MAX_VERSION) {
       db.close()
       return unavailable(
-        `contract version ${String(version)} is newer than this adapter understands (${String(MEMORY_SCHEMA_MAX_VERSION)})`,
+        `corpus version ${String(version)} is newer than this adapter understands (${String(MEMORY_SCHEMA_MAX_VERSION)})`,
       )
     }
   } catch (error) {

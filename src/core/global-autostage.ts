@@ -119,7 +119,7 @@ async function classify(
 
 export async function autoStageGlobalCandidates(input: {
   store: AdapterStores
-  contractDbPath: string
+  corpusDbPath: string
   /** Per-pass ceiling on NEW candidates. */
   limit?: number
   /** Pending-queue depth at which staging pauses entirely (default 10). */
@@ -157,7 +157,7 @@ export async function autoStageGlobalCandidates(input: {
   }
   let scan: ScanRow[]
   try {
-    const db = new DatabaseSync(input.contractDbPath, { readOnly: true })
+    const db = new DatabaseSync(input.corpusDbPath, { readOnly: true })
     try {
       const categories = JSON.stringify(enabled.flatMap(domain => [...domain.shareCategories]))
       scan = db.prepare(
@@ -217,7 +217,7 @@ export async function autoStageGlobalCandidates(input: {
     }
     const result = promoteMemoryToCandidate(
       input.store,
-      { contractDbPath: input.contractDbPath, memoryId: row.id, domainId: target.domainId, now: input.now },
+      { corpusDbPath: input.corpusDbPath, memoryId: row.id, domainId: target.domainId, now: input.now },
       verdict.domain,
       verdict.reason,
     )
@@ -239,11 +239,11 @@ export async function autoStageGlobalCandidates(input: {
 
 function promoteMemoryToCandidate(
   store: AdapterStores,
-  options: { contractDbPath: string; memoryId: number; domainId: string; now: number },
+  options: { corpusDbPath: string; memoryId: number; domainId: string; now: number },
   suggestedDomain: 'machine' | 'org',
   suggestionReason: string | undefined,
 ): { readonly ok: true; readonly candidate: { readonly id: number } } | { readonly ok: false; readonly error: string } {
-  const memory = readContractMemory(options.contractDbPath, options.memoryId)
+  const memory = readCorpusMemory(options.corpusDbPath, options.memoryId)
   if (memory === undefined) return { ok: false, error: 'no memory in shared store' }
   if (memory.status !== 'active') return { ok: false, error: `memory is ${memory.status}` }
   const candidate = store.upsertGlobalCandidate(
@@ -267,12 +267,12 @@ function promoteMemoryToCandidate(
   return { ok: true, candidate: refreshed }
 }
 
-function readContractMemory(
-  contractDbPath: string,
+function readCorpusMemory(
+  corpusDbPath: string,
   memoryId: number,
 ): { readonly id: number; readonly content: string; readonly category: string; readonly normalizedHash: string; readonly projectPath: string; readonly status: string } | undefined {
   try {
-    const db = new DatabaseSync(contractDbPath, { readOnly: true })
+    const db = new DatabaseSync(corpusDbPath, { readOnly: true })
     try {
       const row = db.prepare(
         'SELECT id, content, category, normalized_hash, project_path, status FROM memories WHERE id = ?',

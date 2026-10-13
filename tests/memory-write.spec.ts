@@ -708,7 +708,7 @@ describe('agent write path (contract §11)', () => {
     try {
       // The status also reports the contract version it read (task-9's fence);
       // the open itself must still be a plain success.
-      expect(writer.status).toMatchObject({ ok: true, contractVersion: SCHEMA_VERSION })
+      expect(writer.status).toMatchObject({ ok: true, corpusVersion: SCHEMA_VERSION })
       expect(writer.status.readOnly).toBeUndefined()
       // WAL is database-level and persistent, so a separate connection sees it.
       expect(one<{ journal_mode: string }>(path, 'PRAGMA journal_mode')?.journal_mode).toBe('wal')

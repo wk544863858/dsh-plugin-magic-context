@@ -1,12 +1,11 @@
 /**
- * The project-memory bridge — Magic Context's shared `context.db`, read by the
- * DSH adapter.
+ * The project-memory bridge — the plugin's OWN corpus (`memories.db`, cut
+ * over from the legacy shared store 2026-10-13), read by the DSH adapter.
  *
- * Facts this module is built on (verified against Magic Context's storage
- * layer; the contract is duplicated here on purpose, so the adapter can ship
- * without importing Magic Context's TypeScript):
+ * Facts this module is built on (shape inherited verbatim from Magic
+ * Context's v95 storage layer; the schema is OURS now — see corpus-store.ts):
  *  - `memories` has NO `harness` column: project memories are shared across
- *    hosts (OpenCode, Pi, DSH) — that is the whole point of reading them;
+ *    sessions and hosts on this machine through the corpus;
  *  - `project_path` stores an IDENTITY (`git:<root-commit-sha>` or
  *    `dir:<hash>`), not a path; legacy rows may still hold raw paths, so the
  *    bridge matches the identity and the normalized path;

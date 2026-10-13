@@ -127,7 +127,7 @@ describe('autoStageGlobalCandidates', () => {
     ])
     const result = await autoStageGlobalCandidates({
       store: s,
-      contractDbPath: contract,
+      corpusDbPath: contract,
       now: NOW,
       llm: classifyLlm({ '本机 Python 统一走 uv。': { domain: 'machine', reason: 'machine env' } }),
       route: { provider: 'mock', model: 'mock' },
@@ -147,7 +147,7 @@ describe('autoStageGlobalCandidates', () => {
     ])
     const result = await autoStageGlobalCandidates({
       store: s,
-      contractDbPath: contract,
+      corpusDbPath: contract,
       now: NOW,
       llm: classifyLlm({ 'project-a/project-b 跨仓库推送必须严格串行。': { domain: 'org', reason: 'org workflow' } }),
       route: { provider: 'mock', model: 'mock' },
@@ -163,7 +163,7 @@ describe('autoStageGlobalCandidates', () => {
     ])
     const result = await autoStageGlobalCandidates({
       store: s,
-      contractDbPath: contract,
+      corpusDbPath: contract,
       now: NOW,
       llm: classifyLlm({ '本项目专属的目录约定。': { domain: 'project', reason: 'project-specific' } }),
       route: { provider: 'mock', model: 'mock' },
@@ -181,7 +181,7 @@ describe('autoStageGlobalCandidates', () => {
     ])
     const result = await autoStageGlobalCandidates({
       store: s,
-      contractDbPath: contract,
+      corpusDbPath: contract,
       now: NOW,
       llm: classifyLlm({}),
       route: { provider: 'mock', model: 'mock' },
@@ -195,7 +195,7 @@ describe('autoStageGlobalCandidates', () => {
     const contract = makeContract([
       { id: 15, content: '不该入队的。', category: 'CONSTRAINTS', seen: 2 },
     ])
-    const result = await autoStageGlobalCandidates({ store: s, contractDbPath: contract, now: NOW })
+    const result = await autoStageGlobalCandidates({ store: s, corpusDbPath: contract, now: NOW })
     expect(result.staged).toHaveLength(0)
     expect(result.reason).toBe('llm-unavailable')
     expect(pending(s, 'dir:global:machine')).toBe(0)
@@ -208,7 +208,7 @@ describe('autoStageGlobalCandidates', () => {
     ])
     const result = await autoStageGlobalCandidates({
       store: s,
-      contractDbPath: contract,
+      corpusDbPath: contract,
       now: NOW,
       llm: classifyLlm({ '组织规则。': { domain: 'org', reason: 'org' } }),
       route: { provider: 'mock', model: 'mock' },
@@ -225,7 +225,7 @@ describe('autoStageGlobalCandidates', () => {
     ])
     const result = await autoStageGlobalCandidates({
       store: s,
-      contractDbPath: contract,
+      corpusDbPath: contract,
       now: NOW,
       llm: classifyLlm({ '机器架构事实。': { domain: 'machine', reason: 'machine' } }),
       route: { provider: 'mock', model: 'mock' },
@@ -248,7 +248,7 @@ describe('autoStageGlobalCandidates', () => {
     }
     const result = await autoStageGlobalCandidates({
       store: s,
-      contractDbPath: contract,
+      corpusDbPath: contract,
       now: NOW,
       llm: classifyLlm({}),
       route: { provider: 'mock', model: 'mock' },
@@ -264,9 +264,9 @@ describe('autoStageGlobalCandidates', () => {
     ])
     const llm = classifyLlm({ '复现过的约束。': { domain: 'machine', reason: 'machine' } })
     const route = { provider: 'mock', model: 'mock' }
-    const first = await autoStageGlobalCandidates({ store: s, contractDbPath: contract, now: NOW, llm, route })
+    const first = await autoStageGlobalCandidates({ store: s, corpusDbPath: contract, now: NOW, llm, route })
     expect(first.staged).toHaveLength(1)
-    const second = await autoStageGlobalCandidates({ store: s, contractDbPath: contract, now: NOW + 1, llm, route })
+    const second = await autoStageGlobalCandidates({ store: s, corpusDbPath: contract, now: NOW + 1, llm, route })
     expect(second.staged).toHaveLength(0)
     expect(pending(s, 'dir:global:machine')).toBe(1)
   })
@@ -278,7 +278,7 @@ describe('autoStageGlobalCandidates', () => {
     )
     const result = await autoStageGlobalCandidates({
       store: s,
-      contractDbPath: contract,
+      corpusDbPath: contract,
       now: NOW,
       limit: 2,
       llm: classifyLlm({
@@ -302,13 +302,13 @@ describe('autoStageGlobalCandidates', () => {
     )
     const route = { provider: 'mock', model: 'mock' }
     // Fill machine to the guard.
-    const fill = await autoStageGlobalCandidates({ store: s, contractDbPath: contract, now: NOW, llm, route, limit: 12, maxPending: 10 })
+    const fill = await autoStageGlobalCandidates({ store: s, corpusDbPath: contract, now: NOW, llm, route, limit: 12, maxPending: 10 })
     expect(fill.staged).toHaveLength(10)
     expect(pending(s, 'dir:global:machine')).toBe(10)
     // Second pass: machine is full, so the machine-classified candidates are
     // skipped (NOT staged, NOT downgraded to org); the pass itself keeps going
     // because the global queue is not uniformly full.
-    const paused = await autoStageGlobalCandidates({ store: s, contractDbPath: contract, now: NOW + 1, llm, route, maxPending: 10 })
+    const paused = await autoStageGlobalCandidates({ store: s, corpusDbPath: contract, now: NOW + 1, llm, route, maxPending: 10 })
     expect(paused.staged).toHaveLength(0)
     expect(paused.skipped).toContainEqual({ memoryId: 30, reason: 'queue-full' })
     expect(pending(s, 'dir:global:machine')).toBe(10)
@@ -322,7 +322,7 @@ describe('autoStageGlobalCandidates', () => {
     ])
     const result = await autoStageGlobalCandidates({
       store: s,
-      contractDbPath: contract,
+      corpusDbPath: contract,
       now: NOW,
       llm: classifyLlm({}),
       route: { provider: 'mock', model: 'mock' },

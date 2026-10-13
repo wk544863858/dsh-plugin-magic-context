@@ -37,7 +37,7 @@ export interface SurfaceDeps {
    * (`detect` scans it, `promote` resolves a memory id). Absent when the memory
    * lane is unavailable, in which case those two say so instead of guessing.
    */
-  readonly contractDbPath?: string
+  readonly corpusDbPath?: string
   /**
    * WP9: the only way `/ctx-global approve` becomes visible to other projects.
    * Absent (read-only or fenced contract) ⇒ approving says so instead of
@@ -201,7 +201,7 @@ export function planGlobalCommand(
   store: AdapterStores,
   rawInput: string | undefined,
   now: number,
-  contractDbPath?: string,
+  corpusDbPath?: string,
   publisher?: DomainWritePort,
 ): CommandResult {
   // Flags must be read from the RAW tokens: stripFlags removes every
@@ -281,10 +281,10 @@ export function planGlobalCommand(
   }
 
   if (verb === 'detect') {
-    if (contractDbPath === undefined) {
+    if (corpusDbPath === undefined) {
       return { kind: 'error', text: 'Magic Context: the shared store is unavailable, so recurrence cannot be scanned.' }
     }
-    const scan = detectGlobalCandidates(store, { contractDbPath, now })
+    const scan = detectGlobalCandidates(store, { corpusDbPath, now })
     if (scan.hashes === 0) {
       return {
         kind: 'success',
@@ -306,7 +306,7 @@ export function planGlobalCommand(
     if (memoryId === undefined) {
       return { kind: 'error', text: `Magic Context: /ctx-global promote needs a memory id. Usage: ${GLOBAL_USAGE}` }
     }
-    if (contractDbPath === undefined) {
+    if (corpusDbPath === undefined) {
       return { kind: 'error', text: 'Magic Context: the shared store is unavailable, so a memory cannot be read.' }
     }
     const domainFlag = rawTokens.indexOf('--domain')
@@ -319,7 +319,7 @@ export function planGlobalCommand(
     }
     const domainId = domainValue ?? ORG_DOMAIN_ID
     const promoted = promoteMemoryToCandidate(store, {
-      contractDbPath,
+      corpusDbPath,
       memoryId,
       domainId,
       now,
@@ -423,6 +423,6 @@ export function registerCtxGlobalCommand(ctx: Context, deps: SurfaceDeps): void 
     name: 'ctx-global',
     description: 'Magic Context: global domains — inspect, activate, and manage their membership.',
     input: { hint: GLOBAL_USAGE },
-    handler: invocation => planGlobalCommand(deps.stores, invocation.rawInput, Date.now(), deps.contractDbPath, deps.publisher),
+    handler: invocation => planGlobalCommand(deps.stores, invocation.rawInput, Date.now(), deps.corpusDbPath, deps.publisher),
   })
 }

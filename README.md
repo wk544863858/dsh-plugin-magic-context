@@ -24,7 +24,7 @@ Magic Context 的核心思想：**上下文是可管理的资产**——旧的�
 | **压力调度** | 持久 usage（含 cache 读写）→ 压力 = 未缓存输入 + cache 读 + cache 写 ÷ `contextWindow`；execute/defer 决策（默认 65% 阈值、5 min cache TTL、85% 强制带）；`CONTEXT_WINDOW_EXCEEDED` 紧急回收 + retry；reduce-guidance 分级引导（60k/25k 地板、20/40/60% 阶梯） |
 | **historian（带外摘要）** | 一次性 LLM 调用重放真前缀（保 KV cache）→ 四层摘要 p1–p4 + importance + facts/events，**只写 store 不动线缆**；execute 带内发布为 `[compacted §C<n>§]` 范围替换（引用原事件，可恢复）；`/ctx-recomp` 可原地重做已压缩历史 |
 | **m[0]/m[1] 基线** | 合成 notice 节点承载冻结基线 + 增量车道（`<new-memories>` / `<memory-updates>` / `<user-profile>`）；每类增量有独立水位（`maxMemoryId`、mutation 水位、profile 水位 + digest），**新记忆永不重建缓存前缀**；内容未变则零变更 |
-| **共享项目记忆** | 打开 Magic Context 共享 `context.db`（版本 fence v95）：身份自动推导（`git:<root-sha>` / `dir:<hash>`，未配置用会话 cwd，工作区与共享类别从库内自动解析）；注入 m[0] + `ctx_memory` 检索与**读写维护**；historian facts 自动提升；FTS 0.7/0.3 融合向量检索 |
+| **项目记忆（自有语料库）** | 插件自有 `memories.db`（2026-10-13 起与上游 MC 数据库彻底分家，无共享无兼容义务）：身份自动推导（`git:<root-sha>` / `dir:<hash>`，未配置用会话 cwd，域共享从适配器域表解析）；注入 m[0] + `ctx_memory` 检索与**读写维护**；historian facts 自动提升；FTS 0.7/0.3 融合向量检索 |
 | **本地向量车道** | `vendor/onnx/` 内置 onnxruntime-web WASM 后端（27 MB，MIT，Microsoft），无原生编译、无额外依赖；首次 `embed()` 从 huggingface.co 下载 MiniLM（~90 MB，失败自动切 hf-mirror.com），缓存在插件数据目录 `models/`；检索候选内嵌补分 + 维护 tick 向量回填；任何失败 fail-open 降级 FTS，journal 有可读 warn |
 | **全局域 + 用户画像** | 机器 / 组织域：**入队可自动化**（维护 tick `autoStage`、LLM 域分类），**发布永远是人**（`ctx_memory review_global` 审批卡、`/ctx-global approve`）；用户画像 render / collect / review 三开关分离——读默认开、写共享库的半边默认关 |
 | **维护 tick（MC dreamer 切片）** | 每 30 min：TTL 归档（走 archive 契约动作）→ 批量 LLM verify（keep / update / archive）→ 向量回填 → 全域候选入队 |
@@ -164,12 +164,11 @@ historian 与基线（`historian` —— 含 start/done/failed 配对与 LLM 用
 
 ```sh
 npm test               # vitest run（72 个 spec）
-npm run gate           # 全门禁：typecheck + 套件 + build + 验收 + 记忆审计 + records + 契约冻结
-npm run doctor         # 只读健康报告：fence 余量 / 事件车道心跳 / 悬空 run / embedding 车道
+npm run gate           # 全门禁：typecheck + 套件 + build + 验收 + 记忆审计 + records
+npm run doctor         # 只读健康报告：corpus fence / 事件车道心跳 / 悬空 run / embedding 车道
 
 node scripts/mc-report.mjs --days 7 [--json] [--session <id>]   # journal 复盘报告
-node scripts/mc-acceptance.mjs [--hours 72 --json]              # 契约验收，失败 exit 1
-npm run freeze         # 共享契约库 digest 漂移检测（对 docs/contract-freeze.json）
+node scripts/mc-acceptance.mjs [--hours 72 --json]              # 语料库验收，失败 exit 1
 npm run phase          # 阶段门：跑某一阶段的套件并给出裁决与盲区
 ```
 
@@ -179,10 +178,8 @@ pass" / "historian 从未运行" / "存在 error" / "journal 最新事件超过 
 
 `scripts/` 专项工具：检索权重 A/B（`retrieval-eval`）、S(t) 排序离线 diff（`score-diff`）、
 稀释与 fold 仪表（`report-dilution`）、域命中统计（`report-hits`）、historian 失败分类
-（`report-classify`）、向量模型预检（`embedder-precheck`）、契约库迁移演练（`migration-drill`）、
-域成员迁入适配器表（`mc-import-workspace`）、契约库模板生成（`make-contract-template`）、
-参考种子重建（`npm run build:seeds`）、面板分类校验（`mc-records-check`）、多语言检查
-（`npm run check:i18n`）。
+（`report-classify`）、向量模型预检（`embedder-precheck`）、参考种子重建（`npm run build:seeds`）、
+面板分类校验（`mc-records-check`）、多语言检查（`npm run check:i18n`）。
 
 ## 架构
 
@@ -202,16 +199,17 @@ src/
 
 - **能力探测 fail-loud**：`probeDshSeams` 启动期校验接缝可用性，不可用即抛错，绝不静默假装
   在管理上下文；
-- **版本 fence**：自有库 schema 链当前 **v10**（v1→v10 前向迁移，库比新即拒开）；共享契约库
-  fence **v95**（`MEMORY_SCHEMA_MAX_VERSION`，对齐 MC 的 `LATEST_SUPPORTED_VERSION`），超出即
-  读路径拒绝、写路径转只读并响亮告警；
+- **版本 fence**：适配器库 schema 链当前 **v10**（前向迁移，库比新即拒开）；**自有语料库**
+  `memories.db` 版本线继承 **v95** 起点（2026-10-13 切换，续号归本插件；`MEMORY_SCHEMA_MAX_VERSION`
+  守自有迁移线），超出即读路径拒绝、写路径转只读并响亮告警；
 - **测试即探针**：集成测试同时是接缝契约测试——DSH 升级后重跑，破坏点精确定位到 `src/dsh/`；
 - **双库结构**：
   - **适配器库** `~/.local/share/cortexkit/magic-context-dsh-poc/dsh-magic-context.db`
     （tags / usage / pending_drops / compartments / baseline / domains / queues / journal…，
     schema v10）；
-  - **共享契约库** `~/.local/share/cortexkit/magic-context/context.db`（与上游 magic-context
-    共用的记忆库；schema 经 `docs/contract-freeze.json` 冻结，`npm run freeze` 验证漂移）；
+  - **自有语料库** `~/.local/share/cortexkit/magic-context-dsh-poc/memories.db`
+    （项目记忆 + 全域行 + 画像 + 向量；legacy `context.db` 已封存不读——2026-10-13 硬切换，
+    与上游只做功能跟进、无存储兼容义务）；
 - **上游对齐账本**：与 OpenCode / Pi 两个上游适配器的逐条有效行为对齐与刻意差异见
   [PARITY.md](PARITY.md)（aligned / host-imposed / intentional 三种裁决，每条引用宿主文件）。
 

@@ -35,11 +35,11 @@ export interface MagicContextDshConfig {
    */
   sessionNotices?: boolean
   /**
-   * Project-memory recall from Magic Context's shared `context.db`. Off when
-   * omitted; reads only (writes stay with Magic Context's own storage layer).
+   * Project-memory recall from the plugin's own corpus (`memories.db`,
+   * cut over from the legacy shared store 2026-10-13). Off when omitted.
    */
   memory?: {
-    /** Explicit path to context.db; defaults to the CortexKit data directory. */
+    /** Explicit corpus path; defaults into the adapter's own data directory. */
     dbPath?: string
     /** Master switch for the whole memory lane (default true when memory is present). */
     enabled?: boolean

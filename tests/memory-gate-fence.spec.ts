@@ -197,7 +197,7 @@ describe('the storage-contract fence (task-9 ③)', () => {
     const writer = openMemoryWriter({ dbPath: path, logger, now: () => T0 })
     try {
       expect(writer.status.ok).toBe(true)
-      expect(writer.status.contractVersion).toBe(NEWER)
+      expect(writer.status.corpusVersion).toBe(NEWER)
       expect(writer.status.readOnly).toBe(true)
       expect(writer.status.detail).toContain(`v${String(NEWER)}`)
       expect(writer.status.detail).toContain(`v${String(SUPPORTED)}`)
@@ -215,7 +215,7 @@ describe('the storage-contract fence (task-9 ③)', () => {
       ] as const) {
         expect(result.ok, `${operation} must be refused`).toBe(false)
         if (result.ok) throw new Error('unreachable')
-        expect(result.reason).toBe('contract-version-unsupported')
+        expect(result.reason).toBe('corpus-version-unsupported')
         expect(result.detail).toContain('READ-ONLY')
         expect(result.detail).toContain(`v${String(NEWER)}`)
       }
@@ -246,7 +246,7 @@ describe('the storage-contract fence (task-9 ③)', () => {
     const writer = openMemoryWriter({ dbPath: path, logger: silentLogger, now: () => T0 })
     try {
       expect(writer.status.ok).toBe(true)
-      expect(writer.status.contractVersion).toBe(SUPPORTED)
+      expect(writer.status.corpusVersion).toBe(SUPPORTED)
       expect(writer.status.readOnly).toBeUndefined()
 
       const result = writer.writeMemory({ identity: OWN, category: 'NAMING', content: 'the supported contract writes' })
@@ -261,7 +261,7 @@ describe('the storage-contract fence (task-9 ③)', () => {
     const path = createDb(SUPPORTED - 1)
     const writer = openMemoryWriter({ dbPath: path, logger: silentLogger, now: () => T0 })
     try {
-      expect(writer.status.contractVersion).toBe(SUPPORTED - 1)
+      expect(writer.status.corpusVersion).toBe(SUPPORTED - 1)
       expect(writer.status.readOnly).toBeUndefined()
 
       const result = writer.writeMemory({ identity: OWN, category: 'NAMING', content: 'a lagging store still writes' })
@@ -279,7 +279,7 @@ describe('the storage-contract fence (task-9 ③)', () => {
     const writer = openMemoryWriter({ dbPath: path, logger: silentLogger, now: () => T0 })
     try {
       expect(writer.status.ok).toBe(true)
-      expect(writer.status.contractVersion).toBeUndefined()
+      expect(writer.status.corpusVersion).toBeUndefined()
       expect(writer.status.readOnly).toBeUndefined()
       expect(writer.writeMemory({ identity: OWN, category: 'NAMING', content: 'legacy write' }).ok).toBe(true)
     } finally {
@@ -301,7 +301,7 @@ describe('the storage-contract fence (task-9 ③)', () => {
         { action: 'write', category: 'NAMING', content: 'must not land' },
         { callId: 'c1', name: 'ctx_memory', agent: { session: { id: 'ses-fence', header: { cwd: 'D:/work' } } } },
       ) as { outcome?: string; detail?: string }
-      expect(result.outcome).toBe('write refused (contract-version-unsupported).')
+      expect(result.outcome).toBe('write refused (corpus-version-unsupported).')
       expect(result.detail).toContain('READ-ONLY')
       expect(count(path, 'SELECT COUNT(*) AS c FROM memories')).toBe(0)
     } finally {
@@ -392,7 +392,7 @@ describe('explicit-retrieval telemetry (task-9 ②)', () => {
       const outcome = writer.recordRetrieval({ identity: OWN, ids: [id] })
       expect(outcome.ok).toBe(false)
       if (outcome.ok) throw new Error('unreachable')
-      expect(outcome.reason).toBe('contract-version-unsupported')
+      expect(outcome.reason).toBe('corpus-version-unsupported')
       expect(telemetry(path, id).retrieval_count).toBe(0)
       expect(telemetry(path, id).last_retrieved_at).toBeNull()
     } finally {

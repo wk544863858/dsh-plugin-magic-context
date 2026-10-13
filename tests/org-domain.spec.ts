@@ -22,7 +22,7 @@ import {
   approvalGate,
   detectGlobalCandidates,
   promoteMemoryToCandidate,
-  readContractMemory,
+  readCorpusMemory,
   scanForCredentials,
 } from '../src/core/global-domains.ts'
 
@@ -135,7 +135,7 @@ describe('the recurrence scan (a measurement, not the source)', () => {
       { id: 2, projectPath: 'git:beta', content: 'DB access goes through the bastion', normalizedHash: 'shared' },
       { id: 3, projectPath: 'git:alpha', content: 'local-only note', normalizedHash: 'unique' },
     ])
-    const scan = detectGlobalCandidates(store, { contractDbPath: contract, now: NOW })
+    const scan = detectGlobalCandidates(store, { corpusDbPath: contract, now: NOW })
     expect(scan.hashes).toBe(1)
     expect(scan.upserted).toBe(1)
     const candidate = store.listGlobalCandidates({ domainId: ORG_DOMAIN_ID })[0]!
@@ -154,11 +154,11 @@ describe('the recurrence scan (a measurement, not the source)', () => {
       { id: 3, projectPath: 'git:alpha', content: 'DB_PASSWORD=hunter2', normalizedHash: 'secret' },
       { id: 4, projectPath: 'git:beta', content: 'DB_PASSWORD=hunter2', normalizedHash: 'secret' },
     ])
-    const first = detectGlobalCandidates(store, { contractDbPath: contract, now: NOW })
+    const first = detectGlobalCandidates(store, { corpusDbPath: contract, now: NOW })
     expect(first.hashes).toBe(2)
     expect(first.upserted).toBe(1)
     expect(first.blocked).toBe(1)
-    const second = detectGlobalCandidates(store, { contractDbPath: contract, now: NOW + 1 })
+    const second = detectGlobalCandidates(store, { corpusDbPath: contract, now: NOW + 1 })
     expect(second.upserted).toBe(1)
     expect(store.listGlobalCandidates({ domainId: ORG_DOMAIN_ID })).toHaveLength(1)
     expect(store.listGlobalCandidates({ domainId: ORG_DOMAIN_ID })[0]!.content).not.toContain('hunter2')
@@ -172,7 +172,7 @@ describe('the recurrence scan (a measurement, not the source)', () => {
       { id: 3, projectPath: 'git:alpha', content: 'archived', normalizedHash: 'archived', status: 'archived' },
       { id: 4, projectPath: 'git:beta', content: 'archived', normalizedHash: 'archived', status: 'archived' },
     ])
-    const scan = detectGlobalCandidates(store, { contractDbPath: contract, now: NOW })
+    const scan = detectGlobalCandidates(store, { corpusDbPath: contract, now: NOW })
     expect(scan.hashes).toBe(0)
     expect(store.listGlobalCandidates()).toEqual([])
   })
@@ -184,7 +184,7 @@ describe('human promotion', () => {
     const contract = makeContract([
       { id: 7, projectPath: 'git:alpha', content: 'The bastion is the only DB entry point', category: 'CONSTRAINTS' },
     ])
-    const result = promoteMemoryToCandidate(store, { contractDbPath: contract, memoryId: 7, now: NOW })
+    const result = promoteMemoryToCandidate(store, { corpusDbPath: contract, memoryId: 7, now: NOW })
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.candidate.sourceMemoryId).toBe(7)
@@ -197,7 +197,7 @@ describe('human promotion', () => {
   it('refuses a credential body and says what to do instead', () => {
     const store = makeStore()
     const contract = makeContract([{ id: 8, projectPath: 'git:alpha', content: 'prod password: hunter2' }])
-    const result = promoteMemoryToCandidate(store, { contractDbPath: contract, memoryId: 8, now: NOW })
+    const result = promoteMemoryToCandidate(store, { corpusDbPath: contract, memoryId: 8, now: NOW })
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.error).toContain('POINTERS')
@@ -211,21 +211,21 @@ describe('human promotion', () => {
       { id: 10, projectPath: 'dir:global:org', content: 'already shared' },
       { id: 11, projectPath: 'git:alpha', content: 'old', status: 'archived' },
     ])
-    const missing = promoteMemoryToCandidate(store, { contractDbPath: contract, memoryId: 404, now: NOW })
+    const missing = promoteMemoryToCandidate(store, { corpusDbPath: contract, memoryId: 404, now: NOW })
     expect(missing.ok).toBe(false)
     if (!missing.ok) expect(missing.error).toContain('no memory #404')
 
-    const global = promoteMemoryToCandidate(store, { contractDbPath: contract, memoryId: 10, now: NOW })
+    const global = promoteMemoryToCandidate(store, { corpusDbPath: contract, memoryId: 10, now: NOW })
     expect(global.ok).toBe(false)
     if (!global.ok) expect(global.error).toContain('already lives in a global domain')
 
-    const retired = promoteMemoryToCandidate(store, { contractDbPath: contract, memoryId: 11, now: NOW })
+    const retired = promoteMemoryToCandidate(store, { corpusDbPath: contract, memoryId: 11, now: NOW })
     expect(retired.ok).toBe(false)
     if (!retired.ok) expect(retired.error).toContain('archived, not active')
 
     const unknown = promoteMemoryToCandidate(
       store,
-      { contractDbPath: contract, memoryId: 9, domainId: 'dir:global:nowhere', now: NOW },
+      { corpusDbPath: contract, memoryId: 9, domainId: 'dir:global:nowhere', now: NOW },
     )
     expect(unknown.ok).toBe(false)
     if (!unknown.ok) expect(unknown.error).toContain('unknown domain')
@@ -233,9 +233,9 @@ describe('human promotion', () => {
 
   it('reads a contract memory without touching it', () => {
     const contract = makeContract([{ id: 12, projectPath: 'git:alpha', content: 'hello', category: 'NAMING' }])
-    const memory = readContractMemory(contract, 12)!
+    const memory = readCorpusMemory(contract, 12)!
     expect(memory.category).toBe('NAMING')
-    expect(readContractMemory(contract, 999)).toBeUndefined()
+    expect(readCorpusMemory(contract, 999)).toBeUndefined()
   })
 })
 
@@ -245,7 +245,7 @@ describe('the approval gate', () => {
     const contract = makeContract([
       { id: 20, projectPath: 'git:alpha', content: 'org-level rule', category: 'CONSTRAINTS' },
     ])
-    const promoted = promoteMemoryToCandidate(store, { contractDbPath: contract, memoryId: 20, now: NOW })
+    const promoted = promoteMemoryToCandidate(store, { corpusDbPath: contract, memoryId: 20, now: NOW })
     expect(promoted.ok).toBe(true)
     if (!promoted.ok) return
     expect(approvalGate(store, promoted.candidate).ok).toBe(true)
@@ -285,7 +285,7 @@ describe('the approval gate', () => {
     const contract = makeContract([
       { id: 21, projectPath: 'git:alpha', content: 'naming rule', category: 'NAMING' },
     ])
-    const promoted = promoteMemoryToCandidate(store, { contractDbPath: contract, memoryId: 21, now: NOW })
+    const promoted = promoteMemoryToCandidate(store, { corpusDbPath: contract, memoryId: 21, now: NOW })
     expect(promoted.ok).toBe(true)
     if (!promoted.ok) return
     const gate = approvalGate(store, promoted.candidate)

@@ -64,8 +64,8 @@ memory-promote         promoted 9 fact(s) into project memory
 | v94 副本：写入 | `{ok:true, id:910, created:true, seenCount:1}` |
 | v94 副本：同内容再写（去重） | `{ok:true, id:910, created:false, seenCount:2}`——同 id、不新增行 |
 | v94 副本：`recordRetrieval` | `retrieval_count 0→1`、`last_retrieved_at` 写入、**`updated_at` 不变**、`seen_count` 不变 |
-| v95 副本：状态 | `{ok:true, readOnly:true, contractVersion:95, detail:"…READ-ONLY"}` |
-| v95 副本：write/update/archive/recordRetrieval | 全部 `{ok:false, reason:'contract-version-unsupported'}`，**不抛错** |
+| v95 副本：状态 | `{ok:true, readOnly:true, corpusVersion:95, detail:"…READ-ONLY"}` |
+| v95 副本：write/update/archive/recordRetrieval | 全部 `{ok:false, reason:'corpus-version-unsupported'}`，**不抛错** |
 | v95 副本：读 | `listMemories` 66 行、`getMemory(909)` 正常——读路径不受影响 |
 | v95 副本：库内容 | 探针行 0——被拒的写入没有落任何数据 |
 

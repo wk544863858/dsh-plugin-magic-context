@@ -142,13 +142,14 @@ by the loader (upgrade guide §3.3).
 
 ### B8. Storage boundary
 
-One shared MC database (schema v95) read through a read-only connection plus
-contract-shaped writes; `MEMORY_SCHEMA_MAX_VERSION = 95`
-(`src/core/memory-bridge.ts:42`) makes the write path degrade to read-only when
-the store is newer, and the adapter's own store carries its own
-`SCHEMA_VERSION = 6` (`src/core/stores.ts:21`). v95 is additive DDL
-(`temporal_decisions`, `git_commit_fts_rowid_map`, covering indexes) with no
-`ALTER TABLE` on `memories`, so the 29-column contract is untouched.
+Superseded 2026-10-13: the adapter owns its corpus. `memories.db` (own
+data dir, shape inherited verbatim from the upstream v95 store) is read and
+written directly; `MEMORY_SCHEMA_MAX_VERSION = 95`
+(`src/core/memory-bridge.ts`) guards the plugin's OWN migration lineage —
+a corpus newer than the build degrades the write path to read-only. The
+legacy shared `context.db` is never opened. The adapter's own runtime store
+keeps its `SCHEMA_VERSION` chain (`src/core/stores.ts`). Upstream MC is
+followed for FEATURES only; there is no storage-compatibility obligation.
 
 ### B9. Historian budget shape
 

@@ -34,8 +34,8 @@
  *    compartment, out of band, only writing a store row;
  *  - the execute band publishes compartments as `[compacted §C<n>§]` range
  *    replacements and refreshes the baseline node it composes;
- *  - project memories are recalled from Magic Context's shared `context.db`
- *    into m[0] (read-only by default);
+ *  - project memories are recalled from the plugin's own corpus (memories.db)
+ *    into m[0] (read-only);
  *  - a custom CompactionEngine occupies the `ctx.compaction` seam so no
  *    checkpoint-summarizing engine competes with the reclaim lanes.
  */
@@ -575,7 +575,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
               ? 'dir:global:org'
               : input.domain === 'machine' ? 'dir:global:machine' : input.domain
             const promoted = promoteMemoryToCandidate(stores, {
-              contractDbPath: memoryRecall.dbPath,
+              corpusDbPath: memoryRecall.dbPath,
               memoryId: input.memoryId,
               domainId,
               now: Date.now(),
@@ -638,7 +638,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     // queue and the domains.
     registerCtxProfileCommand(ctx, {
       stores,
-      ...memoryRecall === undefined ? {} : { contractDbPath: memoryRecall.dbPath },
+      ...memoryRecall === undefined ? {} : { corpusDbPath: memoryRecall.dbPath },
       // WP12/DoD: retiring a profile row is the user domain's only write from
       // the command surface. Without the writer the command says so instead of
       // reporting a retirement that never happened.
@@ -646,7 +646,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     })
     registerCtxGlobalCommand(ctx, {
       stores,
-      ...memoryRecall === undefined ? {} : { contractDbPath: memoryRecall.dbPath },
+      ...memoryRecall === undefined ? {} : { corpusDbPath: memoryRecall.dbPath },
       // WP9: approving a candidate publishes it. Without the writer there is no
       // way to make it visible, and the command says so rather than marking a
       // candidate approved that nobody can see.

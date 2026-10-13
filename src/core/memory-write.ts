@@ -116,7 +116,7 @@ export type MemoryWriteFailureReason =
    * Magic Context has moved on, so the adapter downgrades to read-only rather
    * than writing rows a newer storage layer may not accept.
    */
-  | 'contract-version-unsupported'
+  | 'corpus-version-unsupported'
   /**
    * The contract lacks the table this write needs (a trimmed or older shape,
    * e.g. no `memory_embeddings`). Distinct from a version problem: the store is
@@ -241,10 +241,10 @@ export interface MemoryWriterStatus {
   readonly ok: boolean
   readonly detail?: string
   /** MC's `schema_migrations` version observed at open (undefined = table absent). */
-  readonly contractVersion?: number
+  readonly corpusVersion?: number
   /**
-   * True when `contractVersion > MEMORY_SCHEMA_MAX_VERSION`: every write is
-   * refused with `contract-version-unsupported`, reads keep working.
+   * True when `corpusVersion > MEMORY_SCHEMA_MAX_VERSION`: every write is
+   * refused with `corpus-version-unsupported`, reads keep working.
    */
   readonly readOnly?: boolean
 }
@@ -718,7 +718,7 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
     // to read-only — the adapter must not write rows a storage layer it does
     // not understand may interpret differently. An absent table means a legacy
     // or trimmed database, which keeps today's (unfenced) behaviour.
-    const contractVersion = (() => {
+    const corpusVersion = (() => {
       if (!tables.has('schema_migrations')) return undefined
       try {
         const row = db.prepare('SELECT MAX(version) AS version FROM schema_migrations WHERE version < 10000')
@@ -728,10 +728,10 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
         return undefined
       }
     })()
-    const contractFenced = contractVersion !== undefined && contractVersion > MEMORY_SCHEMA_MAX_VERSION
-    if (contractFenced) {
+    const corpusFenced = corpusVersion !== undefined && corpusVersion > MEMORY_SCHEMA_MAX_VERSION
+    if (corpusFenced) {
       options.logger.warn(
-        `magic-context memory: contract v${String(contractVersion)} is newer than the adapter understands `
+        `magic-context memory: corpus v${String(corpusVersion)} is newer than the adapter understands `
           + `(v${String(MEMORY_SCHEMA_MAX_VERSION)}); the writer is READ-ONLY and every write is refused`,
       )
     }
@@ -824,8 +824,8 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
      */
     const fenceRefusal = (operation: string): MemoryWriteFailure => refusal(
       operation,
-      'contract-version-unsupported',
-      `Magic Context schema v${String(contractVersion)} is newer than the adapter understands `
+      'corpus-version-unsupported',
+      `corpus schema v${String(corpusVersion)} is newer than the adapter understands `
         + `(v${String(MEMORY_SCHEMA_MAX_VERSION)}); the memory write path is READ-ONLY. `
         + 'Update the adapter before writing.',
     )
@@ -850,15 +850,15 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
       }
     }
 
-    const writerStatus: MemoryWriterStatus = contractFenced
+    const writerStatus: MemoryWriterStatus = corpusFenced
       ? {
         ok: true,
         readOnly: true,
-        detail: `Magic Context schema v${String(contractVersion)} is newer than the adapter understands `
+        detail: `corpus schema v${String(corpusVersion)} is newer than the adapter understands `
           + `(v${String(MEMORY_SCHEMA_MAX_VERSION)}); the memory write path is READ-ONLY.`,
-        ...(contractVersion === undefined ? {} : { contractVersion }),
+        ...(corpusVersion === undefined ? {} : { corpusVersion }),
       }
-      : { ok: true, ...(contractVersion === undefined ? {} : { contractVersion }) }
+      : { ok: true, ...(corpusVersion === undefined ? {} : { corpusVersion }) }
 
     return {
       dbPath: options.dbPath,
@@ -884,9 +884,9 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
           seenAgain: [] as Array<{ id: number; category: string }>,
           skipped: [] as Array<{ category: string; content: string; reason: string }>,
         }
-        if (contractFenced) {
+        if (corpusFenced) {
           options.logger.warn(
-            `magic-context memory: promotion refused, schema v${String(contractVersion)} is newer than `
+            `magic-context memory: promotion refused, schema v${String(corpusVersion)} is newer than `
               + `the adapter understands (v${String(MEMORY_SCHEMA_MAX_VERSION)})`,
           )
           return { ...outcomeBase, maxMemoryId: maxFor(input.identity) }
@@ -973,7 +973,7 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
             'sourceType "user" is reserved for future dashboard manual entry and cannot be written by agent paths',
           )
         }
-        if (contractFenced) return fenceRefusal('write')
+        if (corpusFenced) return fenceRefusal('write')
         const category = input.category
         const hash = normalizedMemoryHash(input.content)
         const timestamp = now()
@@ -1025,7 +1025,7 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
         if (input.identity.trim().length === 0) {
           return refusal('publish-domain', 'invalid-argument', 'Error: a domain memory needs an identity.')
         }
-        if (contractFenced) return fenceRefusal('publish-domain')
+        if (corpusFenced) return fenceRefusal('publish-domain')
         const hash = normalizedMemoryHash(content)
         try {
           const outcome = runImmediate<DomainPublishResult>(() => {
@@ -1077,7 +1077,7 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
         if (input.vector.length === 0) {
           return refusal('store-embedding', 'invalid-argument', 'Error: an embedding needs at least one dimension.')
         }
-        if (contractFenced) return fenceRefusal('store-embedding')
+        if (corpusFenced) return fenceRefusal('store-embedding')
         if (selectEmbedding === undefined || insertEmbeddingStatement === undefined) {
           return refusal(
             'store-embedding',
@@ -1118,7 +1118,7 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
         if (input.category !== undefined && !isWritableMemoryCategory(input.category)) {
           return refusal('update', 'invalid-category', `Unknown memory category '${String(input.category)}'.`)
         }
-        if (contractFenced) return fenceRefusal('update')
+        if (corpusFenced) return fenceRefusal('update')
         const hash = normalizedMemoryHash(input.content)
         try {
           return runImmediate<MemoryWriteResult>(() => {
@@ -1180,7 +1180,7 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
         if (input.supersededBy !== undefined && (!Number.isInteger(input.supersededBy) || input.supersededBy <= 0)) {
           return refusal('archive', 'invalid-argument', "Error: 'supersededBy' must be an integer memory ID.")
         }
-        if (contractFenced) return fenceRefusal('archive')
+        if (corpusFenced) return fenceRefusal('archive')
         const reason = typeof input.reason === 'string' && input.reason.trim().length > 0
           ? input.reason.trim()
           : undefined
@@ -1256,7 +1256,7 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
         if (input.category !== undefined && !isWritableMemoryCategory(input.category)) {
           return refusal('merge', 'invalid-category', `Unknown memory category '${String(input.category)}'.`)
         }
-        if (contractFenced) return fenceRefusal('merge')
+        if (corpusFenced) return fenceRefusal('merge')
         const hash = normalizedMemoryHash(input.content)
         try {
           return runImmediate<MemoryMergeResult>(() => {
@@ -1400,12 +1400,12 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
           return { ok: false, recorded, skipped: requested, reason: 'invalid-argument' }
         }
         if (countable.length === 0) return { ok: true, recorded, skipped: requested }
-        if (contractFenced) {
+        if (corpusFenced) {
           options.logger.warn(
-            `magic-context memory: retrieval telemetry refused, schema v${String(contractVersion)} is newer `
+            `magic-context memory: retrieval telemetry refused, schema v${String(corpusVersion)} is newer `
               + `than the adapter understands (v${String(MEMORY_SCHEMA_MAX_VERSION)})`,
           )
-          return { ok: false, recorded, skipped: requested, reason: 'contract-version-unsupported' }
+          return { ok: false, recorded, skipped: requested, reason: 'corpus-version-unsupported' }
         }
         const skipped = (): number[] => requested.filter(id => !recorded.includes(id))
         try {
@@ -1429,7 +1429,7 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
       },
       listExpired: (identity, nowAt, limit = 200) => {
         try {
-          if (contractFenced) return []
+          if (corpusFenced) return []
           const rows = db.prepare(
             `SELECT id FROM memories`
             + ` WHERE project_path = ? AND status IN ('active','permanent')`
@@ -1445,7 +1445,7 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
       markVerified: (identity, ids, verifiedAt) => {
         if (ids.length === 0) return 0
         try {
-          if (contractFenced) return 0
+          if (corpusFenced) return 0
           const stamp = runImmediate<{ ok: true; changed: number }>(() => {
             // MC writes verification_status and verified_at as a pair
             // (storage-memory.ts:464) — writing only verified_at left rows
@@ -1470,7 +1470,7 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
       classifyMemories: (identity, entries, classifiedAt) => {
         if (entries.length === 0) return 0
         try {
-          if (contractFenced) return 0
+          if (corpusFenced) return 0
           const scored = runImmediate<{ ok: true; changed: number }>(() => {
             const statement = db.prepare(CLASSIFY_MEMORY)
             let changed = 0

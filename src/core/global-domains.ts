@@ -92,11 +92,11 @@ export interface RecurrenceScan {
  */
 export function detectGlobalCandidates(
   store: AdapterStores,
-  options: { contractDbPath: string; domainId?: string; now: number; limit?: number },
+  options: { corpusDbPath: string; domainId?: string; now: number; limit?: number },
 ): RecurrenceScan {
   const domainId = options.domainId ?? ORG_DOMAIN_ID
   const limit = options.limit ?? 25
-  const db = new DatabaseSync(options.contractDbPath, { readOnly: true })
+  const db = new DatabaseSync(options.corpusDbPath, { readOnly: true })
   try {
     const groups = db.prepare(
       `SELECT normalized_hash AS hash, COUNT(DISTINCT project_path) AS projects, MAX(id) AS newest
@@ -159,7 +159,7 @@ export function detectGlobalCandidates(
   }
 }
 
-export interface ContractMemory {
+export interface CorpusMemory {
   readonly id: number
   readonly projectPath: string
   readonly category: string
@@ -169,13 +169,13 @@ export interface ContractMemory {
 }
 
 /** Read one memory from the contract (read-only) for a promotion decision. */
-export function readContractMemory(contractDbPath: string, memoryId: number): ContractMemory | undefined {
-  const db = new DatabaseSync(contractDbPath, { readOnly: true })
+export function readCorpusMemory(corpusDbPath: string, memoryId: number): CorpusMemory | undefined {
+  const db = new DatabaseSync(corpusDbPath, { readOnly: true })
   try {
     const row = db.prepare(
       'SELECT id, project_path AS projectPath, category, content, normalized_hash AS normalizedHash, status '
         + 'FROM memories WHERE id = ?',
-    ).get(memoryId) as unknown as ContractMemory | undefined
+    ).get(memoryId) as unknown as CorpusMemory | undefined
     return row
   } finally {
     db.close()
@@ -183,7 +183,7 @@ export function readContractMemory(contractDbPath: string, memoryId: number): Co
 }
 
 export type PromotionResult =
-  | { readonly ok: true; readonly candidate: GlobalCandidateRow; readonly memory: ContractMemory }
+  | { readonly ok: true; readonly candidate: GlobalCandidateRow; readonly memory: CorpusMemory }
   | { readonly ok: false; readonly error: string }
 
 /**
@@ -199,7 +199,7 @@ export type PromotionResult =
 export function promoteMemoryToCandidate(
   store: AdapterStores,
   options: {
-    contractDbPath: string
+    corpusDbPath: string
     memoryId: number
     domainId?: string
     now: number
@@ -212,7 +212,7 @@ export function promoteMemoryToCandidate(
   if (store.getDomain(domainId) === undefined) {
     return { ok: false, error: `unknown domain '${domainId}' — define it before promoting into it` }
   }
-  const memory = readContractMemory(options.contractDbPath, options.memoryId)
+  const memory = readCorpusMemory(options.corpusDbPath, options.memoryId)
   if (memory === undefined) return { ok: false, error: `no memory #${String(options.memoryId)} in the shared store` }
   if (memory.status !== 'active') {
     return { ok: false, error: `memory #${String(memory.id)} is ${memory.status}, not active` }

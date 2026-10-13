@@ -237,11 +237,11 @@ export function defineCtxExpandTool(deps: ToolBridgeDeps): unknown {
 }
 
 /**
- * `ctx_memory` — read/write access to Magic Context's shared `context.db`.
+ * `ctx_memory` — read/write access to the plugin's own corpus (memories.db).
  *
- * Reads (list/get) recall project memories, including workspace-shared rows.
- * Writes (write/update/archive/merge) reproduce Magic Context's normalized
- * hash, dedup bump, mutation log, and authority guard so both hosts keep
+ * Reads (list/get) recall project memories, including domain-shared rows.
+ * Writes (write/update/archive/merge) reproduce the corpus write contract —
+ * normalized hash, dedup bump, mutation log — so every consumer keeps
  * agreeing about the same rows; every failure is a structured
  * `{ok:false, reason}` refusal, never a thrown error.
  */

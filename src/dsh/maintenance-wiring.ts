@@ -158,7 +158,7 @@ export function wireMaintenance(input: {
         && tickLlmReady && tickRoute !== undefined && llm !== undefined && writer !== undefined) {
         const outcome = await autoStageGlobalCandidates({
           store: stores,
-          contractDbPath: writer.dbPath,
+          corpusDbPath: writer.dbPath,
           now: Date.now(),
           llm: llm as unknown as AutoStageLlm,
           route: tickRoute,

@@ -5,9 +5,9 @@
  *
  * Schema discipline mirrors Magic Context's storage layer: a version fence
  * that fails closed when the database is newer than this build knows, and a
- * forward-only migration chain. The eventual Phase 1+ plan moves these rows
- * into the shared `context.db` (harness='dsh') — the store interface below
- * is deliberately shaped so that move is a backend swap, not a redesign.
+ * forward-only migration chain. (The Phase 1+ plan of moving these rows into
+ * the shared context.db was superseded 2026-10-13: the corpus became the
+ * plugin's own memories.db, and this store stays the adapter's runtime side.)
  */
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'

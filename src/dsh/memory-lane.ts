@@ -412,7 +412,7 @@ export function openMemoryLane(
     }
     if (!status.ok) return `unavailable: ${String(status.detail)}`
     if (status.readOnly === true) {
-      return `read-only: ${String(status.detail ?? 'contract version is newer than the adapter understands')}`
+      return `read-only: ${String(status.detail ?? 'corpus version is newer than the adapter understands')}`
     }
     return `read-write${memorySettings?.autoPromote === false ? ' (promotion off)' : ' auto-promote'}`
   }

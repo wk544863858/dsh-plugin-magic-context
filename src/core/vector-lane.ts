@@ -73,10 +73,10 @@ function columnNames(db: DatabaseSync, table: string): Set<string> {
 }
 
 /** Read the lane's state from the shared store. `undefined` when it cannot be read. */
-export function measureVectorLane(contractDbPath: string): VectorLaneReport | undefined {
+export function measureVectorLane(corpusDbPath: string): VectorLaneReport | undefined {
   let db: DatabaseSync
   try {
-    db = new DatabaseSync(contractDbPath, { readOnly: true })
+    db = new DatabaseSync(corpusDbPath, { readOnly: true })
   } catch {
     return undefined
   }
@@ -183,12 +183,12 @@ export interface BackfillPlan {
  *
  * Writes nothing. The contract write is still ahead.
  */
-export function planBackfill(contractDbPath: string, options: { limit?: number } = {}): BackfillPlan | undefined {
-  const report = measureVectorLane(contractDbPath)
+export function planBackfill(corpusDbPath: string, options: { limit?: number } = {}): BackfillPlan | undefined {
+  const report = measureVectorLane(corpusDbPath)
   if (report === undefined) return undefined
   const limit = options.limit ?? 64
 
-  const db = new DatabaseSync(contractDbPath, { readOnly: true })
+  const db = new DatabaseSync(corpusDbPath, { readOnly: true })
   try {
     const dominant = report.dominantModelId
     if (dominant === undefined) {
