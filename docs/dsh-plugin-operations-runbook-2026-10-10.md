@@ -12,25 +12,27 @@
 
 ## 0. 先知道三件事
 
-**① 两个库，责任不同**
+**① 两个库，责任不同（2026-10-13 切换后口径）**
 
 | 库 | 路径 | 谁写 |
 |---|---|---|
-| 共享契约库 | `~/.local/share/cortexkit/magic-context/context.db` | 本适配器（受契约 v95 约束）；**结构冻结** |
-| 适配器自有库 | `~/.local/share/cortexkit/magic-context-dsh-poc/dsh-magic-context.db` | 只有本适配器（schema v9） |
+| 自有语料库 | `~/.local/share/cortexkit/magic-context-dsh-poc/memories.db` | 只有本适配器（版本线继承 v95 起点，续号归本插件） |
+| 适配器自有库 | `~/.local/share/cortexkit/magic-context-dsh-poc/dsh-magic-context.db` | 只有本适配器（schema v10） |
 
-排查任何问题，先问"这条数据在哪个库里"——域、队列、journal、baseline 在自有库；
-记忆正文、画像行、embedding 在共享库。**混着看会得出错误的结论**（域判定第一版就踩过：
+legacy `~/.local/share/cortexkit/magic-context/context.db` 已**封存不读**（2026-10-13
+硬切换；上游 MC 若仍在用它，与本项目无关）。
+排查任何问题，先问"这条数据在哪个库里"——域、队列、journal、baseline 在适配器库；
+记忆正文、画像行、embedding 在语料库。**混着看会得出错误的结论**（域判定第一版就踩过：
 拿适配器句柄去问 `user_memories`，恒报"没有画像表"）。
 
-**② 契约结构一旦漂移，先停手**
+**② 语料库版本超上限（corpus fence），先停手**
 
 ```bash
-node scripts/mc-contract-freeze.mjs verify
+node scripts/dsh-doctor.mjs   # 第 1 节直接给裁决
 ```
 
-`contract OK: 196 objects, contract v94, digest 8bd1476f9a07` = 正常。
-**任何 FAIL ⇒ 停止一切写入**，先弄清是不是本适配器干的（L1 语义冻结不允许被打破）。
+语料库 schema 超过本构建上限（corpus-version-unsupported）= 本插件旧于语料
+（只可能来自跨版本分发），写路径已自动只读降级。动作=升级插件版本，绝不要手动改库。
 
 **③ 开关不在 GUI 里**
 
@@ -74,12 +76,12 @@ acceptance 的 `domain.*` 是**域车道的存活性检查**（7 条，判定逻
 | 条目 | PASS 的样子 | WARN 时怎么办 |
 |---|---|---|
 | `domain.schema` | `全局域表存在（1 个域）` | FAIL = schema 未到 v8，插件没升级成功 |
-| `domain.members` | `1 个域有成员（dir:global:org=5）` | `node scripts/mc-import-workspace.mjs --dry-run` 看会导入什么 |
+| `domain.members` | `1 个域有成员（dir:global:org=5）` | `/ctx-global add <domain> <identity>` 加成员（建域用 `/ctx-global create <domain> --kind org\|machine`） |
 | `domain.enabled` | `N 个域已启用` | WARN 是正常默认态；要接管见 §5 |
 | `domain.enabled-without-members` | `没有"已启用却零成员"的域` | 见 §6 第 2 条 |
 | `domain.confirmation-backlog` | `队列 0 条，未积压` | 有人没处理确认队列；阈值见 §3 |
 | `domain.candidate-backlog` | `候选 0 条，未积压` | 复核通道没推进 |
-| `domain.profile-pool` | `画像池 active 14 行` | `契约没有 user_memories 表` = 契约库只读降级或未打开 |
+| `domain.profile-pool` | `画像池 active 14 行` | `语料库没有 user_memories 表` = 语料库只读降级或未打开 |
 
 **mc-report 的值不值得看**：`domain 命中（按域/按项目去重）` 如果两周都是 0，说明域没被
 真正使用 —— 这是"要不要继续投入"的产品判据（见规划 WP9 的退出条件），不是故障。
@@ -94,7 +96,7 @@ acceptance 的 `domain.*` 是**域车道的存活性检查**（7 条，判定逻
 | 确认队列积压 | acceptance `domain.confirmation-backlog`（>5 条 WARN） | 清队列；**约束型内容未确认就不会生效**，堆积等于白采集 |
 | 候选积压 | acceptance `domain.candidate-backlog`（>10 条 WARN = 提前提醒） | 复核或拒绝；`promote` 只造候选，不发布 |
 | 候选越红线 | acceptance `domain.candidate-redline`（**>50 条 且 最老 >7 天 ⇒ FAIL**，设计 v2 §7） | **必须处理**：复核/拒绝，或退役该域。判据是"深**且**旧"，只满足一条不报 |
-| 契约冻结 FAIL | `mc-contract-freeze.mjs verify` | **停止写入**，先定位漂移来源 |
+| corpus fence 只读降级 | doctor 第 1 节 / boot 行 `memoryWrite: read-only` | 语料库版本 > 本构建上限 ⇒ **升级插件**；不要手动改库（见 §0②） |
 | historian 失败率异常 | `mc-report` 的成因行（带"至 MM-DD"） | 看成因：`配额`=某条路线 7 天上限（换路线或等）；`截断`=容量；`invalid-output`=输出形状（已加配平诊断） |
 | 维护 tick 跳过 LLM | journal `maintenance` 行 `LLM steps skipped: <route> observed quota-exhausted Nm ago (hold 45m)` | **无需动作**：维护车道跟随主对话路线（2026-10-10 起未钉 verifyProvider 时）；该路线额度恢复或主对话换路线后，≤45 分钟自动重开。观察是易失的（不落盘），外部重置额度不会被旧状态困住 |
 
@@ -110,8 +112,7 @@ acceptance 的 `domain.*` 是**域车道的存活性检查**（7 条，判定逻
 ## 4. 每月
 
 ```bash
-node scripts/mc-contract-freeze.mjs verify     # 契约结构
-npm run gate                                   # 全量门禁（含契约冻结、验收、记忆审计）
+npm run gate                                   # 全量门禁（含验收、记忆审计、records）
 npm run phase all                              # 阶段门 A–D
 ```
 
@@ -127,13 +128,12 @@ npm run phase all                              # 阶段门 A–D
 
 | 配置键 | 默认 | 写什么 | 回滚 |
 |---|---|---|---|
-| `memory.global.user.render` | **on** | 只读契约（注入 `<user-profile>`） | 关掉即不再注入；已注入内容在下次 HARD 重建时消失 |
-| `memory.global.user.collect` | off | 写契约 `user_memory_candidates` | 关掉即停止采集；**已采集的候选留着**，用 `expireCandidates`/TTL 清 |
-| `memory.global.user.review` | off | 写契约 `user_memories`（**会注入所有会话**） | 关掉停止新增；**已晋升的行不会自己消失** ⇒ 必须显式 `retire` |
-| `memory.global.machine.enabled` | off | 写契约（本机共享） | 关掉即不写；**已有域行仍在**，退役要显式做 |
+| `memory.global.user.render` | **on** | 只读语料库（注入 `<user-profile>`） | 关掉即不再注入；已注入内容在下次 HARD 重建时消失 |
+| `memory.global.user.collect` | off | 写语料库 `user_memory_candidates` | 关掉即停止采集；**已采集的候选留着**，用 `expireCandidates`/TTL 清 |
+| `memory.global.user.review` | off | 写语料库 `user_memories`（**会注入所有会话**） | 关掉停止新增；**已晋升的行不会自己消失** ⇒ 必须显式 `retire` |
+| `memory.global.machine.enabled` | off | 写语料库（本机共享） | 关掉即不写；**已有域行仍在**，退役要显式做 |
 | `memory.global.machine.excludeProjects` | `[]` | — | 只增不减语义：排除只是把项目移出域，**从不删除**其他数据 |
-| `memory.domains.source` | `adapter` | — | 改成 `contract` = 回退到旧的 workspace 查询（**一个版本的回滚杠杆，不是终态**） |
-| `memory.vectorBackfill` | **on**（2026-10-12 起缺省=true；此前 off） | 写契约 `memory_embeddings` | 设 false 即停；已写的行留着（唯一的合法写入目标见 §7）。改缺省的理由：写入路径不嵌入 ⇒ 默认关=新记忆永远无向量、中文语义召回随行数静默衰减 |
+| `memory.vectorBackfill` | **on**（2026-10-12 起缺省=true；此前 off） | 写语料库 `memory_embeddings` | 设 false 即停；已写的行留着（唯一的合法写入目标见 §7）。改缺省的理由：写入路径不嵌入 ⇒ 默认关=新记忆永远无向量、中文语义召回随行数静默衰减 |
 | `memory.vectorBackfillLimit` | 24 | — | 每拍回填上限 |
 | `memory.embedBackfill` | on | **不写库**（查询侧按需嵌入） | 与回填无关，别混淆 |
 
@@ -148,7 +148,7 @@ npm run phase all                              # 阶段门 A–D
 备份（真写前必做；**下面这条在真库上实测过**，输出 `backup ok: ... memories= 1359`）：
 
 ```powershell
-node -e 'const {DatabaseSync}=require("node:sqlite"); const p=process.env.USERPROFILE+"/.local/share/cortexkit/magic-context/context.db"; const out=p.replace(/\.db$/,"")+"-backup-"+Date.now()+".db"; new DatabaseSync(p).exec("VACUUM INTO ''"+out+"''"); console.log("backup ok:", out)'
+node -e 'const {DatabaseSync}=require("node:sqlite"); const p=process.env.USERPROFILE+"/.local/share/cortexkit/magic-context-dsh-poc/memories.db"; const out=p.replace(/\.db$/,"")+"-backup-"+Date.now()+".db"; new DatabaseSync(p).exec("VACUUM INTO ''"+out+"''"); console.log("backup ok:", out)'
 ```
 
 `VACUUM INTO` 只读源库、写出一个新文件，**不会碰正在用的库**；备份文件与源库同目录，
@@ -161,13 +161,12 @@ node -e 'const {DatabaseSync}=require("node:sqlite"); const p=process.env.USERPR
 1. **`全部域停用` 一直不变，而你以为开了** ⇒ 开关在 `cordis.patch.yml` 的 `memory.global.*`
    下，**不是** GUI 里；且 patch 是整键替换，写漏子键会被整块覆盖。
 2. **`已启用却没有任何成员`** ⇒ 启用了却零成员 = 该域看不到任何项目。
-   先 `node scripts/mc-import-workspace.mjs --dry-run` 看计划，再决定是否真导入。
-   （入口脚本拒绝裸路径身份：它们与适配器的规范化身份不匹配，导入后域会静默不激活。）
-3. **`domain.profile-pool` 报"契约没有 user_memories 表"** ⇒ 契约库没打开或被 fence
-   （版本高于适配器支持）。此时画像车道无源，先看 acceptance 里 `contract.exists` /
-   `fence.version` 的结论。
+    用 `/ctx-global add <domain> <identity>` 加成员（身份必须是规范化形式
+    `git:<sha>` / `dir:<hash>`——裸路径身份与适配器的规范化身份不匹配，加了域也静默不激活）。
+3. **`domain.profile-pool` 报"语料库没有 user_memories 表"** ⇒ 语料库没打开或被 fence
+   （版本高于适配器支持）。此时画像车道无源，先看 acceptance 里 `fence.version` 的结论。
 4. **写入没生效但命令报成功** ⇒ 检查 `boot` 里的 `memoryWrite`：
-   `read-only` 表示契约 fence 生效，**所有写路径都在失败**（这是历史上出现过的
+   `read-only` 表示 corpus fence 生效，**所有写路径都在失败**（这是历史上出现过的
    "全写失败却对外宣称 read-write"形态，acceptance 的 `fence.exposure` 专门盯它）。
 5. **向量覆盖率下降** ⇒ `memory.vectorBackfill` 自 2026-10-12 起缺省 on
    （写入路径不嵌入，默认关曾让新记忆永远无向量）；真库 dry-run 结论是
@@ -183,7 +182,7 @@ node -e 'const {DatabaseSync}=require("node:sqlite"); const p=process.env.USERPR
 
 ## 7. 不要做的事（都会造成不可逆损害）
 
-1. **不给契约库加列/加表/改触发器/FTS**。L1 语义冻结必须守；L2 结构冻结要走流程。
+1. **语料库结构只经 corpus-store.ts 的迁移线改**（版本行 + 前向迁移）；上游 MC 的库与本插件无关，永远不要拿本插件的工具去改它。
 2. **不往非 dominant 的 `model_id` 写 embedding**（会造成第三个向量空间，检索静默变化）。
 3. **不在会话运行中带外改写会话日志文件**（历史上因此复发过一次事故：运行中的进程按旧内存
    结构继续 append）。
@@ -204,7 +203,7 @@ npm run phase d          # 含 domain-checks / report-classify / strip-drill / �
 ```
 
 - `tests/domain-checks.spec.ts` —— doctor 每条 WARN 与 acceptance 每条 `domain.*` 都有
-  **触发用例 + 静默用例**（人为破坏必须报警）；含"未迁移 ≠ 零域""契约句柄缺失 ≠ 池子空"。
+  **触发用例 + 静默用例**（人为破坏必须报警）；含"未建域 ≠ 零域""语料库句柄缺失 ≠ 池子空"。
 - `tests/report-classify.spec.ts` —— historian 成因分类用真库语料逐字回归。
 - `tests/strip-drill.spec.ts` —— 无任何 MC 组件下两条闭环（org / user）各走完 5 步。
 - `tests/phase-map.spec.ts` —— 任何空阶段直接判失败（门禁不能靠"没跑"变绿）。

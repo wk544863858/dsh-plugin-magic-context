@@ -1,5 +1,11 @@
 # MC 记忆写路径存储契约（DSH 适配器实现用）
 
+> **2026-10-13 状态变化（先读）**：插件已切换到自有语料库 `memories.db`（形状逐列继承
+> 本文档所述 v95/v94 契约，版本续号归本插件）；legacy `context.db` 封存不读。本文档中
+> 仍然有效的部分：`memories`/`memory_mutation_log`/`project_state`/FTS/embedding 的
+> DDL 与写形状（= 自有库形状）。已成为历史的部分：§8 权威守卫（authority 机制随切换
+> 退役）、"受 MC 约束/共享"的表述、schema 版本跟随上游的说法。保留原文作为溯源性档案。
+>
 > 提取自 Magic Context 源码 + 用户真实生产库（只读实测）。
 > 目标读者：`packages/dsh-plugin` 写入路径的实现者。
 > 标注约定：〔码〕= 源码 file:line；〔档〕= 仓库文档；〔测〕= 本次实测（Node 24 / 真实 context.db）。
