@@ -151,7 +151,7 @@ export function openMemoryLane(
       syncMachineDomain(stores, {
         identities: [],
         config: {
-          enabled: liveBoolean(config.memory?.global?.machine?.enabled, false),
+          enabled: liveBoolean(config.memory?.global?.machine?.enabled, true),
           ...config.memory?.global?.machine?.excludeProjects === undefined
             ? {}
             : { excludeProjects: config.memory.global.machine.excludeProjects },

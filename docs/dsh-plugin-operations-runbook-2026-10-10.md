@@ -124,26 +124,28 @@ npm run phase all                              # 阶段门 A–D
 
 ## 5. 开关清单（默认值 / 打开顺序 / 回滚）
 
-**全部默认 off 是刻意的**：默认关闭意味着"装上插件不会自动开始跨项目共享"。
+**分发型默认全 on（2026-10-13 起）**：语料库已归插件自有，"装上即全功能可用"；关停才是显式动作。
+安全边界不变：全域**发布**永远走人审（审批卡/approve）、约束型画像必须确认、autoStage LLM 失败即暂停。
 
 | 配置键 | 默认 | 写什么 | 回滚 |
 |---|---|---|---|
 | `memory.global.user.render` | **on** | 只读语料库（注入 `<user-profile>`） | 关掉即不再注入；已注入内容在下次 HARD 重建时消失 |
-| `memory.global.user.collect` | off | 写语料库 `user_memory_candidates` | 关掉即停止采集；**已采集的候选留着**，用 `expireCandidates`/TTL 清 |
-| `memory.global.user.review` | off | 写语料库 `user_memories`（**会注入所有会话**） | 关掉停止新增；**已晋升的行不会自己消失** ⇒ 必须显式 `retire` |
-| `memory.global.machine.enabled` | off | 写语料库（本机共享） | 关掉即不写；**已有域行仍在**，退役要显式做 |
+| `memory.global.user.collect` | **on**（2026-10-13 起缺省=true） | 写语料库 `user_memory_candidates` | 关掉即停止采集；**已采集的候选留着**，用 `expireCandidates`/TTL 清 |
+| `memory.global.user.review` | **on**（同上；复现门槛+确认队列仍生效） | 写语料库 `user_memories`（**会注入所有会话**） | 关掉停止新增；**已晋升的行不会自己消失** ⇒ 必须显式 `retire` |
+| `memory.global.machine.enabled` | **on**（同上） | 写语料库（本机共享；只共享显式发布的行） | 关掉即不写；**已有域行仍在**，退役要显式做 |
+| `memory.global.machine.autoStage` | **on**（同上；LLM 分类失败 fail-closed） | 维护拍自动入队全域候选（发布仍人审） | 关掉停止入队；候选池不清 |
+| `memory.scoring.enabled` | **on**（同上；统计恒收集，此键只控排序接管） | 不写库（排序决策） | 关掉回退 MC 优先序 |
 | `memory.global.machine.excludeProjects` | `[]` | — | 只增不减语义：排除只是把项目移出域，**从不删除**其他数据 |
 | `memory.vectorBackfill` | **on**（2026-10-12 起缺省=true；此前 off） | 写语料库 `memory_embeddings` | 设 false 即停；已写的行留着（唯一的合法写入目标见 §7）。改缺省的理由：写入路径不嵌入 ⇒ 默认关=新记忆永远无向量、中文语义召回随行数静默衰减 |
 | `memory.vectorBackfillLimit` | 24 | — | 每拍回填上限 |
 | `memory.embedBackfill` | on | **不写库**（查询侧按需嵌入） | 与回填无关，别混淆 |
+| `policy.compartmentGuardMode` | observe | 发布守卫模式（enforce=drift/no-gain 终态退役） | 行为策略非功能开关，维持保守缺省 |
+| `maintenance.evidenceVerify.mode` | off | 证据型验证（shadow=只观察，enforce=可破坏） | 高级维护模式，按需开启 |
 
 **建议打开顺序**（每步之后跑 acceptance + doctor，并做一次备份）：
 
-1. `user.collect` → 观察候选是否合理（可逆：只是采集）
-2. `user.review` → 观察写入的画像是否合理（**语义上不可逆，要退役**）
-3. `org` 域 `enable`（先确认 5 名成员身份正确）
-4. `machine.enabled`（先用 `excludeProjects` 排除不该共享的项目）
-5. `vectorBackfill`（先看 doctor 的 parity；**parity 是前提，闸门关即整批中止**）
+1. 默认已全开——分发即用。要收窄时：先 `excludeProjects` 排除不该共享的项目
+2. 首次真写前做一次备份（下面命令），此后每周体检即可
 
 备份（真写前必做；**下面这条在真库上实测过**，输出 `backup ok: ... memories= 1359`）：
 

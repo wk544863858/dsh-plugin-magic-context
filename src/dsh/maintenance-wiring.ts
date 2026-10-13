@@ -154,7 +154,7 @@ export function wireMaintenance(input: {
       // rides the tick's route. Fail-closed: no route (or the pin route on
       // quota-hold) means NOTHING is staged — the memories stay at project
       // level, never a guessed fallback domain.
-      if (liveBoolean(config.memory?.global?.machine?.autoStage, false)
+      if (liveBoolean(config.memory?.global?.machine?.autoStage, true)
         && tickLlmReady && tickRoute !== undefined && llm !== undefined && writer !== undefined) {
         const outcome = await autoStageGlobalCandidates({
           store: stores,
@@ -191,7 +191,7 @@ export function wireMaintenance(input: {
       // hang MC's `review-user-memories` cadence on. It is written only when a
       // review actually RAN, so a failed call is retried on the next tick
       // instead of being silenced for a day by its own failure.
-      if (liveBoolean(config.memory?.global?.user?.review, false) && profileWriter !== undefined) {
+      if (liveBoolean(config.memory?.global?.user?.review, true) && profileWriter !== undefined) {
         const lastReviewRaw = Number(stores.getMeta(PROFILE_REVIEW_META_KEY) ?? '')
         const review = await runProfileReview({
           writer: profileWriter,

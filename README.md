@@ -95,8 +95,8 @@ bundle 自带配置只有一行：`registerCompactionEngine: false`（保守首�
 | historian | `historianEnabled` (true) · `historian.{provider, model}`（默认会话最后路由的模型） | 带外运行；verify 之外的唯一 LLM 消耗点 |
 | 项目记忆 | `memory.{}`：`enabled` · `dbPath` · `project`（省略用会话 cwd）· `domainProjects` · `shareCategories` · `autoPromote` (true) · `write` (true) | `memory: {}` 即可用；`write: false` 让 `ctx_memory` 退回只读 |
 | 检索 / 向量 | `memory.embedBackfill` (true，查询侧内嵌补分) · `memory.vectorBackfill` (true，维护 tick 回填) · `memory.vectorBackfillLimit` (24 行/tick) | 向量车道任何失败 fail-open 降级 FTS |
-| S(t) 衰减 | `memory.scoring.{enabled (false)，alpha (0.4)，beta (0.2)，archiveThreshold (2)，halfLives}` | 默认只收集统计、不接管排序；profile-JSON only，不进设置卡片 |
-| 全局域 | `memory.global.machine.{enabled (false)，excludeProjects，autoStage (false)}` · `memory.global.review.batchLimit` (50) | 入队可自动化（≤3 条/pass、≥10 候选待审时暂停），发布永远是人 |
+| S(t) 衰减 | `memory.scoring.{enabled (true)，alpha (0.4)，beta (0.2)，archiveThreshold (2)，halfLives}` | 统计恒收集；2026-10-13 分发缺省起 enabled=true 接管排序；profile-JSON only，不进设置卡片 |
+| 全局域 | `memory.global.machine.{enabled (true)，excludeProjects，autoStage (true)}` · `memory.global.user.{render (true)，collect (true)，review (true)}` · `memory.global.review.batchLimit` (50) | 分发缺省全开（2026-10-13）：入队可自动化（≤3 条/pass、≥10 候选待审时暂停），**发布永远是人**；LLM 分类失败 fail-closed |
 | 用户画像 | `memory.global.user.{render (true)，collect (false)，review (false)}` | 读 / 收集 / 评审三半独立；写共享库的两个半边默认关 |
 | 域解析 | `memory.domains.source` (`adapter` \| `contract`) | `contract` 是对照用的回退杆，不是支持终态 |
 | 维护 | `maintenance.{enabled，intervalMs (30 min)，verifyProvider，verifyModel}` | LLM verify 需显式路由（未钉则跟随主对话最新路线） |

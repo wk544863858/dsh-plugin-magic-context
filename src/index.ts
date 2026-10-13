@@ -855,7 +855,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     // 融合 v7 的待观察翻转（boot 行可见，巡检核对配置漂移）。
     compartmentGuardMode: config.policy?.compartmentGuardMode,
     forceWaitReadyMs: liveNumber(config.policy?.forceWaitReadyMs, 0),
-    memoryScoringEnabled: config.memory?.scoring?.enabled === true,
+    memoryScoringEnabled: liveBoolean(config.memory?.scoring?.enabled, true),
     policy: {
       executeThreshold: policy.executeThreshold,
       forceThreshold: policy.forceThreshold,

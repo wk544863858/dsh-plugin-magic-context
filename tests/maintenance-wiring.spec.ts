@@ -191,12 +191,15 @@ describe('maintenance sweep wiring (real plugin, fake clock)', () => {
     try {
       // The boot row carries the EFFECTIVE switch snapshot: "what is on right
       // now" is one query away and needs no profile parse (the lost-key
-      // defense, C1). The default-on backfill pin doubles as the P2 assertion.
+      // defense, C1). The distribution defaults (2026-10-13) pin as ON.
       const bootLine = bootRow(journalPath)
       const switches = bootLine.data.switches as Record<string, unknown>
       expect(switches.vectorBackfill).toBe(true)
-      expect(switches.scoring).toBe(false)
-      expect(switches.machine).toBe(false)
+      expect(switches.scoring).toBe(true)
+      expect(switches.machine).toBe(true)
+      expect(switches.machineAutoStage).toBe(true)
+      expect(switches.userCollect).toBe(true)
+      expect(switches.userReview).toBe(true)
 
       // The verdict route is the configured one, not the session's.
       ctx.llm.registerAdapter(['mock-verify'], new MockAdapter([

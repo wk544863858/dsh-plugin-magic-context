@@ -41,9 +41,14 @@ export interface MemoryScoringConfig {
  * categories are immortal; exact values and names rot; legacy categories take
  * the MC TTL where one exists (KNOWN_ISSUES/WORKFLOW_RULES) or a conservative
  * middle ground otherwise.
+ *
+ * `enabled` defaults TRUE since the 2026-10-13 distribution decision: the
+ * ranking takeover is the feature (stats alone are a dashboard), the corpus is
+ * plugin-owned, and shadow telemetry showed zero regressions. An explicit
+ * `false` in the profile still wins.
  */
 export const DEFAULT_MEMORY_SCORING: MemoryScoringConfig = {
-  enabled: false,
+  enabled: true,
   alpha: 0.4,
   beta: 0.2,
   archiveThreshold: 2,

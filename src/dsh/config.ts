@@ -75,7 +75,7 @@ export interface MagicContextDshConfig {
      * schema — a declared key would open the lane for every profile).
      */
     scoring?: {
-      /** Default false: collect stats, keep MC's ranking. */
+      /** Default true (distribution default 2026-10-13): S(t) takes over ranking. */
       enabled?: boolean
       /** Hit boost strength (mon3stera default 0.4). */
       alpha?: number
@@ -103,24 +103,28 @@ export interface MagicContextDshConfig {
          */
         render?: boolean
         /**
-         * Produce new profile candidates from DSH sessions. Default FALSE: this
-         * is the path that writes to the shared store, so it stays off until
-         * the write is deliberately turned on.
+         * Produce new profile candidates from DSH sessions. Default TRUE since
+         * the 2026-10-13 distribution decision — the corpus is plugin-owned, so
+         * collecting observations needs no opt-in; an explicit `false` still
+         * disables it.
          */
         collect?: boolean
         /**
          * Review candidates into the profile (`user_memories`) — the half that
-         * makes a promoted fact inject into EVERY session. Default FALSE, and
-         * deliberately separate from `collect`: gathering observations is
-         * reversible, publishing a standing rule about the user is not.
+         * makes a promoted fact inject into EVERY session. Default TRUE since
+         * the 2026-10-13 distribution decision; the recurrence gate
+         * (cross-session, promotion_threshold) and the directive-shaped
+         * confirmation queue stay in force, and an explicit `false` still
+         * disables the lane.
          */
         review?: boolean
       }
       machine?: {
         /**
-         * Share knowledge between every project on THIS machine. Default FALSE:
-         * switching it on widens what every local project can read, so it is an
-         * operator decision, not a default.
+         * Share knowledge between every project on THIS machine. Default TRUE
+         * since the 2026-10-13 distribution decision (corpus is plugin-owned;
+         * only explicitly published rows are ever visible). `excludeProjects`
+         * narrows it; an explicit `false` disables the sync.
          */
         enabled?: boolean
         /**
@@ -137,7 +141,8 @@ export interface MagicContextDshConfig {
          * seen_count >= 2, no credential body, ≤3 per pass, paused while ≥10
          * candidates sit pending. Staging is reversible and shares nothing;
          * PUBLISHING stays a human act (`approve` / panel button). Default
-         * FALSE — the pool only fills itself once the operator asks for it.
+         * TRUE since the 2026-10-13 distribution decision; LLM classification
+         * fail-closes (paused rows, never a guessed domain).
          */
         autoStage?: boolean
       }

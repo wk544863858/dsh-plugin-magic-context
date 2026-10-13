@@ -21,12 +21,13 @@ describe('buildSwitchSnapshot', () => {
       autoPromote: true,
       embedBackfill: true,
       vectorBackfill: true, // default ON since 2026-10-12 (commit e5d11a0cd)
-      scoring: false,
+      // Distribution defaults ON since 2026-10-13: corpus-owned, gates in force.
+      scoring: true,
       userRender: true,
-      userCollect: false,
-      userReview: false,
-      machine: false,
-      machineAutoStage: false,
+      userCollect: true,
+      userReview: true,
+      machine: true,
+      machineAutoStage: true,
       guardMode: 'observe',
       forceWaitMs: 0,
     })
@@ -62,13 +63,14 @@ describe('diffSwitches', () => {
   })
 
   it('reports came-on and changed without alarm severity', () => {
-    const before = buildSwitchSnapshot(EMPTY)
+    // With the 2026-10-13 distribution defaults every boolean defaults ON, so
+    // came-on needs an explicit OFF snapshot to move away from.
+    const before = buildSwitchSnapshot({ memory: { write: false } })
     const after = buildSwitchSnapshot({
-      memory: { scoring: { enabled: true } },
       policy: { compartmentGuardMode: 'enforce' },
     })
     const rows = diffSwitches(before, after)
-    expect(rows).toContainEqual({ key: 'scoring', before: false, after: true, severity: 'came-on' })
+    expect(rows).toContainEqual({ key: 'write', before: false, after: true, severity: 'came-on' })
     expect(rows).toContainEqual({ key: 'guardMode', before: 'observe', after: 'enforce', severity: 'changed' })
     expect(rows.every(row => row.severity !== 'went-off')).toBe(true)
   })

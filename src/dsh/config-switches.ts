@@ -48,12 +48,12 @@ export function buildSwitchSnapshot(config: MagicContextDshConfig): SwitchSnapsh
     autoPromote: liveBoolean(config.memory?.autoPromote, true),
     embedBackfill: liveBoolean(config.memory?.embedBackfill, true),
     vectorBackfill: vectorBackfillEnabled(config.memory),
-    scoring: liveBoolean(config.memory?.scoring?.enabled, false),
+    scoring: liveBoolean(config.memory?.scoring?.enabled, true),
     userRender: liveBoolean(config.memory?.global?.user?.render, true),
-    userCollect: liveBoolean(config.memory?.global?.user?.collect, false),
-    userReview: liveBoolean(config.memory?.global?.user?.review, false),
-    machine: liveBoolean(config.memory?.global?.machine?.enabled, false),
-    machineAutoStage: liveBoolean(config.memory?.global?.machine?.autoStage, false),
+    userCollect: liveBoolean(config.memory?.global?.user?.collect, true),
+    userReview: liveBoolean(config.memory?.global?.user?.review, true),
+    machine: liveBoolean(config.memory?.global?.machine?.enabled, true),
+    machineAutoStage: liveBoolean(config.memory?.global?.machine?.autoStage, true),
     // liveString/liveNumber unwrap schemastery volatile references — a raw
     // read serialized the reference object into the boot row (measured 12:31:
     // guardMode arrived as {"get":"[depth]"}).

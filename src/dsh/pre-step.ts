@@ -334,7 +334,7 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
             config: {
               ...config.memory?.global?.machine?.enabled === undefined
                 ? {}
-                : { enabled: liveBoolean(config.memory?.global?.machine?.enabled, false) },
+                : { enabled: liveBoolean(config.memory?.global?.machine?.enabled, true) },
               ...config.memory?.global?.machine?.excludeProjects === undefined
                 ? {}
                 : { excludeProjects: config.memory.global.machine.excludeProjects },
@@ -530,7 +530,7 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
           // (including what normalization dropped), so the switch's effect is
           // visible from the journal rather than inferred from the pool size.
           ...profileWriter === undefined || profileWriter.status.ok !== true
-            || !liveBoolean(config.memory?.global?.user?.collect, false)
+            || !liveBoolean(config.memory?.global?.user?.collect, true)
             ? {}
             : {
               profileCollect: (collect: {
