@@ -87,7 +87,6 @@ describe('readWorkspacePlan', () => {
     const plan = readWorkspacePlan(contract)
     expect(plan.workspaceName).toBe('code')
     expect(plan.members.map(m => m.identity)).toEqual(['git:aaa', 'git:bbb'])
-    expect(plan.shareCategories).toEqual(['CONSTRAINTS'])
   })
 
   it('refuses to guess between several workspaces', () => {
@@ -124,6 +123,10 @@ describe('importWorkspacePlan', () => {
       expect(result.changed).toBe(true)
       // Importing is not enabling.
       expect(store.getDomain(ORG_DOMAIN_ID)?.enabled).toBe(false)
+      // Birth allowlist is the explicit org default, not the dormant
+      // workspace's fail-closed inherit — symmetric with machine.
+      expect([...(store.getDomain(ORG_DOMAIN_ID)?.shareCategories ?? [])].sort())
+        .toEqual(['ARCHITECTURE', 'CONFIG_VALUES', 'CONSTRAINTS'])
       expect(store.activeDomainIdentities('git:aaa')).toEqual([])
       expect(store.getMeta(WORKSPACE_IMPORT_META_KEY)).toBe(workspacePlanFingerprint(plan))
     } finally {
