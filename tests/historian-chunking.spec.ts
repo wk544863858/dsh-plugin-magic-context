@@ -106,6 +106,16 @@ function invalidFrame(): () => AsyncIterable<unknown> {
   }
 }
 
+/** The real protocol's usage beat: the usage chunk arrives before the finish. */
+function usageFrame(text: string, usage: Record<string, number>): () => AsyncIterable<unknown> {
+  return async function* () {
+    yield { type: 'block-start', index: 0, blockType: 'text' }
+    for (const char of text) yield { type: 'text-delta', index: 0, text: char }
+    yield { type: 'usage', usage }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  }
+}
+
 const deps = (llm: HistorianLlm, calls: Call[]): unknown => ({
   policy: { ...DEFAULT_POLICY, historianTimeoutMs: 60_000 },
   llm,
@@ -243,6 +253,51 @@ describe('the chunked run (D1/D3)', () => {
     expect(Math.min(600_000, timeoutMs * plannedCalls)).toBe(480_000)
     expect(Math.min(600_000, 200_000 * plannedCalls)).toBe(600_000)
     expect(DEFAULT_HISTORIAN_TIMEOUT_MS).toBe(120_000)
+  })
+})
+
+describe('usage landing on the done row', () => {
+  it('a single-call run reports the provider usage verbatim on the done row', async () => {
+    const calls: Call[] = []
+    const fake = scriptLlm([usageFrame(digest('single'), { inputTokens: 1_200, outputTokens: 340 })])
+    await callHistorian(deps(fake.llm as HistorianLlm, calls) as never, {
+      sessionId: SESSION,
+      session: SESSION_STUB,
+      nodes: Array.from({ length: 4 }, (_unused, index) => node(index + 1, 'x')),
+    })
+    const done = historianFirst(calls, 'done')!
+    expect(done.data?.usage).toEqual({ inputTokens: 1_200, outputTokens: 340 })
+  })
+
+  it('a chunked run sums the per-call usage under the same keys', async () => {
+    const calls: Call[] = []
+    const fake = scriptLlm([
+      usageFrame(digest('chunk-1'), { inputTokens: 100, outputTokens: 10 }),
+      usageFrame(digest('chunk-2'), { inputTokens: 200, outputTokens: 20 }),
+      usageFrame(digest('merged'), { inputTokens: 400, outputTokens: 40 }),
+    ])
+    const nodes = Array.from({ length: 8 }, (_unused, index) => node(index + 1, 'x'.repeat(4_000)))
+    await callHistorian(deps(fake.llm as HistorianLlm, calls) as never, {
+      sessionId: SESSION,
+      session: SESSION_STUB,
+      nodes,
+      chunkTokens: 4_000,
+    })
+    expect(phases(calls)).toEqual(['start', 'chunk', 'chunk', 'merge', 'done'])
+    const done = historianFirst(calls, 'done')!
+    expect(done.data?.usage).toEqual({ inputTokens: 700, outputTokens: 70 })
+  })
+
+  it('omits the usage key entirely when the provider never sent a usage chunk', async () => {
+    const calls: Call[] = []
+    const fake = scriptLlm([frame(digest('plain'))])
+    await callHistorian(deps(fake.llm as HistorianLlm, calls) as never, {
+      sessionId: SESSION,
+      session: SESSION_STUB,
+      nodes: Array.from({ length: 4 }, (_unused, index) => node(index + 1, 'x')),
+    })
+    const done = historianFirst(calls, 'done')!
+    expect(done.data).not.toHaveProperty('usage')
   })
 })
 

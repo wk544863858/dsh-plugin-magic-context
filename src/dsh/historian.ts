@@ -391,6 +391,26 @@ async function collectAttempt(
   }
 }
 
+/**
+ * Numeric-key accumulation across one run's calls. Providers report usage under
+ * their own key names (`inputTokens`/`outputTokens` is the common host shape),
+ * and a chunked run makes several calls — so the done row carries the
+ * per-key SUM, keyed exactly as the provider reported it (no guessing about
+ * semantics). Attempts that never produced a usage chunk (timeouts, transport
+ * errors) contribute nothing: their cost is already visible in `attempts`.
+ */
+function addUsage(
+  total: Record<string, number> | undefined,
+  reported: Record<string, number> | undefined,
+): Record<string, number> | undefined {
+  if (reported === undefined) return total
+  const merged: Record<string, number> = { ...total }
+  for (const [key, value] of Object.entries(reported)) {
+    if (typeof value === 'number' && Number.isFinite(value)) merged[key] = (merged[key] ?? 0) + value
+  }
+  return merged
+}
+
 /** Why a historian run produced no digest, in the journal's vocabulary. */
 function classifyFailure(error: unknown): string {
   if (error instanceof HistorianTimeoutError) return 'timeout'
@@ -584,6 +604,8 @@ export async function callHistorian(
   // distinguishable from a model that simply wrote bad JSON.
   let lastFinish: string | undefined
   let lastText = ''
+  /** Per-key usage sum over the run's successful calls (journal-observed cost). */
+  let usageTotal: Record<string, number> | undefined
   /** The output cap each attempt carried, in order (did escalation happen?). */
   const attemptCaps: number[] = []
   // The stage a failure should be attributed to: updated as the run advances
@@ -662,6 +684,7 @@ export async function callHistorian(
           }, budgetMs, input.signal)
           lastFinish = collected.finishReason
           lastText = collected.text
+          if (collected.usage !== undefined) usageTotal = addUsage(usageTotal, collected.usage)
           const parsed = parseHistorianOutput(collected.text)
           if (isMerge) {
             finalDraft = parsed
@@ -714,6 +737,9 @@ export async function callHistorian(
         events: draft.events.length,
         attempts,
         durationMs: clock() - startedAt,
+        // The run's observed LLM cost, keyed as the provider reported it
+        // (absent when the provider never sent a usage chunk).
+        ...(usageTotal !== undefined ? { usage: usageTotal } : {}),
         // 'stop' on a healthy run; 'none' would mean the stream ended without a
         // terminal reason even though the JSON parsed (worth knowing).
         finishReason: lastFinish ?? 'none',
