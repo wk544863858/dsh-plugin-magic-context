@@ -99,7 +99,10 @@ export async function reviewGlobalCandidates(input: {
   /** Absent = the shared store is not writable; approvals would publish nothing. */
   readonly publisher?: DomainWritePort
   readonly journal?: Journal
-  /** Cards one call may raise (default 5) so a full queue cannot hold a turn hostage. */
+  /**
+   * Cap on candidates one call raises (default 50, the auto-stage pool cap):
+   * the batch card carries one question per candidate in a single modal.
+   */
   readonly batchLimit?: number
   readonly sessionId?: string
   readonly now: () => number
@@ -140,7 +143,11 @@ export async function reviewGlobalCandidates(input: {
     }
     return { approved: 0, rejected: 0, reclassified: 0, skipped: 0, failed: 0, lines: ['全局域待审队列为空。'], remaining: 0 }
   }
-  const batch = pending.slice(0, Math.max(1, input.batchLimit ?? 5))
+  // Default covers the whole staging batch in ONE card (the host modal pages
+  // through questions; auto-stage caps the pool at 50 per tick) — the old 5
+  // split a 13-candidate promotion across three modals (user feedback
+  // 2026-10-13).
+  const batch = pending.slice(0, Math.max(1, input.batchLimit ?? 50))
   // Local const so the gate precheck's narrowing survives the awaits between
   // here and the dispatch loop (TS drops property narrowing across calls).
   const publisher = input.publisher
