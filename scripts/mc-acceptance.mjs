@@ -46,7 +46,10 @@ if (args.help) {
 }
 
 const DSH_DB = args.dshDb ?? join(homedir(), '.local', 'share', 'cortexkit', 'magic-context-dsh-poc', 'dsh-magic-context.db');
-const MC_DB = args.mcDb ?? join(homedir(), '.local', 'share', 'cortexkit', 'magic-context', 'context.db');
+// Post-cutover (2026-10-13): the plugin's own corpus replaced the shared
+// context.db; every check below (domain rows / fence / promotion validation)
+// reads it. --mcDb still points elsewhere for ad-hoc diagnostics.
+const MC_DB = args.mcDb ?? join(homedir(), '.local', 'share', 'cortexkit', 'magic-context-dsh-poc', 'memories.db');
 const WINDOW_MS = Math.max(1, args.hours) * 3_600_000;
 const SINCE = Date.now() - WINDOW_MS;
 
@@ -229,14 +232,14 @@ if (dsh) {
     const mcVersion = mc.prepare('SELECT MAX(version) AS v FROM schema_migrations WHERE version < 10000').get()?.v ?? 0;
     const maxSupported = Number((readFileSync(join(PKG, 'src', 'core', 'memory-bridge.ts'), 'utf8').match(/MEMORY_SCHEMA_MAX_VERSION\s*=\s*(\d+)/) ?? [])[1] ?? 0);
     add(mcVersion <= maxSupported ? 'PASS' : 'WARN', 'fence.version',
-      `MC schema v${mcVersion}，适配器支持到 v${maxSupported}${mcVersion > maxSupported ? ' → 已进入只读降级（契约 fence）' : '（未触发 fence）'}`);
+      `corpus schema v${mcVersion}，适配器支持到 v${maxSupported}${mcVersion > maxSupported ? ' → 已进入只读降级（corpus fence）' : '（未触发 fence）'}`);
     // 交叉不变量：fence 状态必须与操作者/界面看到的 memory_write 措辞一致，
     // 否则写路径全部失败却对外宣称 read-write（在真实库副本上实测过的缺陷形态）。
     if (typeof bootMemoryWrite === 'string' && (bootMemoryWrite.startsWith('read-write') || bootMemoryWrite.startsWith('read-only'))) {
       const fenced = mcVersion > maxSupported;
       const reported = bootMemoryWrite.startsWith('read-only');
       add(reported === fenced ? 'PASS' : 'FAIL', 'fence.exposure',
-        `MC v${mcVersion} ${fenced ? '>' : '≤'} 适配器 v${maxSupported}；boot 里 memory_write="${bootMemoryWrite.slice(0, 70)}"`);
+        `corpus v${mcVersion} ${fenced ? '>' : '≤'} 适配器 v${maxSupported}；boot 里 memory_write="${bootMemoryWrite.slice(0, 70)}"`);
     }
 
     if (promotedIds.size === 0) add('WARN', 'promotion.rows', '窗口内没有 promotion 事件（historian 未成功或 autoPromote 未开）');
@@ -336,12 +339,23 @@ if (dsh) {
         `${bstate.length} 个会话的 project_epoch_fingerprint: ${fingerprints.length === 0 ? '(空)' : fingerprints.join(', ')}`);
     }
     const touched = mc.prepare(`SELECT DISTINCT project_path FROM memories WHERE source_type='historian' AND created_at > ?`).all(SINCE).map((r) => r.project_path);
-    const managed = touched.length ? countOf(mc, 'authority_managed', `project_path IN (${touched.map(() => '?').join(',')})`, touched) : 0;
-    const repair = touched.length ? countOf(mc, 'authority_repair_pending', `project_path IN (${touched.map(() => '?').join(',')})`, touched) : 0;
-    const priv = mc.prepare('SELECT id, enabled FROM context_privilege_state').all();
-    const privOn = priv.filter((p) => Number(p.enabled) !== 0);
-    add(managed === 0 && repair === 0 && privOn.length === 0 ? 'PASS' : 'FAIL', 'authority.guard',
-      `本轮提升涉及 ${touched.length} 个项目；authority_managed=${managed} authority_repair_pending=${repair} context_privilege_state 启用=${privOn.length}`);
+    // Post-cutover: the own corpus deliberately carries no authority tables
+    // (upstream's module-managed guard — no modules exist here). Their absence
+    // IS the healthy state; only a foreign-shaped store keeps the old checks.
+    const authorityTables = mc.prepare(
+      `SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name IN ('authority_managed','authority_repair_pending')`,
+    ).get().n;
+    if (authorityTables === 0) {
+      add('PASS', 'authority.guard',
+        `自有语料库无权威表（设计性缺席，无模块管理概念）；本轮提升涉及 ${touched.length} 个项目`);
+    } else {
+      const managed = touched.length ? countOf(mc, 'authority_managed', `project_path IN (${touched.map(() => '?').join(',')})`, touched) : 0;
+      const repair = touched.length ? countOf(mc, 'authority_repair_pending', `project_path IN (${touched.map(() => '?').join(',')})`, touched) : 0;
+      const priv = mc.prepare('SELECT id, enabled FROM context_privilege_state').all();
+      const privOn = priv.filter((p) => Number(p.enabled) !== 0);
+      add(managed === 0 && repair === 0 && privOn.length === 0 ? 'PASS' : 'FAIL', 'authority.guard',
+        `外型库兼容检查：本轮提升涉及 ${touched.length} 个项目；authority_managed=${managed} authority_repair_pending=${repair} context_privilege_state 启用=${privOn.length}`);
+    }
     mc.close();
   }
   dsh.close();

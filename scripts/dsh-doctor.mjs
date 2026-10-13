@@ -51,7 +51,8 @@ const value = (name, fallback) => {
 }
 const asJson = argv.includes('--json')
 
-const MC_STORE = value('--store', join(homedir(), '.local', 'share', 'cortexkit', 'magic-context', 'context.db'))
+// Post-cutover (2026-10-13): the doctor watches the plugin's OWN corpus.
+const MC_STORE = value('--store', join(homedir(), '.local', 'share', 'cortexkit', 'magic-context-dsh-poc', 'memories.db'))
 const ADAPTER_DIR = value('--adapter-dir', join(homedir(), '.local', 'share', 'cortexkit', 'magic-context-dsh-poc'))
 const ADAPTER_DB = join(ADAPTER_DIR, 'dsh-magic-context.db')
 const ACTIVITY_LOG = join(ADAPTER_DIR, 'activity.log')
@@ -70,7 +71,7 @@ const source = (file, pattern) => {
   const match = pattern.exec(readFileSync(join(PKG, file), 'utf8'))
   return match === null ? undefined : Number(match[1])
 }
-/** 本构建接受的 MC 存储契约上限（`src/core/memory-bridge.ts`）。 */
+/** 本构建接受的自有语料库版本上限（`src/core/memory-bridge.ts`）。 */
 const CEILING = source('src/core/memory-bridge.ts', /MEMORY_SCHEMA_MAX_VERSION\s*=\s*(\d+)/)
 /** 适配器自有库的 schema（`src/core/stores.ts`）。 */
 const ADAPTER_SCHEMA = source('src/core/stores.ts', /SCHEMA_VERSION\s*=\s*(\d+)/)
@@ -94,11 +95,11 @@ const age = (at) => {
 const readOnly = (path) => new DatabaseSync(path, { readOnly: true })
 const maxVersion = (db) => db.prepare('SELECT MAX(version) AS v FROM schema_migrations WHERE version < 10000').get()?.v
 
-// ── 1. MC 存储：fence 裁决（不是打印版本，而是"现在能不能写、下次升级会怎样"） ──
-open('1. Magic Context 存储（fence）')
+// ── 1. 自有语料库：fence 裁决（不是打印版本，而是"现在能不能写、下次迁移会怎样"） ──
+open('1. 自有语料库（corpus fence）')
 if (!existsSync(MC_STORE)) {
   say('⚠', `库不存在：${MC_STORE}`)
-  say(' ', '记忆写入与项目记忆检索会整体关闭；MC 侧首次运行会创建它')
+  say(' ', '记忆写入与项目记忆检索会整体关闭；适配器首挂载会创建它（boot 行 corpusBootstrap=created）')
 } else {
   try {
     const db = readOnly(MC_STORE)
@@ -106,12 +107,12 @@ if (!existsSync(MC_STORE)) {
     db.close()
     const headroom = CEILING - version
     say(' ', `路径 ${MC_STORE}`)
-    say(' ', `库 schema v${version} · 本构建上限 v${CEILING} · 余量 ${headroom}`)
+    say(' ', `语料库 schema v${version} · 本构建上限 v${CEILING} · 余量 ${headroom}`)
     if (version > CEILING) {
-      bad(`库 v${version} 比本构建上限 v${CEILING} 新 → 写路径已降级只读（ctx_memory 写入返回 ok:false）`)
-      say(' ', `动作：读 MC v? 的 migration ${version}，确认无列形状变更后把 MEMORY_SCHEMA_MAX_VERSION 提到 ${version}，并同步 fence spec`)
+      bad(`语料库 v${version} 比本构建上限 v${CEILING} 新 → 写路径已降级只读（ctx_memory 写入返回 ok:false）`)
+      say(' ', `动作：这是我们自己的迁移线——读 corpus-store.ts 对应版本迁移，确认后把 MEMORY_SCHEMA_MAX_VERSION 提到 ${version}，并同步 fence spec`)
     } else if (headroom === 0) {
-      say('⚠', '已在上限：MC 下一次迁移会让写路径降级只读，直到上限跟进')
+      say('⚠', '已在上限：下一次自有迁移会让写路径降级只读，直到上限跟进')
     } else {
       say('✓', `写路径可用，且还有 ${headroom} 个版本的余量`)
     }
