@@ -194,8 +194,8 @@ describe('memory bridge (read-only recall)', () => {
     }
   })
 
-  it('defaults the path into the CortexKit data directory', () => {
-    expect(defaultMemoryDbPath()).toMatch(/cortexkit[\\/]magic-context[\\/]context\.db$/)
+  it('defaults the path into the plugin\'s own data directory (post-cutover corpus)', () => {
+    expect(defaultMemoryDbPath()).toMatch(/cortexkit[\\/]magic-context-dsh-poc[\\/]memories\.db$/)
   })
 
   it('hashes directories exactly like Magic Context (path.resolve, no separator rewrite)', () => {

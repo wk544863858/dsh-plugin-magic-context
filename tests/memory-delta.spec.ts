@@ -27,7 +27,7 @@ import {
   type MemoryUpdateLine,
 } from '../src/core/compartments.ts'
 import {
-  defaultMemoryDbPath,
+  legacySharedMemoryDbPath,
   openMemoryBridge,
 } from '../src/core/memory-bridge.ts'
 import { DEFAULT_POLICY } from '../src/core/policy.ts'
@@ -571,7 +571,11 @@ describe('memory bridge: the mutation cursor (read-only)', () => {
   // measured ~5.0s on its own — the default 5s budget lost a photo-finish race
   // against parallel suite load and flaked ~1 run in 3.
   it('reads the real production log off a read-only VACUUM INTO snapshot', { timeout: 30_000 }, () => {
-    const realDb = defaultMemoryDbPath()
+    // Post-cutover (2026-10-13) the plugin's own corpus starts empty; the
+    // real production mutation log this case exercises lives in the LEGACY
+    // shared store, read once here off a snapshot. Machines without the
+    // legacy file skip via the guard below.
+    const realDb = legacySharedMemoryDbPath()
     if (!existsSync(realDb) || statSync(realDb).size > 400 * 1024 * 1024) return
     const snapshot = join(tempDir('mc-delta-real-'), 'snapshot.db')
     const source = new DatabaseSync(realDb, { readOnly: true })

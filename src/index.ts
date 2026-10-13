@@ -824,8 +824,8 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     schemaVersion: SCHEMA_VERSION,
     recoveredHistorianRuns,
     switches,
-    // D1: set only when this mount laid the contract store down (fresh machine)
-    ...lane.contractBootstrap === undefined ? {} : { contractBootstrap: lane.contractBootstrap },
+    // Set only when this mount laid the own corpus down (fresh machine)
+    ...lane.corpusBootstrap === undefined ? {} : { corpusBootstrap: lane.corpusBootstrap },
     tools: { mode: toolMode, registered: config.registerTools !== false },
     engine: stores.getMeta('compaction_engine'),
     memory: stores.getMeta('memory_bridge'),

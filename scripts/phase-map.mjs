@@ -25,7 +25,7 @@ const PHASE_BASE = [
   'tests/compaction-engine.spec.ts',
   'tests/compartments.spec.ts',
   'tests/config-schema.spec.ts',
-  'tests/contract-bootstrap.spec.ts',
+  'tests/corpus-store.spec.ts',
   'tests/global-autostage.spec.ts',
   'tests/global-review.spec.ts',
   'tests/context-pressure.spec.ts',

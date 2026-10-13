@@ -13,7 +13,7 @@ import { errText } from '../core/types.ts'
 import type { PressurePolicy } from '../core/policy.ts'
 import { openMemoryBridge, DEFAULT_SHARE_CATEGORIES, defaultMemoryDbPath, resolveIdentitySpec, type ActivePeerDomain } from '../core/memory-bridge.ts'
 import { openMemoryWriter, type MemoryWriter } from '../core/memory-write.ts'
-import { ensureContractStore } from '../core/contract-bootstrap.ts'
+import { ensureOwnCorpusStore } from '../core/corpus-store.ts'
 import { syncMachineDomain } from '../core/machine-domain.ts'
 import { openProfileWriter, type ProfileWriter } from '../core/profile-write.ts'
 import { planBackfill } from '../core/vector-lane.ts'
@@ -58,11 +58,11 @@ export interface MemoryLane {
   /** A2: per-session memory ids the injected block currently renders. */
   visibleMemoryIdsBySession: Map<string, Set<number>>
   /**
-   * D1 fresh-machine bootstrap outcome (undefined = lane off or store already
-   * existed). Surfaced by the boot row so a tgz-only install's first mount
-   * shows exactly what was laid down.
+   * Own-corpus fresh-machine bootstrap outcome (undefined = lane off or the
+   * corpus already existed). Surfaced by the boot row so a tgz-only
+   * install's first mount shows exactly what was laid down.
    */
-  contractBootstrap: string | undefined
+  corpusBootstrap: string | undefined
   memorySearchForTool: MemoryToolSearch | undefined
   /**
    * The auto-search hint lane's FTS-only search, keyed by session rather than by
@@ -125,19 +125,20 @@ export function openMemoryLane(
   // release, since the contract's tables lost their only writer with the
   // dashboard.
   const domainSource = memorySettings?.domains?.source === 'contract' ? 'contract' : 'adapter'
-  // D1: on a machine without upstream MC the contract store does not exist, and
-  // every opener below would silently degrade (0-byte file, no fence, dead
-  // lane). Lay the frozen v94 template down FIRST; an existing store — valid,
-  // foreign-shaped or fenced — is never touched ('exists').
-  let contractBootstrap: string | undefined
+  // D1, post-cutover: without this bootstrap a fresh machine has NO corpus
+  // file, and every opener below would silently degrade (0-byte file, no
+  // schema_migrations, dead lane). Lay the OWN corpus schema down FIRST; an
+  // existing store — valid, foreign-shaped, or fenced — is never touched
+  // ('exists'), and the openers' refusals keep guarding whatever it is.
+  let corpusBootstrap: string | undefined
   if (memoryEnabled) {
     const target = memorySettings?.dbPath ?? defaultMemoryDbPath()
-    const boot = ensureContractStore(target)
+    const boot = ensureOwnCorpusStore(target)
     if (boot.outcome !== 'exists') {
-      contractBootstrap = boot.detail === undefined ? boot.outcome : `${boot.outcome} (${boot.detail})`
-      ctx.logger.info(`magic-context dsh adapter: contract store ${contractBootstrap} at ${target}`)
+      corpusBootstrap = boot.detail === undefined ? boot.outcome : `${boot.outcome} (${boot.detail})`
+      ctx.logger.info(`magic-context dsh adapter: own corpus ${corpusBootstrap} at ${target}`)
       try {
-        stores.setMeta('contract_bootstrap', JSON.stringify({ outcome: boot.outcome, detail: boot.detail, at: Date.now() }))
+        stores.setMeta('corpus_bootstrap', JSON.stringify({ outcome: boot.outcome, detail: boot.detail, at: Date.now() }))
       } catch {
         // best effort only — the meta row is observability, not a gate
       }
@@ -513,7 +514,7 @@ export function openMemoryLane(
     vectorBackfill,
     memorySearch,
     visibleMemoryIdsBySession,
-    contractBootstrap,
+    corpusBootstrap,
     memorySearchForTool,
     searchForSession,
     memoryScoring,

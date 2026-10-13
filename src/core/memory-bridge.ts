@@ -38,10 +38,12 @@ import { parseShareCategories } from './domains.ts'
 import { scoreMemory, type MemoryRecallScoring } from './memory-scoring.ts'
 import { errText } from './types.ts'
 
-/** Magic Context's LATEST_SUPPORTED_VERSION (storage-db.ts). v95 (MC v0.46.0)
- * adds `temporal_decisions` and `git_commit_fts_rowid_map` plus covering indexes
- * (`migration-v95-perf-indexes.ts`) — additive DDL only, no `ALTER TABLE` on
- * `memories`, so the 29-column write contract this ceiling guards is unchanged. */
+/** The corpus schema ceiling this build understands. Own lineage: the shape
+ * was inherited verbatim from upstream MC's v95 store at the 2026-10-13
+ * cutover (the adapter stopped sharing `context.db`; see corpus-store.ts),
+ * and every future `schema_migrations` row is OURS — a version above this
+ * ceiling can only mean the corpus is newer than this build, which must
+ * fence to read-only exactly as before. */
 export const MEMORY_SCHEMA_MAX_VERSION = 95
 
 /** MC's terminal mutation types (`storage-memory-mutation-log.ts:9-15`): an
@@ -58,7 +60,15 @@ export const DEFAULT_MUTATION_PAGE_LIMIT = 1_000
 /** The default workspace sharing whitelist when `share_categories` is absent. */
 export const DEFAULT_SHARE_CATEGORIES = ['CONSTRAINTS'] as const
 
+/** The plugin's OWN corpus, next to the adapter store in its own data dir
+ * (cutover 2026-10-13: no more sharing upstream MC's `context.db`). */
 export function defaultMemoryDbPath(): string {
+  return join(homedir(), '.local', 'share', 'cortexkit', 'magic-context-dsh-poc', 'memories.db')
+}
+
+/** Upstream MC's legacy shared store — read ONLY by the one-shot importer
+ * (`scripts/mc-import-corpus.mjs`). No runtime code may resolve this path. */
+export function legacySharedMemoryDbPath(): string {
   return join(homedir(), '.local', 'share', 'cortexkit', 'magic-context', 'context.db')
 }
 
