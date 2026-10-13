@@ -244,29 +244,58 @@ describe('reviewGlobalCandidates', () => {
     expect(store2.getGlobalCandidate(id2)?.state).toBe('pending')
   })
 
-  it('raises ONE card for the whole batch, one question per candidate', async () => {
+  it('chains cards of five questions each for a larger queue', async () => {
     const store = storeWithDomains()
-    const approveId = stage(store, { category: 'CONSTRAINTS', sourceMemoryId: 7 })
-    const rejectId = stage(store, { category: 'CONSTRAINTS', sourceMemoryId: 8, content: '另一条事实' })
+    const ids: number[] = []
+    for (let index = 1; index <= 13; index += 1) {
+      ids.push(stage(store, { category: 'CONSTRAINTS', sourceMemoryId: index, content: `事实 ${String(index)}` }))
+    }
     const { port, calls } = fakePublisher()
     const raisedCards: GlobalReviewQuestion[][] = []
     const outcome = await reviewGlobalCandidates({
       store,
-      ask: fakeAsker(askId => (askId === `global-candidate-${String(approveId)}`
-        ? { answers: [{ id: askId, selected: ['批准发布'] }] }
-        : { answers: [{ id: askId, selected: ['拒绝'] }] }), raisedCards),
+      ask: fakeAsker(askId => ({ answers: [{ id: askId, selected: ['批准发布'] }] }), raisedCards),
       publisher: port,
       now: () => NOW,
     })
-    expect(raisedCards).toHaveLength(1)
-    expect(raisedCards[0]).toHaveLength(2)
-    // Pool order is updated_at DESC (newest first) — compare as a set.
-    expect(raisedCards[0]?.map(question => question.id).sort())
-      .toEqual([`global-candidate-${String(approveId)}`, `global-candidate-${String(rejectId)}`].sort())
-    expect(outcome.approved).toBe(1)
-    expect(outcome.rejected).toBe(1)
+    // 13 candidates → three chained modals (5+5+3) in ONE call.
+    expect(raisedCards).toHaveLength(3)
+    expect(raisedCards.map(card => card.length)).toEqual([5, 5, 3])
+    expect(raisedCards.flat().map(question => question.id).sort())
+      .toEqual(ids.map(id => `global-candidate-${String(id)}`).sort())
+    expect(outcome.approved).toBe(13)
     expect(outcome.failed).toBe(0)
-    expect(calls).toHaveLength(1)
+    expect(calls).toHaveLength(13)
+    // Drained queue, no leftover note (the per-candidate lines already tell).
+    expect(outcome.remaining).toBe(0)
+  })
+
+  it('stops the chain when a card is cancelled, keeping the rest pending', async () => {
+    const store = storeWithDomains()
+    for (let index = 1; index <= 7; index += 1) {
+      stage(store, { category: 'CONSTRAINTS', sourceMemoryId: index, content: `事实 ${String(index)}` })
+    }
+    const { port, calls } = fakePublisher()
+    let first = true
+    const outcome = await reviewGlobalCandidates({
+      store,
+      ask: async input => {
+        if (first) {
+          first = false
+          throw new Error('卡片被取消')
+        }
+        throw new Error('chain must stop after a cancelled card')
+      },
+      publisher: port,
+      now: () => NOW,
+    })
+    // The cancelled card's 5 candidates stay pending; cards 6-7 never rise.
+    expect(outcome.failed).toBe(5)
+    expect(outcome.approved).toBe(0)
+    expect(outcome.remaining).toBe(7)
+    expect(calls).toHaveLength(0)
+    expect(outcome.lines.some(line => line.includes('5 条保留待审'))).toBe(true)
+    expect(outcome.lines.some(line => line.includes('剩余 2 条本次不再弹出'))).toBe(true)
   })
 
   it('rejects without publishing and skips without touching state', async () => {
@@ -335,7 +364,7 @@ describe('reviewGlobalCandidates', () => {
     expect(outcome.skipped).toBe(2)
     // Skipped candidates stay pending BY DESIGN — remaining counts them.
     expect(outcome.remaining).toBe(3)
-    expect(outcome.lines.some(line => line.includes('本批 2/3'))).toBe(true)
+    expect(outcome.lines.some(line => line.includes('本次调用上限 2 条已处理完'))).toBe(true)
     expect(store.getGlobalCandidate(first)?.state).toBe('pending')
   })
 

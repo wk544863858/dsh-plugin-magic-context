@@ -30,6 +30,9 @@ import type { Journal } from '../core/journal.ts'
 /** Revision rounds per candidate before the loop gives up and skips (operator typo loop guard). */
 const MAX_REVISION_ROUNDS = 5
 
+/** Questions per modal, chained within one call — the host pager has no jump-to, so bigger cards mean blind flips and fatigue approvals (user decision 2026-10-13). */
+const QUESTIONS_PER_CARD = 5
+
 /** One question card in the shape `ctx.userQuestions.ask()` accepts. */
 export interface GlobalReviewQuestion {
   readonly id: string
@@ -253,26 +256,32 @@ export async function reviewGlobalCandidates(input: {
     }
   }
 
-  const verdicts = new Map<number, { readonly label: string; readonly custom?: string }>()
-  if (cardable.length > 0) {
-    let answer: unknown
+  // One card per QUESTIONS_PER_CARD candidates, CHAINED within this call:
+  // the caller keeps hitting Submit until the queue is drained — no repeated
+  // `review_global` invocations. Cancelling a card settles only its own
+  // slice; the rest of the queue stays pending and the chain stops (a
+  // dismissed modal must not summon the next one — that reads as nagging).
+  const queue = [...cardable]
+  while (queue.length > 0) {
+    const slice = queue.splice(0, QUESTIONS_PER_CARD)
+    const verdicts = new Map<number, { readonly label: string; readonly custom?: string }>()
     try {
-      answer = await input.ask({
+      const answer = await input.ask({
         sessionId: input.sessionId,
-        questions: cardable.map(entry => buildQuestion(entry.candidate, entry.candidate.content, false)),
+        questions: slice.map(entry => buildQuestion(entry.candidate, entry.candidate.content, false)),
       })
+      for (const [candidateId, parsed] of parseAnswers(answer)) verdicts.set(candidateId, parsed)
     } catch (error) {
-      // One modal for the batch means one failure surface for the batch:
-      // nothing settled, everything stays pending.
-      failed += cardable.length
-      lines.push(`✗ 审批卡未能送达（${String(cardable.length)} 条保留待审）：${error instanceof Error ? error.message : String(error)}`)
-      const remaining = input.store.listGlobalCandidates({ state: 'pending' }).length
-      return { approved, rejected, reclassified, skipped, failed, lines, remaining }
+      // Only the raised card's slice counts as failed; the un-raised rest
+      // was never asked anything — it just stays pending.
+      failed += slice.length
+      const message = error instanceof Error ? error.message : String(error)
+      const rest = queue.length
+      lines.push(`✗ 审批卡未能送达（${String(slice.length)} 条保留待审）${rest > 0 ? `，剩余 ${String(rest)} 条本次不再弹出` : ''}：${message}`)
+      break
     }
-    for (const [candidateId, parsed] of parseAnswers(answer)) verdicts.set(candidateId, parsed)
-  }
 
-  for (const { candidate, writer } of cardable) {
+  for (const { candidate, writer } of slice) {
     let verdict = verdicts.get(candidate.id)
     if (verdict === undefined) {
       failed += 1
@@ -439,10 +448,11 @@ export async function reviewGlobalCandidates(input: {
     lines.push(`#${String(candidate.id)} → 跳过，留在待审池`)
     journalDecision('skipped')
   }
+  }
 
   const remaining = input.store.listGlobalCandidates({ state: 'pending' }).length
   if (pending.length > batch.length) {
-    lines.push(`（本批 ${String(batch.length)}/${String(pending.length)} 条，剩余 ${String(remaining)} 条待审，再次调用继续）`)
+    lines.push(`（本次调用上限 ${String(batch.length)} 条已处理完，剩余 ${String(remaining)} 条待审，再次调用继续）`)
   }
   return { approved, rejected, reclassified, skipped, failed, lines, remaining }
 }
