@@ -36,7 +36,6 @@ export type JournalKind =
   | 'compartment-guard'
   | 'force-path'
   | 'memory-stats'
-  | 'evidence-verify'
   | 'historian'
   | 'baseline'
   | 'emergency-reclaim'

@@ -29,7 +29,6 @@ describe('buildSwitchSnapshot', () => {
       machineAutoStage: false,
       guardMode: 'observe',
       forceWaitMs: 0,
-      evidenceMode: 'off',
     })
   })
 
@@ -42,7 +41,6 @@ describe('buildSwitchSnapshot', () => {
         global: { user: { collect: true, review: true }, machine: { enabled: true, autoStage: true } },
       },
       policy: { compartmentGuardMode: 'enforce', forceWaitReadyMs: 20_000 },
-      maintenance: { evidenceVerify: { mode: 'shadow' } },
     })
     expect(snapshot.write).toBe(false)
     expect(snapshot.vectorBackfill).toBe(false)
@@ -52,7 +50,6 @@ describe('buildSwitchSnapshot', () => {
     expect(snapshot.machine).toBe(true)
     expect(snapshot.guardMode).toBe('enforce')
     expect(snapshot.forceWaitMs).toBe(20_000)
-    expect(snapshot.evidenceMode).toBe('shadow')
   })
 })
 

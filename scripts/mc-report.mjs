@@ -764,12 +764,9 @@ function computeMetrics(rows) {
       usageOut: 0,
       usageTicks: 0,
       daily: {},
-      // evidence 核证（融合 v7 stage-2）锚点。
-      evidenceTicks: 0, evidenceMode: '', evidenceRows: 0,
-      evidenceConfirmed: 0, evidenceOverturned: 0, evidenceUncertain: 0,
     },
     memoryLane: { promoteEvents: 0, promotions: 0, seenAgain: 0 },
-    // 融合 v7 运行面锚点：publish guard 与溢出通道（evidence 挂在 maintenance 桶）。
+    // 融合 v7 运行面锚点：publish guard 与溢出通道。
     guard: { events: 0, drift: 0, noGain: 0, observe: 0, enforce: 0, reclaimedTokens: 0 },
     overflow: { forceEvents: 0, waits: 0, publishes: 0, published: 0 },
     errors: [],
@@ -992,15 +989,6 @@ switch (row.kind) {
         if (lagMax !== null) m.maintenance.lagMaxList.push(lagMax)
         const lagAvg = toNum(d.lagAvgH)
         if (lagAvg !== null) m.maintenance.lagAvgList.push(lagAvg)
-        const evidence = d.evidence !== null && typeof d.evidence === 'object' ? d.evidence : null
-        if (evidence !== null) {
-          m.maintenance.evidenceTicks += 1
-          m.maintenance.evidenceMode = toText(evidence.mode)
-          for (const field of ['rows', 'confirmed', 'overturned', 'uncertain']) {
-            const value = toNum(evidence[field])
-            if (value !== null) m.maintenance['evidence' + field[0].toUpperCase() + field.slice(1)] += value
-          }
-        }
         const usage = d.usage !== null && typeof d.usage === 'object' ? d.usage : {}
         const usageIn = toNum(usage.inputTokens) ?? 0
         const usageOut = toNum(usage.outputTokens) ?? 0
@@ -1401,7 +1389,7 @@ function buildHealth(ctx) {  const { db, opened, dbExists, openError, valid, sch
           `dream（维护 verify）单日 token 耗用峰值 ${fmtInt(dreamDailyMax)} > 5M——批量或路由疑似失控，复核 VERIFY_BATCH 与路由配置。`,
         )
       }
-      // 融合 v7 运行面扳机：真实溢出、guard enforce 动作、evidence 推翻占比。
+      // 融合 v7 运行面扳机：真实溢出、guard enforce 动作。
       if (metrics.overflow.publishes > 0) {
         push(
           'context-overflow',
@@ -1414,14 +1402,6 @@ function buildHealth(ctx) {  const { db, opened, dbExists, openError, valid, sch
           'publish-guard-acting',
           `publish guard enforce 动作 ${metrics.guard.enforce} 次（drift/no-gain 共 ${metrics.guard.drift + metrics.guard.noGain}）`
             + '——分区质量需要复核（或回 observe 观察）。',
-        )
-      }
-      if (metrics.maintenance.evidenceTicks >= 3 && metrics.maintenance.evidenceOverturned > 0
-        && metrics.maintenance.evidenceOverturned >= metrics.maintenance.evidenceConfirmed) {
-        push(
-          'evidence-overrule-high',
-          `evidence 核证推翻 ≥ 确认（overturned ${metrics.maintenance.evidenceOverturned}`
-            + ` vs confirmed ${metrics.maintenance.evidenceConfirmed}）——stage-1 判定可能过激。`,
         )
       }
       if (metrics.errors.length > 0) {
@@ -1825,13 +1805,6 @@ function renderText(payload) {
       lines.push(
         `  溢出通道      : force-path ${fmtInt(ov.forceEvents)} 次（wait ${fmtInt(ov.waits)} / publish ${fmtInt(ov.publishes)}，`
         + `落地分区 ${fmtInt(ov.published)}）`,
-      )
-    }
-    if (metrics.maintenance.evidenceTicks > 0) {
-      const evm = metrics.maintenance
-      lines.push(
-        `  evidence 核证 : ${fmtInt(evm.evidenceTicks)} 拍（mode ${evm.evidenceMode || '-'}），rows ${fmtInt(evm.evidenceRows)}：`
-        + `confirmed ${fmtInt(evm.evidenceConfirmed)} / overturned ${fmtInt(evm.evidenceOverturned)} / uncertain ${fmtInt(evm.evidenceUncertain)}`,
       )
     }
     const sc = metrics.scoringStats

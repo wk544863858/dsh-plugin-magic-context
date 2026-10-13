@@ -852,10 +852,9 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     },
     journal: { enabled: journal !== undefined, mirror: journal?.mirrorPath, retentionDays: liveNumber(config.journal?.retentionDays, 30) },
     tagsRetentionDays: liveNumber(config.tags?.retentionDays, 30),
-    // 融合 v7 的四个待观察翻转（boot 行可见，巡检核对配置漂移）。
+    // 融合 v7 的待观察翻转（boot 行可见，巡检核对配置漂移）。
     compartmentGuardMode: config.policy?.compartmentGuardMode,
     forceWaitReadyMs: liveNumber(config.policy?.forceWaitReadyMs, 0),
-    evidenceVerifyMode: config.maintenance?.evidenceVerify?.mode,
     memoryScoringEnabled: config.memory?.scoring?.enabled === true,
     policy: {
       executeThreshold: policy.executeThreshold,

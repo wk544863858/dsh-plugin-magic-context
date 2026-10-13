@@ -36,7 +36,6 @@ export const SWITCH_KEYS = [
   'machineAutoStage',
   'guardMode',
   'forceWaitMs',
-  'evidenceMode',
 ] as const
 
 export type SwitchKey = (typeof SWITCH_KEYS)[number]
@@ -60,7 +59,6 @@ export function buildSwitchSnapshot(config: MagicContextDshConfig): SwitchSnapsh
     // guardMode arrived as {"get":"[depth]"}).
     guardMode: liveString(config.policy?.compartmentGuardMode, 'observe'),
     forceWaitMs: liveNumber(config.policy?.forceWaitReadyMs, 0),
-    evidenceMode: liveString(config.maintenance?.evidenceVerify?.mode, 'off'),
   }
 }
 

@@ -165,11 +165,6 @@ export interface MagicContextDshConfig {
       }
     }
     /**
-     * Workspace root for the evidence pass (schema v7): its greps run here.
-     * Defaults to `memory.project` when that is a real filesystem path.
-     */
-    evidenceRoot?: string
-    /**
      * Embed query-side candidates in memory instead of reading stored vectors
      * (the B4 lane, `memory-lane.ts`). Default TRUE — this is what lets a search
      * work at all on rows the store has no vector for. It writes nothing.
@@ -216,18 +211,6 @@ export interface MagicContextDshConfig {
     intervalMs?: number
     verifyProvider?: string
     verifyModel?: string
-    /**
-     * The evidence pass (schema v7, borrowed from mon3stera's
-     * codebase-grounded verify): `shadow` journals what the workspace
-     * evidence would decide against each stage-1 stale/wrong flag (default
-     * `off`); `enforce` defers the destructive stage-1 verdicts and lets the
-     * evidence decide instead. Needs a workspace root — `memory.evidenceRoot`
-     * or a `memory.project` that is a real filesystem path.
-     */
-    evidenceVerify?: {
-      mode?: 'off' | 'shadow' | 'enforce'
-      maxRows?: number
-    }
   }
   /**
    * Host-supplied CompactionEngine base class (in-tree glue injects it; when
