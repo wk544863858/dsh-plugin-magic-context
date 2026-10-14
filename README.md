@@ -4,7 +4,7 @@
 > **DeepSeek Harness（DSH）** 的适配插件。以 DSH **bundle** 形态安装进 desktop profile：出现在
 > GUI 的"插件"页面，在运行中的应用里即时开始工作。
 >
-> 当前版本 **0.8.2** · 上游基线 **magic-context v0.46.0**（`651c105a9`）· 针对 **DSH
+> 当前版本 **0.9.0** · 上游基线 **magic-context v0.46.0**（`651c105a9`）· 针对 **DSH
 > 0.2.1-alpha.1**（`e0f83cbfe`）· 状态：**已在真实 DSH Desktop 安装并日常运行**（2026-10-06 起）。
 >
 > 本包原本长在上游 `packages/dsh-plugin` 下，2026-10-08 抽出为独立仓库（60 个提交原样重放，

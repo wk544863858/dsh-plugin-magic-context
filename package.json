@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-magic-context",
-  "version": "0.8.2",
+  "version": "0.9.0",
   "description": "Magic Context for DeepSeek Harness: reversible context reclaim, an out-of-band historian, an m[0]/m[1] baseline, project memories in the plugin's own corpus, and the compaction seam.",
   "type": "module",
   "license": "MIT",
