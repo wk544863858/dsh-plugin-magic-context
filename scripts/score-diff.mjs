@@ -12,6 +12,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
+import { pathToFileURL } from 'node:url'
 import { openMemoryBridge, resolveIdentitySpec, resolveProjectIdentity } from '../src/core/memory-bridge.ts'
 import { DEFAULT_MEMORY_SCORING, halfLifeFor, scoreMemory } from '../src/core/memory-scoring.ts'
 import { parseFlags, stringFlag } from './cli-flags.mjs'
@@ -225,4 +226,6 @@ function main() {
     : `  结论：翻转将替换 ${String(departed.length)} 行（含退役 ${String(retiredCount)}）。复核换入行的正确性后再决定。`)
 }
 
-main()
+// CLI 守卫：直接运行时才进 main；被 vitest import（report-dilution.spec）时
+// 保持副作用自由——无库环境里顶层 process.exit 会让整个 spec 文件 import 即死。
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) main()
