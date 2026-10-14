@@ -211,7 +211,9 @@ export interface MagicContextDshConfig {
    * absent the adapter resolves `@deepseek-ai/dsh-compaction` dynamically).
    */
   compactionBase?: unknown
-  /** Mount the adapter's CompactionEngine on the `compaction` seam (default true when resolvable). */
+  /** Mount the adapter's CompactionEngine on the `compaction` seam (default false —
+   *  the seam is first-come-first-served, so takeover needs a profile that does
+   *  not mount compaction-basic; see tests/compaction-conflict.spec.ts). */
   registerCompactionEngine?: boolean
   /**
    * Validation-period observability. The Desktop app does not persist the
