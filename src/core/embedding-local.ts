@@ -54,12 +54,27 @@ export const EMBEDDING_MAX_SEQ = 512;
 export const LOCAL_EMBEDDING_RUNTIME_FINGERPRINT =
   'onnxruntime-web@1.31.0-dev.20260914-8d85527a0(wasm);@huggingface/tokenizers@0.2.0';
 
-/** Model assets, resolved once into `cacheDir` and reused forever after. */
-export const EMBEDDING_ASSETS = [
-  { name: 'tokenizer.json', path: 'Xenova/all-MiniLM-L6-v2/resolve/main/tokenizer.json', minBytes: 100_000 },
-  { name: 'tokenizer_config.json', path: 'Xenova/all-MiniLM-L6-v2/resolve/main/tokenizer_config.json', minBytes: 32 },
-  { name: 'model.onnx', path: 'Xenova/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx', minBytes: 10_000_000 },
-] as const;
+/** One downloadable model asset, integrity-pinned. */
+export interface EmbeddingAssetSpec {
+  readonly name: string;
+  readonly path: string;
+  readonly minBytes: number;
+  readonly sha256: string;
+}
+
+/** Model assets, resolved once into `cacheDir` and reused forever after.
+ *  Both the upstream revision AND the sha256 of every byte are pinned: the
+ *  ONNX file is executed by the vendored WASM runtime, so a floating
+ *  `resolve/main` is both a silent-quality hazard (weights change → the
+ *  vector space drifts) and a supply-chain one (hf-mirror is a third party
+ *  serving executable input). Pinned at upstream sha 751bff37182d3f1213fa05d7196b954e230abad9
+ *  (2026-10-14, hashes verified against the mirror download); `minBytes`
+ *  stays as a cheap size sanity check, the hash is the authority. */
+export const EMBEDDING_ASSETS: readonly EmbeddingAssetSpec[] = [
+  { name: 'tokenizer.json', path: 'Xenova/all-MiniLM-L6-v2/resolve/751bff37182d3f1213fa05d7196b954e230abad9/tokenizer.json', minBytes: 100_000, sha256: 'da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0' },
+  { name: 'tokenizer_config.json', path: 'Xenova/all-MiniLM-L6-v2/resolve/751bff37182d3f1213fa05d7196b954e230abad9/tokenizer_config.json', minBytes: 32, sha256: '9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3' },
+  { name: 'model.onnx', path: 'Xenova/all-MiniLM-L6-v2/resolve/751bff37182d3f1213fa05d7196b954e230abad9/onnx/model.onnx', minBytes: 10_000_000, sha256: '759c3cd2b7fe7e93933ad23c4c9181b7396442a2ed746ec7c1d46192c469c46e' },
+];
 
 /** HuggingFace first, the public mirror as fallback — both plain GETs. */
 const MIRRORS = ['https://huggingface.co/', 'https://hf-mirror.com/'];
@@ -148,6 +163,8 @@ export interface LocalEmbedderOptions {
   readonly ortUrl?: string;
   /** Test seam: the fetcher for model assets (defaults to global fetch). */
   readonly fetchImpl?: typeof fetch;
+  /** Test seam: asset manifest override (defaults to the pinned EMBEDDING_ASSETS). */
+  readonly assets?: readonly EmbeddingAssetSpec[];
 }
 
 /** The vendored ORT node entry sits beside the built lib at `<pkg>/vendor/onnx/`;
@@ -178,8 +195,10 @@ interface TokenizerLike {
   encode(text: string, options?: { add_special_tokens?: boolean; return_token_type_ids?: boolean }): EncodingLike;
 }
 
-async function ensureAsset(cacheDir: string, asset: (typeof EMBEDDING_ASSETS)[number], fetchImpl: typeof fetch, logger: LocalEmbedderOptions['logger']): Promise<void> {
+async function ensureAsset(cacheDir: string, asset: EmbeddingAssetSpec, fetchImpl: typeof fetch, logger: LocalEmbedderOptions['logger']): Promise<void> {
   const dest = join(cacheDir, asset.name);
+  // Cached files were hash-verified when written by this code path; the size
+  // floor keeps the warm path free of any hashing cost.
   if (existsSync(dest) && statSync(dest).size >= asset.minBytes) return;
   mkdirSync(cacheDir, { recursive: true });
   for (const mirror of MIRRORS) {
@@ -190,6 +209,8 @@ async function ensureAsset(cacheDir: string, asset: (typeof EMBEDDING_ASSETS)[nu
       const tmp = `${dest}.part`;
       await streamPipeline(Readable.fromWeb(res.body as import('node:stream/web').ReadableStream), createWriteStream(tmp));
       if (statSync(tmp).size < asset.minBytes) throw new Error(`suspiciously small (${statSync(tmp).size} bytes)`);
+      const digest = createHash('sha256').update(readFileSync(tmp)).digest('hex');
+      if (digest !== asset.sha256) throw new Error(`sha256 mismatch (got ${digest.slice(0, 16)}…, want ${asset.sha256.slice(0, 16)}…)`);
       renameSync(tmp, dest);
       logger?.info?.(`magic-context embedding assets: ${asset.name} cached (${statSync(dest).size} bytes)`);
       return;
@@ -219,7 +240,7 @@ export function openLocalEmbedder(options: LocalEmbedderOptions): LocalEmbedder 
         // before any model asset traffic is even considered.
         const ort = await import(/* webpackIgnore: true */ options.ortUrl ?? ortVendorUrl()) as unknown as MinimalOrt;
         const fetchImpl = options.fetchImpl ?? globalThis.fetch;
-        for (const asset of EMBEDDING_ASSETS) await ensureAsset(options.cacheDir, asset, fetchImpl, logger);
+        for (const asset of options.assets ?? EMBEDDING_ASSETS) await ensureAsset(options.cacheDir, asset, fetchImpl, logger);
         const { Tokenizer } = await import('@huggingface/tokenizers');
         const tok = new Tokenizer(
           JSON.parse(readFileSync(join(options.cacheDir, 'tokenizer.json'), 'utf8')) as object,

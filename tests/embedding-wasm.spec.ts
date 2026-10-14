@@ -9,14 +9,15 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { existsSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  EMBEDDING_ASSETS,
   cosineSimilarity,
   meanPoolNormalize,
   openLocalEmbedder,
 } from '../src/core/embedding-local.ts'
+import type { EmbeddingAssetSpec } from '../src/core/embedding-local.ts'
 
 describe('meanPoolNormalize is the vector space (pin the recipe)', () => {
   it('averages masked positions then L2-normalizes', () => {
@@ -72,7 +73,19 @@ function fakeOrtModuleUrl(): string {
   return `data:text/javascript,${encodeURIComponent(code)}`
 }
 
-/** Legal-sized dummy bodies for the three assets (floors from EMBEDDING_ASSETS).
+const sha256Of = (body: string): string => createHash('sha256').update(body, 'utf8').digest('hex')
+
+/** Asset manifest mirroring the pinned production floors; sha256 is computed
+ *  from the fake bodies below, so ensureAsset's integrity check passes and
+ *  stays exercised without the 90MB real asset. */
+const FAKE_ASSET_DEFS = [
+  { name: 'tokenizer.json', minBytes: 100_000 },
+  { name: 'tokenizer_config.json', minBytes: 32 },
+  { name: 'model.onnx', minBytes: 10_000_000 },
+] as const;
+
+/** Legal-sized dummy bodies for the three assets (floors mirroring the pinned
+ *  manifest).
  *  tokenizer.json must survive the REAL binding's constructor: a minimal but
  *  valid WordPiece vocab, whitespace-padded past the size floor (JSON.parse
  *  tolerates trailing whitespace). */
@@ -95,7 +108,7 @@ function fakeAssetBodies(): Map<string, string> {
     },
   })
   const pad = (body: string, floor: number) => body + ' '.repeat(Math.max(0, floor - body.length + 1))
-  return new Map(EMBEDDING_ASSETS.map((asset) => {
+  return new Map(FAKE_ASSET_DEFS.map((asset) => {
     const body = asset.name === 'tokenizer.json' ? pad(miniTokenizer, asset.minBytes)
       : asset.name === 'tokenizer_config.json' ? pad('{}', asset.minBytes)
       : 'x'.repeat(asset.minBytes + 1)
@@ -103,10 +116,21 @@ function fakeAssetBodies(): Map<string, string> {
   }))
 }
 
-function fakeFetch(bodies: Map<string, string>, failures = new Set<string>()): typeof fetch {
+/** Manifest override for the `assets` seam: paths fake, hashes real. */
+function fakeAssets(): EmbeddingAssetSpec[] {
+  const bodies = fakeAssetBodies()
+  return FAKE_ASSET_DEFS.map((asset) => ({
+    name: asset.name,
+    path: `fake-org/fake-model/resolve/deadbeef/${asset.name}`,
+    minBytes: asset.minBytes,
+    sha256: sha256Of(bodies.get(asset.name)!),
+  }))
+}
+
+function fakeFetch(bodies: Map<string, string>, assets: readonly EmbeddingAssetSpec[], failures = new Set<string>()): typeof fetch {
   return vi.fn(async (url: RequestInfo | URL) => {
     const path = String(url)
-    const asset = EMBEDDING_ASSETS.find((a) => path.endsWith(a.name))
+    const asset = assets.find((a) => path.endsWith(a.name))
     if (!asset || failures.has(path)) return new Response('boom', { status: 500 })
     return new Response(bodies.get(asset.name)!, { status: 200 })
   }) as unknown as typeof fetch
@@ -119,7 +143,8 @@ describe('the WASM wiring is lazy, real, and fail-open', () => {
     const embedder = openLocalEmbedder({
       cacheDir,
       ortUrl: fakeOrtModuleUrl(),
-      fetchImpl: fakeFetch(fakeAssetBodies()),
+      fetchImpl: fakeFetch(fakeAssetBodies(), fakeAssets()),
+      assets: fakeAssets(),
       logger: { warn: (m) => warns.push(m) },
     })
     const vectors = await embedder.embed(['hello memory'])
@@ -137,16 +162,18 @@ describe('the WASM wiring is lazy, real, and fail-open', () => {
   it('正例: the huggingface.co mirror fallback engages on a 500', async () => {
     const cacheDir = join(tmpdir(), 'embedding-wasm-spec-mirror')
     const bodies = fakeAssetBodies()
+    const assets = fakeAssets()
     const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {
       const path = String(url)
       if (path.startsWith('https://huggingface.co/')) return new Response('down', { status: 500 })
-      const asset = EMBEDDING_ASSETS.find((a) => path.endsWith(a.name))!
+      const asset = assets.find((a) => path.endsWith(a.name))!
       return new Response(bodies.get(asset.name)!, { status: 200 })
     }) as unknown as typeof fetch
     const embedder = openLocalEmbedder({
       cacheDir,
       ortUrl: fakeOrtModuleUrl(),
       fetchImpl,
+      assets,
     })
     await expect(embedder.embed(['mirror me'])).resolves.toHaveLength(1)
     expect(existsSync(join(cacheDir, 'tokenizer.json'))).toBe(true)
