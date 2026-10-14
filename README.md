@@ -4,13 +4,15 @@
 > **DeepSeek Harness（DSH）** 的适配插件。以 DSH **bundle** 形态安装进 desktop profile：出现在
 > GUI 的"插件"页面，在运行中的应用里即时开始工作。
 >
-> 当前版本 **0.9.0** · 上游基线 **magic-context v0.46.0**（`651c105a9`）· 针对 **DSH
-> 0.2.1-alpha.1**（`e0f83cbfe`）· 状态：**已在真实 DSH Desktop 安装并日常运行**（2026-10-06 起）。
+> 当前版本 **0.9.0** · 上游基线 **magic-context v0.46.0**（`651c105a9`）· devDeps 钉 **DSH
+> 0.2.1-alpha.1**（`e0f83cbfe`，peers `'*'`）· 已验证宿主 **0.2.0-rc.2**（本机 exe FileVersion
+> + 官方 nightly feed 双实锤，2026-10-14）· 状态：**已在真实 DSH Desktop 安装并日常运行**（2026-10-06 起）。
 >
 > 本包原本长在上游 `packages/dsh-plugin` 下，2026-10-08 抽出为独立仓库（60 个提交原样重放，
 > 作者与日期保留）。上游 MIT © 2025 Ufuk Altinok；本仓库新增部分 © 2026 wukai。出处与内嵌
-> 第三方文件见 [NOTICE](NOTICE)，许可见 [LICENSE](LICENSE)。数据库仍在 `~/.local/share/cortexkit/`
-> 命名空间下——那是与 magic-context **共享同一个记忆库**的互操作路径，刻意不随改名而改。
+> 第三方文件见 [NOTICE](NOTICE)，许可见 [LICENSE](LICENSE)。数据库在 `~/.local/share/cortexkit/magic-context-dsh-poc/`
+> 下（插件自有 `memories.db`）：2026-10-13 起与上游 MC 库**彻底分家**，legacy 共享库封存仅作回滚保留；
+> 路径留在 cortexkit 命名空间是出于出处连续，非共享。
 
 ## 它做什么
 
@@ -25,7 +27,7 @@ Magic Context 的核心思想：**上下文是可管理的资产**——旧的�
 | **historian（带外摘要）** | 一次性 LLM 调用重放真前缀（保 KV cache）→ 四层摘要 p1–p4 + importance + facts/events，**只写 store 不动线缆**；execute 带内发布为 `[compacted §C<n>§]` 范围替换（引用原事件，可恢复）；`/ctx-recomp` 可原地重做已压缩历史 |
 | **m[0]/m[1] 基线** | 合成 notice 节点承载冻结基线 + 增量车道（`<new-memories>` / `<memory-updates>` / `<user-profile>`）；每类增量有独立水位（`maxMemoryId`、mutation 水位、profile 水位 + digest），**新记忆永不重建缓存前缀**；内容未变则零变更 |
 | **项目记忆（自有语料库）** | 插件自有 `memories.db`（2026-10-13 起与上游 MC 数据库彻底分家，无共享无兼容义务）：身份自动推导（`git:<root-sha>` / `dir:<hash>`，未配置用会话 cwd，域共享从适配器域表解析）；注入 m[0] + `ctx_memory` 检索与**读写维护**；historian facts 自动提升；FTS 0.7/0.3 融合向量检索 |
-| **本地向量车道** | `vendor/onnx/` 内置 onnxruntime-web WASM 后端（27 MB，MIT，Microsoft），无原生编译、无额外依赖；首次 `embed()` 从 huggingface.co 下载 MiniLM（~90 MB，失败自动切 hf-mirror.com），缓存在插件数据目录 `models/`；检索候选内嵌补分 + 维护 tick 向量回填；任何失败 fail-open 降级 FTS，journal 有可读 warn |
+| **本地向量车道** | `vendor/onnx/` 内置 onnxruntime-web WASM 后端（27 MB，MIT，Microsoft），无原生编译、无额外依赖；首次 `embed()` 按**钉死的 revision+sha256** 下载 MiniLM（~90 MB，双镜像 huggingface.co → hf-mirror.com，任何哈希不符弃块换下一镜像），缓存在插件数据目录 `models/`；检索候选内嵌补分 + 维护 tick 向量回填；任何失败 fail-open 降级 FTS，journal 有可读 warn |
 | **全局域 + 用户画像** | 机器 / 组织域：**入队可自动化**（维护 tick `autoStage`、LLM 域分类），**发布永远是人**（`ctx_memory review_global` 审批卡、`/ctx-global approve`）；用户画像 render / collect / review 三开关分离——读默认开、写共享库的半边默认关 |
 | **维护 tick（MC dreamer 切片）** | 每 30 min：TTL 归档（走 archive 契约动作）→ 批量 LLM verify（keep / update / archive）→ 向量回填 → 全域候选入队 |
 | **压缩接缝** | `registerCompactionEngine` 可接管 `ctx.compaction`（真实 `compaction/start\|summary\|replace\|end` 协议，管理通道永不写 checkpoint）；**首装保守关闭**，不碰宿主 compaction-basic |
