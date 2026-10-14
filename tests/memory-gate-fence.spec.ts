@@ -4,13 +4,13 @@
  *
  * Three deliverables, three describes:
  *
- *  ① `memory.enabled` — absent configuration turns the whole memory block off
- *     (no bridge, no writer, no `ctx_memory` registration), explicit `false`
- *     reports `disabled-by-config`, and the enabled path still registers the
- *     tool. Asserted through a REAL plugin boot, because the gate lives in
- *     `src/index.ts` and its failure mode (a half-open adapter that recalls but
- *     cannot write, or a tool that exists with no store behind it) is only
- *     observable there.
+ *  ① `memory.enabled` — since 0.9.0 the gate defaults ON: an absent `memory`
+ *     key boots the lane with defaults (corpus beside the adapter store),
+ *     explicit `false` reports `disabled-by-config`, and the enabled path
+ *     registers the tool. Asserted through a REAL plugin boot, because the
+ *     gate lives in `src/index.ts` and its failure mode (a half-open adapter
+ *     that recalls but cannot write, or a tool that exists with no store
+ *     behind it) is only observable there.
  *
  *  ② `retrieval_count` / `last_retrieved_at` — MC's explicit-retrieval
  *     telemetry (write contract §9.1) as `MemoryWriter.recordRetrieval`.
@@ -24,7 +24,7 @@
  * `context.db` is never opened, let alone written.
  */
 import { DatabaseSync } from 'node:sqlite'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -456,16 +456,19 @@ describe('the memory.enabled gate (task-9 ①)', () => {
     expect(count(dbPath, 'SELECT COUNT(*) AS c FROM memories')).toBe(0)
   })
 
-  it('turns the whole memory block off when the profile has no memory key', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'mc-gate-off-'))
+  it('defaults the lane ON when the profile has no memory key (0.9.0)', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'mc-gate-default-'))
     tempDirs.push(dataDir)
     const ctx = await bootPlugin({ dataDir })
 
-    // Not "read-only": ABSENT. A tool with no store behind it is the failure
-    // mode this gate exists to prevent.
-    expect(toolNames(ctx)).not.toContain('ctx_memory')
-    expect(meta(dataDir, 'memory_bridge')).toBe('off')
-    expect(meta(dataDir, 'memory_write')).toBe('off')
+    // "Installed" means "working": the bundle's presence in the profile IS the
+    // consent, so the lane comes up with defaults — corpus beside the adapter
+    // store, bridge and writer ok, ctx_memory registered. The corpus must land
+    // inside the test's own dataDir, never the fixed homedir path.
+    expect(toolNames(ctx)).toContain('ctx_memory')
+    expect(meta(dataDir, 'memory_bridge')).toContain('ok schema v')
+    expect(meta(dataDir, 'memory_write')).toContain('read-write')
+    expect(existsSync(join(dataDir, 'memories.db'))).toBe(true)
   })
 
   it('honours an explicit memory.enabled:false and names the reason', async () => {
@@ -482,12 +485,13 @@ describe('the memory.enabled gate (task-9 ①)', () => {
     expect(count(dbPath, 'SELECT COUNT(*) AS c FROM memories')).toBe(0)
   })
 
-  it('still registers ctx_reduce / ctx_expand when memory is off', async () => {
+  it('still registers ctx_reduce / ctx_expand when memory is explicitly disabled', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'mc-gate-tools-'))
     tempDirs.push(dataDir)
-    const ctx = await bootPlugin({ dataDir })
+    const ctx = await bootPlugin({ dataDir, memory: { enabled: false } })
     const names = toolNames(ctx)
     expect(names).toContain('ctx_reduce')
     expect(names).toContain('ctx_expand')
+    expect(names).not.toContain('ctx_memory')
   })
 })

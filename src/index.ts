@@ -202,11 +202,13 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
 
   // ── The memory lane ────────────────────────────────────────────────────────
   // `memory` is deliberately NOT declared in the exported Config: a schemastery
-  // key would be materialized for every profile and would open the bridge
-  // everywhere. It therefore arrives as a plain object, and the gate is simply:
-  //   absent config        → off   (no bridge, no writer, no recall, no ctx_memory)
+  // key would be materialized into every profile. It arrives as a plain object,
+  // and since the distribution defaults (0.9.0) the gate is:
+  //   absent config        → on    (defaults; corpus beside the adapter store)
   //   enabled: false       → off   (explicit opt-out; reported as disabled-by-config)
   //   anything else        → on
+  // The bundle's presence in `dsh.profile.bundles` IS the consent: after
+  // `dsh plugin add` the features must work with no profile hand-editing.
   // Read once, inside the lane, so a disabled adapter can never half-open.
   const lane = openMemoryLane(ctx, config, stores)
   const { memoryRecall, memoryWriter, profileWriter, memorySearch, describeMemoryWrite } = lane

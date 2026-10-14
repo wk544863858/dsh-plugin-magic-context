@@ -58,8 +58,10 @@ export const DEFAULT_MUTATION_PAGE_LIMIT = 1_000
 /** The default domain sharing allowlist when `share_categories` is absent. */
 export const DEFAULT_SHARE_CATEGORIES = ['CONSTRAINTS'] as const
 
-/** The plugin's OWN corpus, next to the adapter store in its own data dir
- * (cutover 2026-10-13: no more sharing upstream MC's `context.db`). */
+/** Direct-caller fallback for the corpus path (scripts, tools). The lane itself
+ *  resolves the corpus explicitly — beside the adapter store in the profile's
+ *  dataDir — and never consults this (cutover 2026-10-13: no more sharing
+ *  upstream MC's `context.db`). */
 export function defaultMemoryDbPath(): string {
   return join(homedir(), '.local', 'share', 'cortexkit', 'magic-context-dsh-poc', 'memories.db')
 }

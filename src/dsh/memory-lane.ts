@@ -5,13 +5,19 @@
  * ctx_memory tool consumes. Moved verbatim out of index.ts; `apply` now calls
  * {@link openMemoryLane} once and threads the returned lane to the preStep,
  * the tools registration and the dispose list.
+ *
+ * Distribution semantics (0.9.0): the gate defaults ON. `dsh plugin add`
+ * mounts the bundle without any `memory` key — "installed" must mean
+ * "working". The explicit opt-out is `memory.enabled: false`; the corpus
+ * defaults to beside the adapter store in the profile's dataDir.
  */
 import type { Context } from '@deepseek-ai/cordis'
+import { dirname, join } from 'node:path'
 import type { AdapterStores } from '../core/stores.ts'
 import type { Journal } from '../core/journal.ts'
 import { errText } from '../core/types.ts'
 import type { PressurePolicy } from '../core/policy.ts'
-import { openMemoryBridge, DEFAULT_SHARE_CATEGORIES, defaultMemoryDbPath, resolveIdentitySpec, type ActivePeerDomain } from '../core/memory-bridge.ts'
+import { openMemoryBridge, DEFAULT_SHARE_CATEGORIES, resolveIdentitySpec, type ActivePeerDomain } from '../core/memory-bridge.ts'
 import { openMemoryWriter, type MemoryWriter } from '../core/memory-write.ts'
 import { ensureOwnCorpusStore } from '../core/corpus-store.ts'
 import { syncMachineDomain } from '../core/machine-domain.ts'
@@ -115,7 +121,19 @@ export function openMemoryLane(
   stores: AdapterStores,
 ): MemoryLane {
   const memorySettings = config.memory
-  const memoryEnabled = memorySettings !== undefined && liveBoolean(memorySettings.enabled, true)
+  // 0.9.0: the gate defaults ON — the old `memorySettings !== undefined &&`
+  // conservative presence gate predates the distribution defaults and made a
+  // fresh `dsh plugin add` install boot with ctx_memory silently missing.
+  // The explicit opt-out is `memory.enabled: false`.
+  const memoryEnabled = liveBoolean(memorySettings?.enabled, true)
+  // The corpus defaults to BESIDE the adapter store (the profile's dataDir),
+  // not a fixed homedir path: per-profile isolation for distribution installs,
+  // and the same directory as before wherever a profile already points dataDir
+  // at ~/.local/share/cortexkit/magic-context-dsh-poc. The bridge's own
+  // `defaultMemoryDbPath()` (fixed homedir path) remains only as the
+  // direct-caller fallback; the lane always resolves explicitly so the bridge
+  // never guesses.
+  const fallbackCorpusPath = (): string => join(dirname(stores.dbPath), 'memories.db')
   // WP3: ONE activation source for every consumer inside the bridge (recall, the
   // visibility watermark, the search space, the mutation lane, the epoch
   // fingerprint). The domain resolver reads the adapter's own tables
@@ -128,7 +146,7 @@ export function openMemoryLane(
   // ('exists'), and the openers' refusals keep guarding whatever it is.
   let corpusBootstrap: string | undefined
   if (memoryEnabled) {
-    const target = memorySettings?.dbPath ?? defaultMemoryDbPath()
+    const target = memorySettings?.dbPath ?? fallbackCorpusPath()
     const boot = ensureOwnCorpusStore(target)
     if (boot.outcome !== 'exists') {
       corpusBootstrap = boot.detail === undefined ? boot.outcome : `${boot.outcome} (${boot.detail})`
@@ -165,7 +183,7 @@ export function openMemoryLane(
   const memoryRecall = !memoryEnabled
     ? undefined
     : openMemoryBridge({
-      ...memorySettings?.dbPath === undefined ? {} : { dbPath: memorySettings.dbPath },
+      dbPath: memorySettings?.dbPath ?? fallbackCorpusPath(),
       logger: ctx.logger,
       domainResolver: makeDomainResolver(stores),
     })
@@ -185,7 +203,7 @@ export function openMemoryLane(
       : openMemoryWriter({
         // The writer has no default of its own (it must never guess a database
         // to write into), so the caller resolves the shared path here.
-        dbPath: memorySettings?.dbPath ?? memoryRecall.dbPath ?? defaultMemoryDbPath(),
+        dbPath: memoryRecall.dbPath,
         logger: ctx.logger,
       })
   if (memoryWriter !== undefined) {
@@ -204,7 +222,7 @@ export function openMemoryLane(
     memoryRecall === undefined
       ? undefined
       : openProfileWriter({
-        dbPath: memorySettings?.dbPath ?? memoryRecall.dbPath ?? defaultMemoryDbPath(),
+        dbPath: memoryRecall.dbPath,
         logger: ctx.logger,
       })
   if (profileWriter !== undefined) {
@@ -408,7 +426,7 @@ export function openMemoryLane(
   const describeMemoryWrite = (): string => {
     const status = memoryWriter?.status
     if (status === undefined) {
-      return memorySettings === undefined ? 'off' : memoryEnabled ? 'off' : 'disabled-by-config'
+      return memoryEnabled ? 'off' : 'disabled-by-config'
     }
     if (!status.ok) return `unavailable: ${String(status.detail)}`
     if (status.readOnly === true) {
