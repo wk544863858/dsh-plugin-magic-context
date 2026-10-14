@@ -23,6 +23,7 @@ const PHASE_BASE = [
   'tests/phase-map.spec.ts',
   'tests/client-pure.spec.ts',
   'tests/compaction-engine.spec.ts',
+  'tests/compaction-conflict.spec.ts',
   'tests/compartments.spec.ts',
   'tests/config-schema.spec.ts',
   'tests/global-autostage.spec.ts',

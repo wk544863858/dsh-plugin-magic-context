@@ -221,11 +221,15 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
 
   // ── The compaction seam ────────────────────────────────────────────────────
   // Occupying `ctx.compaction` is what makes this adapter authoritative over
-  // reclaim: no checkpoint-summarizing engine may compete with the historian
-  // and the drop lanes. Hosts that mount compaction-basic must disable that
-  // row in the profile patch (see the README) — two providers on one context
-  // throw.
-  //
+  // reclaim. The seam is FIRST-COME-FIRST-SERVED — measured on the real host
+  // stack (tests/compaction-conflict.spec.ts, 2026-10-14): when compaction-
+  // basic mounts first (the stock composition — the base bundle ships it),
+  // OUR engine's registration is rejected and the adapter stands down (warn
+  // log + `unavailable:` meta; compaction-basic keeps compaction; everything
+  // else about the adapter is unaffected). When the adapter mounts first,
+  // compaction-basic cannot mount at all. Takeover therefore needs a profile
+  // that does not mount compaction-basic — defaulting the switch on cannot
+  // win on stock and stays opt-in.
   // `registerCompactionEngine` is a LIVE switch: the pre-step band calls
   // `reconcileEngine` on every step, so a settings-form toggle mounts or
   // unmounts the engine without a restart. The switch is volatile, and a
