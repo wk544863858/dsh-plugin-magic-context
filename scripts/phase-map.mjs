@@ -110,6 +110,7 @@ const PHASE_D = [
   'tests/route-health.spec.ts',
   'tests/report-hits.spec.ts',
   'tests/historian-pairing.spec.ts',
+  'tests/baseline-stability.spec.ts',
   'tests/report-dilution.spec.ts',
 ]
 

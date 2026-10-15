@@ -30,7 +30,7 @@ node packages/dsh-plugin/scripts/mc-acceptance.mjs --dsh-db <path> --mc-db <path
 | `read.recall` | 确有项目记忆被注入 m[0]（非空 digest） | ✓ 201 次成功注入，最新 40 行 |
 | `delta.lane` | `<memory-updates>` 与 `<new-memories>` 两条车道都有产出 | ✓ 7 次渲染增量、105 次上报新行 |
 | `delta.cursor` | `memory_mutation_log` 游标已按会话持久化 | ✓ 5 会话中 3 个有游标 |
-| `delta.byteStable` | 同载荷（m[0] digest + 变更游标 + 分区计数一致、期间无新记忆）的 baseline **逐字节一致** | ✓ 117 条事件零违例（缓存前缀稳定） |
+| `delta.byteStable` | **同 mode**（hard/soft 分开比）且同载荷（m[0] digest + 变更游标 + 分区计数 + **画像段**一致、期间无新记忆、无 drop 落地）的 baseline **逐字节一致**，判据见 `scripts/baseline-stability.mjs` | ✓ 零违例（缓存前缀稳定） |
 | `historian.terminal` | 每个 `start` 必有 `done`/`failed`（只有进程被杀可豁免） | ✓ 修复后未闭合 0 |
 | `fence.version` | MC schema ≤ 适配器支持版本（超出则只读降级） | ✓ v95 ≤ v95，未触发 |
 | `promotion.contract` | 提升行字段完全符合 MC 契约 | ✓ 66 行零偏差 |
@@ -101,7 +101,8 @@ memory-promote         promoted 9 fact(s) into project memory
 ## 5. 缓存与净回收
 
 - 缓存前缀稳定：`<memory-updates>` / `<new-memories>` 只写在 m[1] 增量区，m[0] 字节不变
-  （上表 `delta.byteStable` 断言，117 条 baseline 事件零违例）。
+  （上表 `delta.byteStable` 断言；判据只比**同 mode** 的相邻 baseline——hard rebuild 与
+  soft refresh 组装的 block 本就不同，跨 mode 比字节不是这条不变量）。
 - HARD 重建只在 m[0] 内容真的变化时发生（例如 promotion 改变池 digest），
   且会把两条增量车道一起折叠进 m[0] 并推进水位与游标。
 - 真实 execute pass 净回收实测：`tokensBefore 110120 → tokensAfter 12462`（`tokensDelta −97658`）。

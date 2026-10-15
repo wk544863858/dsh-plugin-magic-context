@@ -21,6 +21,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { acceptanceDomainItems } from './domain-checks.mjs';
 import { scanHistorianStarts, staleOpenStarts } from './historian-pairing.mjs';
+import { findByteInstabilities } from './baseline-stability.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG = resolve(HERE, '..');
@@ -103,6 +104,8 @@ if (dsh) {
   const recalls = dsh.prepare(`SELECT id, at, session_id, data FROM journal WHERE kind='memory-recall' AND at > ? ORDER BY id ASC`).all(SINCE)
     .map((r) => ({ id: r.id, at: r.at, sid: r.session_id, d: safeParse(r.data) }));
   const hit = recalls.filter((r) => Number(r.d.rows) > 0 && r.d.digest && r.d.digest !== 'da39a3ee5e6b');
+  const dropLandings = dsh.prepare(`SELECT id, at, session_id FROM journal WHERE kind='drop-landed' AND at > ? ORDER BY id ASC`).all(SINCE)
+    .map((r) => ({ sid: r.session_id, at: r.at }));
   if (hit.length === 0) add('WARN', 'read.recall', `窗口 ${args.hours}h 内没有成功注入项目记忆的 recall（共 ${recalls.length} 次）`);
   else {
     const last = hit[hit.length - 1];
@@ -131,30 +134,22 @@ if (dsh) {
     `baseline_state: ${bstate.length} 个会话，其中 ${withCursor.length} 个已持久化 memory_mutation 游标`,
     { max_memory_id: bstate.map((r) => r.max_memory_id), mutation_cursor: bstate.map((r) => r.max_memory_mutation_id) });
 
-  // ─────────────────────────────────────────────────────── 5. 缓存前缀稳定：同载荷的 baseline 必须逐字节一致
-  const violations = [];
-  const bySession = new Map();
-  for (const b of baselines) {
-    if (!bySession.has(b.sid)) bySession.set(b.sid, []);
-    bySession.get(b.sid).push(b);
-  }
-  for (const [sid, list] of bySession) {
-    let prev = null;
-    for (const b of list) {
-      const between = recalls.filter((r) => r.sid === sid && r.at > (prev?.at ?? 0) && r.at <= b.at && Number(r.d.newRows) > 0);
-      const samePayload = prev && JSON.stringify(prev.d.memories) === JSON.stringify(b.d.memories)
-        && JSON.stringify(prev.d.memoryUpdates) === JSON.stringify(b.d.memoryUpdates)
-        && JSON.stringify(prev.d.compartments) === JSON.stringify(b.d.compartments);
-      if (prev && samePayload && between.length === 0 && Number(prev.d.bytes) !== Number(b.d.bytes)) {
-        violations.push(`${String(sid).slice(0, 8)} ${hhmmss(prev.at)}→${hhmmss(b.at)} ${prev.d.bytes}≠${b.d.bytes}`);
-      }
-      prev = b;
-    }
-  }
+  // ─────────────────────────────────────────────────────── 5. 缓存前缀稳定：同 mode 同载荷的 baseline 必须逐字节一致
+  // 判据本体在 scripts/baseline-stability.mjs（纯函数，正负样本见 tests/baseline-stability.spec.ts）：
+  // 2026-10-15 实证补了两类豁免——跨 hard/soft 不可比（两种 mode 组装不同 block），
+  // 落地的 drop 是有意重写（闭区间，落地与 rebuild 常同秒）——并把画像段纳入同载荷比对。
+  const { pairs, violations } = findByteInstabilities({
+    baselines,
+    recalls: recalls.map((r) => ({ sid: r.sid, at: r.at, newRows: Number(r.d.newRows) })),
+    drops: dropLandings,
+  });
+  const unstable = violations
+    .map((v) => `${String(v.sessionId).slice(0, 8)} ${hhmmss(v.fromAt)}→${hhmmss(v.toAt)} ${v.fromBytes}≠${v.toBytes}`)
+    .slice(0, 3);
   add(violations.length === 0 ? 'PASS' : 'FAIL', 'delta.byteStable',
     violations.length === 0
-      ? `同载荷（m[0] digest + 变更游标 + 分区计数一致、期间无新记忆）的 baseline 字节完全一致（检查 ${baselines.length} 条事件）`
-      : `${violations.length} 处缓存前缀不稳定: ${violations.slice(0, 3).join(' | ')}`);
+      ? `同 mode 同载荷（m[0] digest + 变更游标 + 分区计数 + 画像段一致，期间无新记忆、无 drop 落地）的 baseline 字节完全一致（检查 ${pairs} 对相邻事件）`
+      : `${violations.length} 处缓存前缀不稳定: ${unstable.join(' | ')}`);
 
   // ─────────────────────────────────────────────────────── 6. historian：start 必须有终止事件
   const hist = dsh.prepare(`SELECT id, at, session_id, data FROM journal WHERE kind='historian' AND at > ? ORDER BY id ASC`).all(SINCE)
