@@ -68,6 +68,7 @@ const PHASE_BASE = [
 /** Phase A: the substrate. Own corpus (v95 lineage), adapter schema v9, domains activate. */
 const PHASE_A = [
   'tests/corpus-store.spec.ts',
+  'tests/corpus-version-invariant.spec.ts',
   'tests/store-schema-v8.spec.ts',
   'tests/domain-visibility.spec.ts',
   'tests/memory-delta.spec.ts',
@@ -137,8 +138,10 @@ export const PHASES = [
     specs: PHASE_B,
     checks: [],
     blind: [
-      'WP5/WP7 已实现并有用例；开关线上实况（2026-10-13）：collect=on（采集侧仍 0 条 staged）、review=on（13:15 重启生效）；'
-      + '渲染半边已活（profile-recall 每步注入 14 行）——真机端到端（真实会话产出候选 → 评审 → 注入）尚未跑过',
+      'WP5/WP7 已实现并有用例；开关线上实况（2026-10-13）：collect=on、review=on（13:15 重启生效）；'
+      + '渲染半边已活（profile-recall 每步注入 14 行）——真机端到端（真实会话产出候选 → 评审 → 注入）**已跑通**：'
+      + '2026-10-14 21:32 采集 5 条观察 → 21:34 评审晋升 4 行（ids 18–21）、meta profile_last_review_at 写入，'
+      + '22:00 起 m[1] <new-user-profile> 收到 4 new（watermark 17 → currentMaxId 21）',
       'B-8 端到端（合成会话全链路可 journal 回溯）仍缺',
     ],
   },
@@ -170,7 +173,8 @@ export const PHASES = [
       + '（契约源对照）一并退役后，由 memory-gate-fence.spec 的"改写/归档源行不传播"用例继续钉住；'
       + '域行更新只能走产品路径（新候选→发布→归档旧行），没有镜像修复',
       '写开关线上实况（2026-10-13）：user.collect=on、review=on（13:15 生效）、vectorBackfill=on（已收口）、'
-      + 'machine.enabled+autoStage=on——演练与线上的差距只剩"画像评审首轮未跑"与"域命中观察窗未满"；'
+      + 'machine.enabled+autoStage=on——画像评审首轮已于 2026-10-14 21:34 跑通（晋升 4），'
+      + '演练与线上的差距只剩"域命中观察窗未满"；'
       + '2026-10-12 起 vectorBackfill 缺省=true（分发默认可用，显式 false 才关），'
       + 'profile 需逐键重复的"必须为 true"清单收缩为 scoring/collect',
       'WP11 向量回填已真写并收口（2026-10-10 09:52 开启 → 15:19 dominant 100%）；'

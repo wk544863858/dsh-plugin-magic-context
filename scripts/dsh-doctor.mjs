@@ -112,7 +112,9 @@ if (!existsSync(MC_STORE)) {
       bad(`语料库 v${version} 比本构建上限 v${CEILING} 新 → 写路径已降级只读（ctx_memory 写入返回 ok:false）`)
       say(' ', `动作：这是我们自己的迁移线——读 corpus-store.ts 对应版本迁移，确认后把 MEMORY_SCHEMA_MAX_VERSION 提到 ${version}，并同步 fence spec`)
     } else if (headroom === 0) {
-      say('⚠', '已在上限：下一次自有迁移会让写路径降级只读，直到上限跟进')
+      say(' ', `写路径可用；余量 0 = 已在上限（v${version}）。这不是缺陷：`
+        + '"下一次迁移会让写路径降级只读"由 tests/corpus-version-invariant.spec.ts 钉住——'
+        + '迁移时必须同时提 CORPUS_SCHEMA_VERSION 与 MEMORY_SCHEMA_MAX_VERSION（两个常量同号）')
     } else {
       say('✓', `写路径可用，且还有 ${headroom} 个版本的余量`)
     }

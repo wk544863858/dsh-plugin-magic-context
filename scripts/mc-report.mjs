@@ -499,9 +499,24 @@ function buildCounts(db, opts, notes) {
 
   const all = countRows(db, 'pending_drops')
   const unlanded = countRows(db, 'pending_drops', { extraWhere: 'landed_event_seq IS NULL' })
+  // 未落地分两类，只有一类需要人看：
+  //   ① 会话已停 → 惰性等待（管理拍只在会话自身运行时落地；会话被复活时会随 live surface 补落），
+  //      队列因此天然长期非零，报"未落地 N"当故障是假警报；
+  //   ② 活跃会话滞留 → 近 24h 仍有 journal 活动、排队已超 24h 却一直没落，这才是回收带真没推进。
+  const staleCutoff = now - 24 * 60 * 60 * 1000
+  const canScopeDrops = tableExists(db, 'pending_drops') && tableExists(db, 'journal')
+  const activeUnlanded = canScopeDrops
+    ? scalar(
+        db,
+        'SELECT COUNT(*) AS n FROM pending_drops p WHERE p.landed_event_seq IS NULL AND p.queued_at < ? '
+          + 'AND EXISTS (SELECT 1 FROM journal j WHERE j.session_id = p.session_id AND j.at >= ?)',
+        [staleCutoff, staleCutoff],
+      )
+    : null
   const tableCountsPending = {
     total: all.ok ? all.count : null,
     unlanded: unlanded.ok ? unlanded.count : null,
+    activeUnlanded: activeUnlanded === null ? null : toNum(activeUnlanded),
   }
 
   // 会话清单：from journal 优先，其次其余各表 session_id 的并集。
@@ -1419,9 +1434,13 @@ function buildHealth(ctx) {  const { db, opened, dbExists, openError, valid, sch
     }
   }
 
-  const unlanded = counts.pendingDrops.unlanded
-  if (unlanded !== null && unlanded > 0) {
-    push('pending-drops-unlanded', `pending_drops 有 ${unlanded} 项未落地（回收带未开）。`)
+  const pendingDrops = counts.pendingDrops
+  if (pendingDrops.activeUnlanded !== null && pendingDrops.activeUnlanded > 0) {
+    push(
+      'pending-drops-unlanded',
+      `pending_drops 有 ${fmtInt(pendingDrops.activeUnlanded)} 项在近 24h 仍活跃的会话里排队超过 24h 未落地——回收带没推进（总未落地 `
+        + `${fmtInt(pendingDrops.unlanded)} 项，其余属会话已停的惰性等待，等会话复活才补落）。`,
+    )
   }
   if (opts.session !== null && counts.hasJournal && summary.total === 0) {
     push('session-no-data', `会话 ${shortSession(opts.session)} 在时间窗内没有数据（id 是否写错，或该会话由旧版本写入）。`)
@@ -1567,7 +1586,8 @@ function renderText(payload) {
       'pending_drops',
       counts.pendingDrops.total === null
         ? '-'
-        : `${fmtInt(counts.pendingDrops.total)} 行，其中未落地 ${fmtInt(counts.pendingDrops.unlanded)} 行`,
+        : `${fmtInt(counts.pendingDrops.total)} 行，其中未落地 ${fmtInt(counts.pendingDrops.unlanded)} 行`
+          + `${counts.pendingDrops.activeUnlanded === null ? '' : `（活跃会话滞留 ${fmtInt(counts.pendingDrops.activeUnlanded)}）`}`,
     ),
   )
   lines.push(kv('baseline_state', cell('baseline_state')))
