@@ -130,14 +130,18 @@ export function defineCtxReduceTool(deps: ToolBridgeDeps): unknown {
       render: (_args, value) => {
         const payload = value as { queued?: number[]; refused?: TagVerdict[] }
         const lines: string[] = []
-        if (payload.queued !== undefined && payload.queued.length > 0) {
-          lines.push(`Queued for reclaim: ${payload.queued.map(tag => `§${tag}§`).join(', ')}.`)
+        const queued = payload.queued ?? []
+        // A count, not a list (MC 0.49.1 parity): the tags came from the agent's
+        // own surface, so echoing them back is pure noise, and the noise grows
+        // linearly with the batch. Refusals stay per-tag: each one is an
+        // actionable failure the agent must not retry blindly.
+        if (queued.length > 0) {
+          lines.push(`Queued ${String(queued.length)} ${queued.length === 1 ? 'tag' : 'tags'} for reclaim.`)
         }
         for (const refused of payload.refused ?? []) {
           lines.push(`§${refused.tag}§ not queued: ${refused.reason ?? 'unavailable'}.`)
         }
         if (lines.length === 0) lines.push('Nothing queued.')
-        lines.push('Marks land when the context manager next opens its reclaim band.')
         return ackText(lines)
       },
     },

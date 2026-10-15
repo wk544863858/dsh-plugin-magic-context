@@ -29,6 +29,7 @@ const PHASE_BASE = [
   'tests/global-autostage.spec.ts',
   'tests/global-review.spec.ts',
   'tests/context-pressure.spec.ts',
+  'tests/ctx-reduce-render.spec.ts',
   'tests/embedding-wasm.spec.ts',
   'tests/emergency-drop.spec.ts',
   'tests/historian-chunking.spec.ts',
