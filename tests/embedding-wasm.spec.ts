@@ -8,11 +8,13 @@
  * fail-open contract hermetically — no model, no network.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
+  LOCAL_EMBEDDING_RUNTIME_FINGERPRINT,
   cosineSimilarity,
   meanPoolNormalize,
   openLocalEmbedder,
@@ -207,5 +209,85 @@ describe('the WASM wiring is lazy, real, and fail-open', () => {
     const embedder = openLocalEmbedder({ cacheDir: process.env.TEMP!, embedOverride: override })
     await expect(embedder.embed(['a', 'b'])).resolves.toHaveLength(2)
     expect(override).calledOnce
+  })
+})
+
+/**
+ * The lane is WASM-ONLY and outbound-free — pinned, not assumed.
+ *
+ * Why this exists (2026-10-15 follow-up of MC 0.49.1): upstream's local
+ * embedding fix is about the NATIVE onnxruntime addon — it "disables POSIX
+ * telemetry in the native process environment", falls back to WASM on Bun
+ * < 1.4, and notes Windows native ORT emits OS-controlled ETW diagnostics.
+ * This plugin never loads that addon (the swap to onnxruntime-web's WASM
+ * backend is the 0.3.0 spike, see this file's header), so the upstream fix is
+ * structurally inapplicable here.
+ *
+ * "Inapplicable" is only true while nobody swaps the backend back, so the
+ * property is asserted on three surfaces: the vendored runtime directory, the
+ * declared dependency set, and a live inference call with a fetch that throws.
+ * A regression that reintroduces a native addon, or any outbound call at
+ * inference time, turns one of these red.
+ */
+describe('the embedding lane is WASM-only and never reaches the network', () => {
+  const vendorDir = fileURLToPath(new URL('../vendor/onnx/', import.meta.url))
+
+  it('positive: the vendored runtime is the WASM build, with no native addon beside it', () => {
+    const files = readdirSync(vendorDir)
+    expect(files).toContain('ort-wasm-simd-threaded.wasm')
+    expect(files).toContain('ort-wasm-simd-threaded.mjs')
+    expect(files).toContain('ort.node.min.mjs')
+    // Negative control: a native addon would be a `.node` binary or a loader
+    // for onnxruntime-node's prebuilds.
+    expect(files.filter((name) => name.endsWith('.node'))).toEqual([])
+    for (const name of files.filter((f) => f.endsWith('.mjs'))) {
+      const source = readFileSync(join(vendorDir, name), 'utf8')
+      expect(source).not.toContain('onnxruntime-node')
+    }
+    expect(LOCAL_EMBEDDING_RUNTIME_FINGERPRINT).toContain('onnxruntime-web')
+    expect(LOCAL_EMBEDDING_RUNTIME_FINGERPRINT).toContain('(wasm)')
+  })
+
+  it('positive: the dependency set declares no native ORT stack', () => {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+      dependencies?: Record<string, string>
+    }
+    const deps = Object.keys(pkg.dependencies ?? {})
+    const ortPackages = deps.filter((name) => {
+      const base = name.split('/').pop() ?? ''
+      return base.startsWith('onnxruntime') || base === 'transformers'
+    })
+    // The JS-only shared package is allowed; anything native-backed is not.
+    expect(ortPackages).toEqual(['onnxruntime-common'])
+    expect(deps).not.toContain('onnxruntime-node')
+    expect(deps).not.toContain('@huggingface/transformers')
+  })
+
+  it('positive: a warm cache embeds with a fetch that throws (zero outbound at inference)', async () => {
+    const cacheDir = join(tmpdir(), 'embedding-wasm-spec-offline')
+    const bodies = fakeAssetBodies()
+    const assets = fakeAssets()
+    // Sanctioned warm-up: the assets land on disk through the normal path.
+    const warm = openLocalEmbedder({
+      cacheDir,
+      ortUrl: fakeOrtModuleUrl(),
+      fetchImpl: fakeFetch(bodies, assets),
+      assets,
+    })
+    await expect(warm.embed(['warm up'])).resolves.toHaveLength(1)
+    // From here on any network access is a test failure, not a fallback.
+    const hostile = vi.fn(() => {
+      throw new Error('the embedding lane must not reach the network')
+    })
+    const embedder = openLocalEmbedder({
+      cacheDir,
+      ortUrl: fakeOrtModuleUrl(),
+      fetchImpl: hostile as unknown as typeof fetch,
+      assets,
+    })
+    const vectors = await embedder.embed(['offline memory'])
+    expect(vectors).toHaveLength(1)
+    expect(vectors[0]!.length).toBe(384)
+    expect(hostile).not.toHaveBeenCalled()
   })
 })
