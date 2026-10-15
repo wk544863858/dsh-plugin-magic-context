@@ -249,12 +249,19 @@ if (dsh) {
       // 显式 update/archive 会合法地改动 importance/updated_at，这类行只校验不可变字段。
       let mutationByType = [];
       let mutatedIds = new Set();
-      let archivedIds = new Set();
+      let retiredIds = new Set();
       try {
         mutationByType = mc.prepare(`SELECT target_memory_id, mutation_type, COUNT(*) AS n FROM memory_mutation_log
           WHERE target_memory_id IN (${placeholders}) GROUP BY target_memory_id, mutation_type`).all(...ids);
         mutatedIds = new Set(mutationByType.map((m) => Number(m.target_memory_id)));
-        archivedIds = new Set(mutationByType.filter((m) => m.mutation_type === 'archive').map((m) => Number(m.target_memory_id)));
+        // 提升行离开 'active' 有两条**都走变更日志**的合法路径：
+        //   'archive'    = 显式退役（maintenance verify wrong→archiveMemory / ctx_memory archive）
+        //   'superseded' = 改写终态，archiveMemory({supersededBy}) 写的（memory-write.spec.ts:542 钉住；
+        //                  2026-10-15 实测本库已有 28 行）。
+        // 只认 'archive' 会把合法的 supersede 误判成"字段偏差"，让 gate 变红（2026-10-15 10:0x 实测 3/3 命中）。
+        retiredIds = new Set(mutationByType
+          .filter((m) => m.mutation_type === 'archive' || m.mutation_type === 'superseded')
+          .map((m) => Number(m.target_memory_id)));
       } catch { /* 老库可能没有 memory_mutation_log */ }
       const rows = mc.prepare(`SELECT id, project_path, category, importance, scope, shareable, source_type, status,
         verification_status, seen_count, retrieval_count, created_at, updated_at, last_seen_at, expires_at, classified_at
@@ -275,7 +282,7 @@ if (dsh) {
         if (classified) classifiedAfter++;
         const touched = wasUpdated || deduped;
         if (touched) touchedAfter++;
-        if (r.status === 'archived' && archivedIds.has(Number(r.id))) archivedAfter++;
+        if (r.status === 'archived' && retiredIds.has(Number(r.id))) archivedAfter++;
         if (r.source_type !== 'historian') problems.push(`source_type=${r.source_type}`);
         if (classified) {
           // 打分行校验打分值域本身；importance 不再期望提升默认值 50。
@@ -284,10 +291,10 @@ if (dsh) {
         if (r.scope !== 'project') problems.push(`scope=${r.scope}`);
         if (Number(r.shareable) !== 0) problems.push(`shareable=${r.shareable}`);
         // Maintenance verify (wrong→archiveMemory) is the designed lifecycle end
-        // for a promoted row; it is contract-clean only when the archive went
-        // through the contract lane and left its mutation-log entry — an
-        // out-of-contract archive still fails here.
-        if (r.status !== 'active' && !(r.status === 'archived' && archivedIds.has(Number(r.id)))) problems.push(`status=${r.status}`);
+        // for a promoted row, and archiveMemory({supersededBy}) is the second one;
+        // both are contract-clean only when they went through the contract lane and
+        // left their mutation-log entry — an out-of-contract archive still fails here.
+        if (r.status !== 'active' && !(r.status === 'archived' && retiredIds.has(Number(r.id)))) problems.push(`status=${r.status}`);
         // Promotion writes 'unverified' by contract; the maintenance sweep then
         // legitimately moves the row to 'verified' (§9). Both are the designed
         // lifecycle, so only a value outside it is a violation.
@@ -299,7 +306,7 @@ if (dsh) {
       }
       const missing = ids.length - rows.length;
       add(bad.length === 0 && missing === 0 ? 'PASS' : 'FAIL', 'promotion.contract',
-        `窗口内提升 ${ids.length} 行；库里命中 ${rows.length}；此后被更新/去重触碰 ${touchedAfter} 行（相应放宽 importance/时间戳校验）；classify 打分 ${classifiedAfter} 行（metadata-only，校验值域）；契约归档 ${archivedAfter} 行；字段偏差 ${bad.length}${missing ? `；缺失 ${missing}` : ''}${bad.length ? ': ' + bad.slice(0, 4).join(' ') : ''}`);
+        `窗口内提升 ${ids.length} 行；库里命中 ${rows.length}；此后被更新/去重触碰 ${touchedAfter} 行（相应放宽 importance/时间戳校验）；classify 打分 ${classifiedAfter} 行（metadata-only，校验值域）；契约退役 ${archivedAfter} 行（archive/superseded）；字段偏差 ${bad.length}${missing ? `；缺失 ${missing}` : ''}${bad.length ? ': ' + bad.slice(0, 4).join(' ') : ''}`);
 
       // 纯追加：不得有 insert/delete 类变更日志；update 类必须与显式 ctx_memory update 调用对应
       const agg = new Map();

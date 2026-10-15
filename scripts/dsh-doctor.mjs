@@ -288,7 +288,12 @@ if (existsSync(MC_STORE)) {
   }
 }
 if (existsSync(ACTIVITY_LOG)) {
-  const tail = readFileSync(ACTIVITY_LOG, 'utf8').split('\n').filter((l) => /embedder/i.test(l))
+  // 过滤词必须覆盖**成功**的回填行：成功行长这样 "backfill: +N vector(s) in the dominant space"，
+  // 里面没有 "embedder" 字样，而失败行 "backfill lane unavailable (no embedder or no writable store)"
+  // 有。原先只筛 /embedder/i ⇒ 尾行永远是那条失败（2026-10-15 实测：journal 里 09:50/09:58 已
+  // parity-pass + 回填成功，doctor 仍报"最后一次 embedder 记录是失败"）。
+  const tail = readFileSync(ACTIVITY_LOG, 'utf8').split('\n')
+    .filter((l) => /vector-lane|backfill/i.test(l) && !/adapter booted/i.test(l))
   const last = tail.at(-1)
   if (last === undefined) say('⚠', 'activity.log 里没有 embedder 记录（尚未加载过本地模型）')
   else if (/unavailable|degrad/i.test(last)) say('⚠', `最后一次 embedder 记录是失败：${last.slice(0, 120)}`)
