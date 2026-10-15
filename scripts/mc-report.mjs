@@ -774,6 +774,11 @@ function computeMetrics(rows) {
       poolLast: null,
       lagMaxList: [],
       lagAvgList: [],
+      // 报警只看"最近一拍"的 lag：窗口最大值会被单次老行清理钉住整个窗口（7 天），
+      // 状态早已恢复却天天红——那是口径问题，不是清洗跟不上进水。
+      lagLatestAt: null,
+      lagLatestH: null,
+      lagLatestPool: null,
       // Dream token 锚点：verify 拍的 provider usage（按天累计在 daily）。
       usageIn: 0,
       usageOut: 0,
@@ -1001,7 +1006,14 @@ switch (row.kind) {
         const pool = toNum(d.poolUnverified)
         if (pool !== null) m.maintenance.poolLast = pool
         const lagMax = toNum(d.lagMaxH)
-        if (lagMax !== null) m.maintenance.lagMaxList.push(lagMax)
+        if (lagMax !== null) {
+          m.maintenance.lagMaxList.push(lagMax)
+          if (m.maintenance.lagLatestAt === null || row.at > m.maintenance.lagLatestAt) {
+            m.maintenance.lagLatestAt = row.at
+            m.maintenance.lagLatestH = lagMax
+            m.maintenance.lagLatestPool = pool
+          }
+        }
         const lagAvg = toNum(d.lagAvgH)
         if (lagAvg !== null) m.maintenance.lagAvgList.push(lagAvg)
         const usage = d.usage !== null && typeof d.usage === 'object' ? d.usage : {}
@@ -1382,10 +1394,13 @@ function buildHealth(ctx) {  const { db, opened, dbExists, openError, valid, sch
             + '——晋升质量或判定器需要复核。',
         )
       }
-      if (maint.lagMaxH !== null && maint.lagMaxH > 24) {
+      if (maint.lagLatestH !== null && maint.lagLatestH > 24) {
         push(
           'verify-lag-high',
-          `verify lag 最大 ${maint.lagMaxH.toFixed(1)}h > 24h——清洗跟不上进水（staging 扳机条件之一）。`,
+          `最近一拍 verify lag ${maint.lagLatestH.toFixed(1)}h > 24h`
+            + `${maint.lagLatestPool === null ? '' : `（该拍未验证池 ${fmtInt(maint.lagLatestPool)}）`}`
+            + '——清洗跟不上进水（staging 扳机条件之一）。'
+            + `${maint.lagMaxH === null || maint.lagMaxH <= maint.lagLatestH ? '' : `窗口历史峰值 ${maint.lagMaxH.toFixed(1)}h 仅供参考。`}`,
         )
       }
       if (metrics.memoryLane.promotions > opts.days * 300) {
@@ -1791,7 +1806,7 @@ function renderText(payload) {
         `  maintenance   : ${fmtInt(mt.ticks)} 拍（ran ${fmtInt(mt.ran)} / idle-off ${fmtInt(mt.idleOrOff)} / failed ${fmtInt(mt.failed)}），`
         + `judged ${fmtInt(mt.judged)}（verified ${fmtInt(mt.verified)} / updated ${fmtInt(mt.updated)}`
         + ` / wrong ${fmtInt(mt.archived)}＝${mt.wrongRate === null ? '-' : `${(mt.wrongRate * 100).toFixed(1)}%`}），`
-        + `scored ${fmtInt(mt.scored)}，lag 最大 ${fmtFixed(mt.lagMaxH, 1)}h / 平均 ${fmtFixed(mt.lagAvgH, 1)}h，`
+        + `scored ${fmtInt(mt.scored)}，lag 最近一拍 ${fmtFixed(mt.lagLatestH, 1)}h / 窗口峰值 ${fmtFixed(mt.lagMaxH, 1)}h / 平均 ${fmtFixed(mt.lagAvgH, 1)}h，`
         + `pool 最新 ${mt.poolLast === null ? '-' : fmtInt(mt.poolLast)}`,
       )
       // Dream token 锚点：窗口累计 + 按天累计（近 7 天，新→旧）。
