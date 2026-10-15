@@ -27,6 +27,31 @@ import type { Journal } from './journal.ts'
 import type { MemoryRecord, MemoryWriter } from './memory-write.ts'
 import type { LlmSeamMessage } from './types.ts'
 
+/**
+ * Process-memory sample for the tick's `memory-sample` journal row.
+ *
+ * The host is long-lived, and the only leak class that ever bit upstream MC in
+ * this shape (0.49.1 #681) was "every completed pass kept the previous pass plus
+ * its full message history". Our static audit (2026-10-15) found no such
+ * retention, so a once-per-tick series is what keeps a future regression
+ * visible: rising RSS across days, with no profiler and no extra requests.
+ * Pure so the unit test can pin the rounding exactly.
+ */
+export function memorySample(usage: {
+  readonly rss: number
+  readonly heapUsed: number
+  readonly heapTotal: number
+  readonly external: number
+}): { rssMb: number; heapUsedMb: number; heapTotalMb: number; externalMb: number } {
+  const mb = (bytes: number): number => Math.round((bytes / (1024 * 1024)) * 10) / 10
+  return {
+    rssMb: mb(usage.rss),
+    heapUsedMb: mb(usage.heapUsed),
+    heapTotalMb: mb(usage.heapTotal),
+    externalMb: mb(usage.external),
+  }
+}
+
 /** The narrow LLM seam maintenance needs (structurally `ctx.llm`). */
 export interface MaintenanceLlm {
   stream(options: {

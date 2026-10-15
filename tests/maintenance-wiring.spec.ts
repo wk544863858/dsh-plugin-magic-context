@@ -254,6 +254,33 @@ describe('maintenance sweep wiring (real plugin, fake clock)', () => {
     expect(maintenanceRows(journalPath)).toHaveLength(2)
   })
 
+  it('samples process memory once per tick — the long-run growth sentinel', async () => {
+    // 0.49.1 (#681) upstream was a per-pass retention leak that only a series
+    // would have caught; the static audit (2026-10-15) found no such retention
+    // here, so the row per tick is what keeps a future one visible.
+    vi.useFakeTimers()
+    const cwd = tempDir('mc-maint-rss-')
+    const store = makeMemoryDb(resolveIdentitySpec(cwd)!)
+    const { ctx, agent, journalPath } = await boot({ memoryDbPath: store.path, cwd, maintenance: true })
+    await driveTurn(ctx, agent, 'hello')
+
+    const db = new DatabaseSync(journalPath, { readOnly: true })
+    const rows = (): Array<{ data: string }> =>
+      db.prepare("SELECT data FROM journal WHERE kind = 'memory-sample' ORDER BY id ASC").all() as Array<{ data: string }>
+
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(rows()).toHaveLength(1)
+    const sample = JSON.parse(rows()[0]?.data ?? '{}') as { rssMb?: number; heapUsedMb?: number; heapTotalMb?: number }
+    expect(sample.rssMb).toBeGreaterThan(0)
+    expect(sample.heapUsedMb).toBeGreaterThan(0)
+    expect(sample.heapTotalMb).toBeGreaterThan(0)
+
+    // One row per tick, so the trend is readable across days.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(rows()).toHaveLength(2)
+    db.close()
+  })
+
   it('a sweep ticks without identities only when a session has registered one', async () => {
     vi.useFakeTimers()
     const cwd = tempDir('mc-maint-cwd3-')

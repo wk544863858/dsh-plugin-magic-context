@@ -47,6 +47,7 @@ export type JournalKind =
   | 'memory-promote'
   | 'global-review'
   | 'maintenance'
+  | 'memory-sample'
   | 'session-notice'
   | 'project-drift'
   | 'context-pressure'

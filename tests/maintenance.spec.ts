@@ -10,7 +10,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { rmSync } from 'node:fs'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openMemoryWriter } from '../src/core/memory-write.ts'
-import { runMaintenanceTick } from '../src/core/maintenance.ts'
+import { memorySample, runMaintenanceTick } from '../src/core/maintenance.ts'
 import type { Journal, JournalEntry, JournalKind, JournalLevel } from '../src/core/journal.ts'
 import { makeMemoryDb } from './helpers/memory-db'
 import { scriptLlm } from './helpers/llm-fake'
@@ -20,6 +20,18 @@ const DAY_MS = 24 * 60 * 60 * 1000
 const OWN = 'git:own-project'
 const OTHER = 'git:other-project'
 const silentLogger = { info: () => {}, warn: () => {} }
+
+describe('memorySample (the tick live-memory sentinel)', () => {
+  it('reports the four figures in MB, rounded to 0.1', () => {
+    const sample = memorySample({
+      rss: 734_003_200,
+      heapUsed: 123_456_789,
+      heapTotal: 250_000_000,
+      external: 10_485_760,
+    })
+    expect(sample).toEqual({ rssMb: 700, heapUsedMb: 117.7, heapTotalMb: 238.4, externalMb: 10 })
+  })
+})
 
 const tempDirs: string[] = []
 

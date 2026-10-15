@@ -20,7 +20,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { AdapterStores } from '../core/stores.ts'
 import type { Journal } from '../core/journal.ts'
-import { runMaintenanceTick, type MaintenanceLlm } from '../core/maintenance.ts'
+import { memorySample, runMaintenanceTick, type MaintenanceLlm } from '../core/maintenance.ts'
 import { PROFILE_REVIEW_META_KEY, runProfileReview, type ProfileReviewLlm, type ProfileReviewOutcome } from '../core/profile-review.ts'
 import type { VectorBackfillOutcome } from '../core/vector-backfill.ts'
 import { quotaSkipSince, resolveMaintenanceRoute, ROUTE_QUOTA_HOLD_MS, RouteHealth, type RouteChoice } from '../core/route-health.ts'
@@ -100,6 +100,17 @@ export function wireMaintenance(input: {
     if (liveBoolean(config.maintenance?.enabled, true) === false) return
     maintenanceBusy = true
     try {
+      // Process memory, once per tick (2026-10-15). Upstream MC 0.49.1 (#681)
+      // leaked in exactly this shape — each completed pass kept the previous pass
+      // and its full message history; our static audit found no such retention,
+      // so this series is what would make a future regression visible across days
+      // (no profiler, no LLM call, one journal row per tick).
+      const memoryNow = memorySample(process.memoryUsage())
+      journal.info(
+        'memory-sample',
+        `rss ${String(memoryNow.rssMb)} MB · heap ${String(memoryNow.heapUsedMb)}/${String(memoryNow.heapTotalMb)} MB`,
+        memoryNow,
+      )
       // The route every LLM step of this tick uses, resolved ONCE: the explicit
       // pin wins (rollback lever), otherwise the main conversation's latest
       // route. A quota observation skips the LLM steps ONLY when the tick is
