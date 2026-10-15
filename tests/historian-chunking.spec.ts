@@ -167,6 +167,49 @@ describe('planChunkSpans', () => {
       expect(group[group.length - 1]?.hasToolCalls).toBe(false)
     }
   })
+
+  it('keeps every completed tool invocation/result arc inside ONE chunk (#690)', () => {
+    // Upstream MC 0.49.3 (#690) fixed a summary the host rejected with
+    // "Historian terminal boundary splits a completed tool invocation/result arc":
+    // when the result was rendered together with its call (the built-in
+    // `historian.expand_tools` todo-update shape), the chunk stopped AT the call.
+    // That failure needs the boundary scan to see rows where the result is not a
+    // row of its own. Our span/chunk rules never close on a tool-requesting
+    // assistant and never open on a tool result, so the arc cannot be split —
+    // asserted here group by group (shape-agnostic) rather than at one chosen cut.
+    const nodes = [
+      node(1, 'u'.repeat(3_000)),
+      node(2, 'a'.repeat(3_000), { role: 'assistant', hasToolCalls: true }),
+      node(3, 'r'.repeat(3_000), { role: 'tool' }),
+      node(4, 'b'.repeat(3_000), { role: 'assistant', hasToolCalls: true }),
+      node(5, 's'.repeat(3_000), { role: 'tool' }),
+      node(6, 'c'.repeat(3_000), { role: 'assistant' }),
+      node(7, 'd'.repeat(3_000)),
+      node(8, 'e'.repeat(3_000)),
+    ]
+    const groups = planChunkSpans(nodes, 9_000, 3_000)
+    expect(groups.length).toBeGreaterThanOrEqual(2)
+    expect(groups.flat().map(item => item.seq)).toEqual(nodes.map(item => item.seq))
+
+    // Every call's arc — the call node plus the tool results that immediately
+    // follow it — must live in exactly one chunk.
+    const arcOf: number[][] = []
+    for (let index = 0; index < nodes.length; index += 1) {
+      const item = nodes[index] as SurfaceNode
+      if (item.hasToolCalls !== true) continue
+      const arc = [item.seq]
+      for (let next = index + 1; next < nodes.length && (nodes[next] as SurfaceNode).role === 'tool'; next += 1) {
+        arc.push((nodes[next] as SurfaceNode).seq)
+      }
+      arcOf.push(arc)
+    }
+    expect(arcOf.map(arc => arc.length)).toEqual([2, 2])
+    const groupOf = new Map<number, number>()
+    groups.forEach((group, index) => { for (const item of group) groupOf.set(item.seq, index) })
+    for (const arc of arcOf) {
+      expect(new Set(arc.map(seq => groupOf.get(seq))).size).toBe(1)
+    }
+  })
 })
 
 describe('calibration anchors', () => {
