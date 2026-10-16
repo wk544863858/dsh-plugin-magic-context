@@ -161,6 +161,59 @@ describe('auditDomainDivergences', () => {
     })
   })
 
+  it("④' 源已改写但当前文本已发布（同域活域行）⇒ 记为 covered，不是分歧", () => {
+    const report = audit({
+      candidates: [candidate({ id: 3, normalizedHash: 'hash-old', sourceMemoryId: 1311 })],
+      domainRows: [
+        domainRow({ id: 1431, normalizedHash: 'hash-old' }),
+        domainRow({ id: 1432, normalizedHash: 'hash-new' }),
+      ],
+      sourceMemories: [sourceMemory({ id: 1311, normalizedHash: 'hash-new' })],
+    })
+    expect(kinds(report)).toEqual([])
+    expect(report.covered).toEqual([
+      { candidateId: 3, domainRowId: 1431, sourceMemoryId: 1311, via: 'published', coveredBy: 1432 },
+    ])
+    expect(report).toMatchObject({ checked: 1, healthy: 1, unlinked: 0 })
+    // 已覆盖 ⇒ 没有任何修复动作（否则每跑一次就重复提案一遍）
+    expect(planRepair(report)).toEqual({ archiveRowIds: [], stageCandidates: [], unrepairable: [] })
+  })
+
+  it("④'' 源已改写但当前文本已有待审候选 ⇒ covered(staged)：稳态靠这一条收口", () => {
+    const report = audit({
+      candidates: [
+        candidate({ id: 3, normalizedHash: 'hash-old', sourceMemoryId: 1311 }),
+        candidate({ id: 218, normalizedHash: 'hash-new', state: 'pending', sourceMemoryId: 1311 }),
+      ],
+      domainRows: [domainRow({ id: 1431, normalizedHash: 'hash-old' })],
+      sourceMemories: [sourceMemory({ id: 1311, normalizedHash: 'hash-new' })],
+    })
+    expect(report.covered).toEqual([
+      { candidateId: 3, domainRowId: 1431, sourceMemoryId: 1311, via: 'staged', coveredBy: 218 },
+    ])
+    expect(report.divergences).toEqual([])
+    // 那条 pending 自己还没发布 ⇒ unlinked，不算故障
+    expect(report).toMatchObject({ checked: 2, healthy: 1, unlinked: 1 })
+  })
+
+  it("④''' 「批准」不是覆盖：副本已被归档的同键候选挡不住分歧（真库 #1/#1420 的形状）", () => {
+    const report = audit({
+      candidates: [
+        candidate({ id: 3, normalizedHash: 'hash-old', sourceMemoryId: 1311 }),
+        candidate({ id: 1, normalizedHash: 'hash-new', sourceMemoryId: 1311 }),
+      ],
+      domainRows: [
+        domainRow({ id: 1431, normalizedHash: 'hash-old' }),
+        domainRow({ id: 1420, normalizedHash: 'hash-new', status: 'archived' }),
+      ],
+      sourceMemories: [sourceMemory({ id: 1311, normalizedHash: 'hash-new' })],
+    })
+    expect(kinds(report)).toEqual(['source-rewritten'])
+    expect(report.covered).toEqual([])
+    // 候选 #1 自己的域行已归档 ⇒ 那条链接算 healthy（跳过）
+    expect(report).toMatchObject({ checked: 2, healthy: 1, unlinked: 0 })
+  })
+
   it('⑤ 没有域行 ⇒ unlinked：pending/rejected 从未发布过，不算故障', () => {
     const report = audit({
       candidates: [
@@ -836,19 +889,61 @@ describe('scripts/domain-reconcile.mjs（合成库）', () => {
     expect(first.out).toContain('journal: domain-reconcile [stage]')
     expect(first.out).toContain('已应用：归档 1 条 · 暂存 1 条 · 拒绝 0 条')
 
-    // 重跑：同一分歧不再新建候选（幂等），域行已归档后也不再被当成分歧
+    // 重跑：同一分歧已被「已覆盖」收口 ⇒ 计划为空，连 applyRepair 都不再被调用
     const second = run()
     expect(second.exit).toBe(0)
     expect(countCandidates(seed.adapterPath)).toBe(3)
-    expect(second.out).toContain('（已存在，未重复写入）')
+    expect(second.out).toContain('已覆盖 1 条')
+    expect(second.out).toContain('候选 checked=3 · healthy=2 · unlinked=1 · 分歧=0')
+    expect(second.out).toContain('本次计划没有写入动作')
+    expect(calls).toHaveLength(1)
     // 重跑时：候选 2 的域行已归档 → 跳过（healthy），新暂存的 pending 候选还没有域行（unlinked）
-    expect(second.out).toContain('候选 checked=3 · healthy=1 · unlinked=1 · 分歧=1')
     expect(second.out).toContain('域行已归档 1 条')
   })
 
-  it('--write 撞上已存在的候选（哪怕它是 approved）⇒ 只报告，绝不改写它', () => {
+  it('--write 撞上"死批准"（已发布副本已归档）⇒ 用它自己的键原地重新提审，不新建、不 DELETE', () => {
     const seed = seedDivergentBanks()
-    // 真库里就是这个形状：候选 3 的源现哈希与已批准候选 1 同键
+    // 真库里就是这个形状：候选 1 已批准，但它的域行 #1420 已被归档 —— 键被占着，什么都没发布
+    const staleId = insertCandidate(seed.adapterPath, {
+      domainId: ORG,
+      content: '已批准候选的正文，但副本已被撤回',
+      normalizedHash: 'hash-rw-new',
+      state: 'approved',
+      category: 'CONSTRAINTS',
+      sourceMemoryId: seed.sourceRewritten,
+    })
+    const backupDir = tempDir('mc-reconcile-backup-repropose-')
+    copyFileSync(seed.corpusPath, join(backupDir, basename(seed.corpusPath)))
+    copyFileSync(seed.adapterPath, join(backupDir, basename(seed.adapterPath)))
+
+    const { out, err, log, warn } = io()
+    const exit = runReconcile({
+      argv: ['--write', '--backup', backupDir, '--adapter-db', seed.adapterPath, '--corpus-db', seed.corpusPath],
+      now: NOW,
+      log,
+      warn,
+    })
+    expect(exit, err.join('\n')).toBe(0)
+    const reproposed = candidateByHash(seed.adapterPath, 'hash-rw-new')
+    expect(reproposed).toMatchObject({
+      id: staleId,                       // 同一行：幂等、保 id、保观测历史
+      state: 'pending',
+      content: '源记忆改写后的正文',      // 换成源现状，等人工审批
+      source_memory_id: seed.sourceRewritten,
+    })
+    expect(countCandidates(seed.adapterPath)).toBe(3)  // 没有新建行
+    expect(out.join('\n')).toContain('（重新提审：原批准副本已归档，键被它占着）')
+  })
+
+  it('--write 撞上"活批准"（同键域行还活着）⇒ 已被覆盖，什么都不动', () => {
+    const seed = seedDivergentBanks()
+    // 当前文本在域里已经有一条活着的域行 ⇒ covered(published)，连暂存都不会尝试
+    insertMemory(seed.corpusPath, {
+      projectPath: ORG,
+      category: 'CONSTRAINTS',
+      content: '当前文本的活域行',
+      normalizedHash: 'hash-rw-new',
+    })
     const protectedId = insertCandidate(seed.adapterPath, {
       domainId: ORG,
       content: '已批准候选的正文，谁都不许动',
@@ -857,7 +952,7 @@ describe('scripts/domain-reconcile.mjs（合成库）', () => {
       category: 'CONSTRAINTS',
       sourceMemoryId: seed.sourceRewritten,
     })
-    const backupDir = tempDir('mc-reconcile-backup-clobber-')
+    const backupDir = tempDir('mc-reconcile-backup-live-')
     copyFileSync(seed.corpusPath, join(backupDir, basename(seed.corpusPath)))
     copyFileSync(seed.adapterPath, join(backupDir, basename(seed.adapterPath)))
 
@@ -872,7 +967,9 @@ describe('scripts/domain-reconcile.mjs（合成库）', () => {
     const kept = candidateByHash(seed.adapterPath, 'hash-rw-new')
     expect(kept).toMatchObject({ id: protectedId, state: 'approved', content: '已批准候选的正文，谁都不许动' })
     expect(countCandidates(seed.adapterPath)).toBe(3)
-    expect(out.join('\n')).toContain(`暂存候选 #${String(protectedId)}（已存在，未重复写入）`)
+    const text = out.join('\n')
+    expect(text).toContain('已覆盖 1 条')
+    expect(text).toContain('暂存候选 0 条')
   })
 
   it('collectSnapshots 只读读齐三份快照，不改库', () => {

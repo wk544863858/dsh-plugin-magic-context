@@ -287,15 +287,43 @@ export function createCorpusPort(db, now) {
  * approved 候选也不例外；观测行则与 `promoteMemoryToCandidate` 同形，让复核卡片
  * 看得出来这条提案是从哪条源记忆来的。
  */
-export function createAdapterPort(db, now) {
+export function createAdapterPort(db, now, corpus) {
   return {
     stageCandidate(input) {
       const domain = db.prepare('SELECT domain_id FROM domains WHERE domain_id = ?').get(input.domainId)
       if (domain === undefined) return { ok: false, error: `unknown domain '${input.domainId}'` }
       const existing = db
-        .prepare('SELECT id FROM global_candidates WHERE domain_id = ? AND normalized_hash = ?')
+        .prepare('SELECT id, state FROM global_candidates WHERE domain_id = ? AND normalized_hash = ?')
         .get(input.domainId, input.normalizedHash)
-      if (existing !== undefined) return { ok: true, candidateId: Number(existing.id), created: false }
+      if (existing !== undefined) {
+        // 同键候选默认只读复用。唯一例外 = **死批准**：它在 corpus 里的已发布副本已经不是
+        // active/permanent（被归档），却永久占着唯一键，挡住这份当前文本唯一诚实的提案。
+        // 此时原地重新提审（content/state 回 pending），既不发布、也不 DELETE（2026-10-16 用户裁决）。
+        // 活批准与人工拒绝一律不动：前者说明文本已在库里，后者是人说过的"不"。
+        // 死活要问 corpus（memories 表不在 adapter 库里），所以这个口必须拿到 corpus 连接。
+        if (existing.state === 'approved') {
+          const live = corpus
+            .prepare("SELECT id FROM memories WHERE project_path = ? AND normalized_hash = ? AND status IN ('active','permanent')")
+            .get(input.domainId, input.normalizedHash)
+          if (live === undefined) {
+            db.prepare(
+              'UPDATE global_candidates SET content = ?, category = ?, source_memory_id = ?, first_identity = ?, '
+                + "suggested_domain = ?, suggestion_reason = ?, state = 'pending', updated_at = ? WHERE id = ?",
+            ).run(
+              input.content,
+              input.category,
+              input.sourceMemoryId,
+              input.sourceIdentity,
+              input.suggestedDomain,
+              input.reason,
+              now,
+              existing.id,
+            )
+            return { ok: true, candidateId: Number(existing.id), created: false, reproposed: true }
+          }
+        }
+        return { ok: true, candidateId: Number(existing.id), created: false }
+      }
       db.exec('BEGIN IMMEDIATE')
       try {
         const inserted = db
@@ -351,6 +379,15 @@ export function renderReport({ report, plan, mode, adapterDbPath, corpusDbPath }
     `候选 checked=${String(report.checked)} · healthy=${String(report.healthy)} · unlinked=${String(report.unlinked)}`
       + ` · 分歧=${String(report.divergences.length)}`,
   )
+  // 「已覆盖」不是分歧：源已改写，但它现在的文本在同一个域里已经有活着的域行（已发布）或
+  // 待审候选（已暂存）。没有这一栏，修完的域会被永久报成分歧、每跑一次就重复提案一遍。
+  if (report.covered.length > 0) {
+    lines.push(`已覆盖 ${String(report.covered.length)} 条（源已改写，但当前文本已在同域被处理：不计分歧、无需修复）：`)
+    for (const item of report.covered) {
+      const via = item.via === 'published' ? `域行 #${String(item.coveredBy)}` : `待审候选 #${String(item.coveredBy)}`
+      lines.push(`  候选 #${String(item.candidateId)}（域行 #${String(item.domainRowId)} 是旧文本）→ 当前文本见 ${via}`)
+    }
+  }
   if (report.unlinked > 0) {
     lines.push(`未关联 ${String(report.unlinked)} 条（没有 (domain_id, normalized_hash) 对应的域行：pending/rejected 从未发布过，不算故障）`)
     lines.push(`  ${report.unlinkedCandidateIds.map(id => `#${String(id)}`).join(' ')}`)
@@ -432,6 +469,7 @@ export function toJsonPayload({ mode, adapterDbPath, corpusDbPath, snapshot, rep
       unlinked: report.unlinked,
       unlinkedCandidateIds: report.unlinkedCandidateIds,
       skippedArchivedDomainRows: report.skippedArchivedDomainRows,
+      covered: report.covered,
       divergences: report.divergences.map(toJsonDivergence),
     },
     plan: {
@@ -460,6 +498,7 @@ const USAGE = [
   '',
   '  默认只读：只 SELECT + 打印报表，绝不改库。',
   '  --write            应用修复计划（归档源已亡的域行；改写后的源只暂存候选，不发布）',
+  '                     同键候选默认不动；唯一例外是"死批准"（已发布副本已归档）——原地重新提审',
   '  --backup <path>    --write 的强制前提：库外备份，文件或目录（两个库都要写时用目录）',
   '  --json             输出同一份事实的 JSON（不含记忆正文）',
   '  --adapter-db / --corpus-db  指向别的库（演练 / 合成库）',
@@ -552,7 +591,7 @@ export function runReconcile(options = {}) {
   try {
     corpus.exec('PRAGMA busy_timeout = 5000')
     adapter.exec('PRAGMA busy_timeout = 5000')
-    applied = apply(plan, { ...createCorpusPort(corpus, now), ...createAdapterPort(adapter, now) }, { now, journal: emitJournal })
+    applied = apply(plan, { ...createCorpusPort(corpus, now), ...createAdapterPort(adapter, now, corpus) }, { now, journal: emitJournal })
   } catch (error) {
     warn(`写入失败：${errText(error)}`)
     return 1
@@ -571,7 +610,8 @@ export function runReconcile(options = {}) {
   log(`备份：${gate.detail}`)
   log(`已应用：归档 ${String(applied.archived.length)} 条 · 暂存 ${String(applied.staged.length)} 条 · 拒绝 ${String(applied.archiveRefusals.length + applied.stageRefusals.length)} 条`)
   for (const row of applied.staged) {
-    log(`  暂存候选 #${String(row.candidateId)}${row.created ? '（新建）' : '（已存在，未重复写入）'} · 域 ${row.domainId} · 源记忆 #${String(row.sourceMemoryId)}`)
+    const how = row.created ? '（新建）' : row.reproposed ? '（重新提审：原批准副本已归档，键被它占着）' : '（已存在，未重复写入）'
+    log(`  暂存候选 #${String(row.candidateId)}${how} · 域 ${row.domainId} · 源记忆 #${String(row.sourceMemoryId)}`)
   }
   for (const refusal of applied.stageRefusals) {
     log(`  暂存被拒：域 ${refusal.domainId} · 哈希 ${shortHash(refusal.normalizedHash)} —— ${refusal.error}`)

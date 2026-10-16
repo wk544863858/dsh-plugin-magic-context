@@ -134,6 +134,25 @@ export interface DomainReconcileReport {
     readonly candidateId: number
     readonly domainRowId: number
   }[]
+  /**
+   * A source-rewritten link whose CURRENT text is already handled elsewhere in
+   * the same domain: published (an alive row under the source's hash) or queued
+   * (a pending candidate under it). These are NOT divergences — nothing is
+   * missing and no repair is possible — but they are reported separately, so
+   * "covered" can never be mistaken for "the stale copy agreed".
+   *
+   * Without this, a repaired domain could never reach a steady state: the stale
+   * (candidate, row) pair keeps its old hash forever, so every run would
+   * re-propose a candidate the human already approved.
+   */
+  readonly covered: readonly {
+    readonly candidateId: number
+    readonly domainRowId: number
+    readonly sourceMemoryId: number
+    readonly via: 'published' | 'staged'
+    /** The row id (published) or candidate id (staged) doing the covering. */
+    readonly coveredBy: number
+  }[]
   readonly divergences: readonly DomainDivergence[]
 }
 
@@ -207,7 +226,33 @@ type Verdict =
   | { readonly outcome: 'unlinked' }
   | { readonly outcome: 'healthy' }
   | { readonly outcome: 'skipped-archived-row'; readonly domainRowId: number }
+  | { readonly outcome: 'covered'; readonly covered: DomainReconcileReport['covered'][number] }
   | { readonly outcome: 'divergence'; readonly divergence: DomainDivergence }
+
+/**
+ * Is the source's CURRENT text already handled under this domain?
+ *
+ * Two honest forms of coverage: an ALIVE domain row holding that text, or a
+ * PENDING candidate proposing it (the design's own repair — a rewrite stages a
+ * proposal rather than republishing). A merely `approved` candidate proves
+ * nothing: approval is a state flag, and the point of this audit is that the
+ * copy it produced may since have been withdrawn (live case #1420, archived).
+ */
+function findCoverage(
+  domainId: string,
+  sourceNormalizedHash: string,
+  rowsByKey: ReadonlyMap<string, readonly ReconcileDomainRow[]>,
+  candidatesByKey: ReadonlyMap<string, readonly ReconcileCandidate[]>,
+): { readonly via: 'published' | 'staged'; readonly coveredBy: number } | undefined {
+  const key = linkKey(domainId, sourceNormalizedHash)
+  for (const row of rowsByKey.get(key) ?? []) {
+    if (isAlive(row.status)) return { via: 'published', coveredBy: row.id }
+  }
+  for (const candidate of candidatesByKey.get(key) ?? []) {
+    if (candidate.state === 'pending') return { via: 'staged', coveredBy: candidate.id }
+  }
+  return undefined
+}
 
 function makeDivergence(
   kind: DomainDivergenceKind,
@@ -238,6 +283,7 @@ function classifyCandidate(
   candidate: ReconcileCandidate,
   rowsByKey: ReadonlyMap<string, readonly ReconcileDomainRow[]>,
   sourcesById: ReadonlyMap<number, ReconcileSourceMemory>,
+  candidatesByKey: ReadonlyMap<string, readonly ReconcileCandidate[]>,
 ): Verdict {
   const row = pickDomainRow(rowsByKey.get(linkKey(candidate.domainId, candidate.normalizedHash)), candidate.category)
   if (row === undefined) return { outcome: 'unlinked' }
@@ -263,6 +309,22 @@ function classifyCandidate(
     return { outcome: 'divergence', divergence: makeDivergence('source-archived', candidate, row, sourceMemoryId, source) }
   }
   if (source.normalizedHash !== candidate.normalizedHash) {
+    // The source moved on. Before calling that a divergence, ask whether its
+    // CURRENT text is already handled under this domain — otherwise a repaired
+    // domain could never settle (the stale pair keeps its old hash forever).
+    const coverage = findCoverage(candidate.domainId, source.normalizedHash, rowsByKey, candidatesByKey)
+    if (coverage !== undefined) {
+      return {
+        outcome: 'covered',
+        covered: {
+          candidateId: candidate.id,
+          domainRowId: row.id,
+          sourceMemoryId,
+          via: coverage.via,
+          coveredBy: coverage.coveredBy,
+        },
+      }
+    }
     return { outcome: 'divergence', divergence: makeDivergence('source-rewritten', candidate, row, sourceMemoryId, source) }
   }
   return { outcome: 'healthy' }
@@ -287,17 +349,27 @@ export function auditDomainDivergences(input: DomainReconcileInput): DomainRecon
   }
   const sourcesById = new Map<number, ReconcileSourceMemory>()
   for (const memory of input.sourceMemories) sourcesById.set(memory.id, memory)
+  // Every candidate, by key: coverage can come from a DIFFERENT candidate than
+  // the one being classified (the proposal staged for this very rewrite).
+  const candidatesByKey = new Map<string, ReconcileCandidate[]>()
+  for (const candidate of input.candidates) {
+    const key = linkKey(candidate.domainId, candidate.normalizedHash)
+    const bucket = candidatesByKey.get(key)
+    if (bucket === undefined) candidatesByKey.set(key, [candidate])
+    else bucket.push(candidate)
+  }
 
   let checked = 0
   let healthy = 0
   let unlinked = 0
   const unlinkedCandidateIds: number[] = []
   const skippedArchivedDomainRows: Array<{ candidateId: number; domainRowId: number }> = []
+  const covered: Array<DomainReconcileReport['covered'][number]> = []
   const divergences: DomainDivergence[] = []
 
   for (const candidate of input.candidates) {
     checked += 1
-    const verdict = classifyCandidate(candidate, rowsByKey, sourcesById)
+    const verdict = classifyCandidate(candidate, rowsByKey, sourcesById, candidatesByKey)
     if (verdict.outcome === 'unlinked') {
       unlinked += 1
       unlinkedCandidateIds.push(candidate.id)
@@ -306,6 +378,10 @@ export function auditDomainDivergences(input: DomainReconcileInput): DomainRecon
     } else if (verdict.outcome === 'skipped-archived-row') {
       healthy += 1
       skippedArchivedDomainRows.push({ candidateId: candidate.id, domainRowId: verdict.domainRowId })
+    } else if (verdict.outcome === 'covered') {
+      // Nothing to repair, so nothing keeps it out of `healthy`; listed anyway.
+      healthy += 1
+      covered.push(verdict.covered)
     } else {
       divergences.push(verdict.divergence)
     }
@@ -317,6 +393,7 @@ export function auditDomainDivergences(input: DomainReconcileInput): DomainRecon
     unlinked,
     unlinkedCandidateIds,
     skippedArchivedDomainRows,
+    covered: covered.slice().sort((left, right) => left.candidateId - right.candidateId),
     divergences: divergences.slice().sort((left, right) => left.candidateId - right.candidateId),
   }
 }
@@ -414,7 +491,17 @@ export type ArchiveOutcome =
   | { readonly ok: false; readonly error: string }
 
 export type StageOutcome =
-  | { readonly ok: true; readonly candidateId: number; readonly created: boolean }
+  | {
+    readonly ok: true
+    readonly candidateId: number
+    readonly created: boolean
+    /**
+     * The key was held by a DEAD approval (its published copy is no longer
+     * alive) and the port re-proposed it in place instead of inserting. The
+     * module only carries the flag into the report; the decision is the port's.
+     */
+    readonly reproposed?: boolean
+  }
   | { readonly ok: false; readonly error: string }
 
 /**
@@ -432,9 +519,15 @@ export interface DomainRepairPort {
    */
   archiveDomainRow(rowId: number): ArchiveOutcome
   /**
-   * Land a pending candidate for human review. MUST NOT publish; MUST NOT touch
-   * a row that already exists under `(domain_id, normalized_hash)` — the
-   * adapter's upsert would rewrite an approved candidate's content.
+   * Land a pending candidate for human review. MUST NOT publish.
+   *
+   * An existing row under `(domain_id, normalized_hash)` is never overwritten
+   * blindly — the adapter's upsert rewrites `content` even for an APPROVED
+   * candidate. A live approval and a human rejection are left exactly as they
+   * are; an already-pending proposal is returned as `created: false`. The one
+   * exception is a DEAD approval (its published copy archived): its key blocks
+   * the only honest proposal for that text, so the port may re-propose it in
+   * place and flag `reproposed`.
    */
   stageCandidate(input: StageCandidatePlan): StageOutcome
 }
@@ -460,6 +553,8 @@ export interface RepairOutcome {
     readonly sourceMemoryId: number
     readonly candidateId: number
     readonly created: boolean
+    /** True when a dead approval's key was re-proposed in place. */
+    readonly reproposed: boolean
   }[]
   readonly stageRefusals: readonly {
     readonly domainId: string
@@ -490,7 +585,7 @@ export function applyRepair(
   const journal = options.journal
   const archived: number[] = []
   const archiveRefusals: Array<{ rowId: number; error: string }> = []
-  const staged: Array<{ domainId: string; normalizedHash: string; sourceMemoryId: number; candidateId: number; created: boolean }> = []
+  const staged: Array<{ domainId: string; normalizedHash: string; sourceMemoryId: number; candidateId: number; created: boolean; reproposed: boolean }> = []
   const stageRefusals: Array<{ domainId: string; normalizedHash: string; sourceMemoryId: number; error: string }> = []
 
   for (const rowId of plan.archiveRowIds) {
@@ -515,19 +610,23 @@ export function applyRepair(
   for (const proposal of plan.stageCandidates) {
     const result = port.stageCandidate(proposal)
     if (result.ok) {
+      const reproposed = result.reproposed === true
       staged.push({
         domainId: proposal.domainId,
         normalizedHash: proposal.normalizedHash,
         sourceMemoryId: proposal.sourceMemoryId,
         candidateId: result.candidateId,
         created: result.created,
+        reproposed,
       })
       journal?.({
         at,
         action: 'stage',
         summary: result.created
           ? `staged candidate #${String(result.candidateId)} for ${proposal.domainId} (awaiting human approval)`
-          : `candidate #${String(result.candidateId)} already staged for ${proposal.domainId}`,
+          : reproposed
+            ? `re-proposed dead candidate #${String(result.candidateId)} for ${proposal.domainId} (its published copy is archived; awaiting human approval again)`
+            : `candidate #${String(result.candidateId)} already staged for ${proposal.domainId}`,
         data: {
           candidateId: result.candidateId,
           domainId: proposal.domainId,
@@ -535,6 +634,7 @@ export function applyRepair(
           sourceMemoryId: proposal.sourceMemoryId,
           derivedFrom: proposal.derivedFrom,
           created: result.created,
+          reproposed,
         },
       })
     } else {
