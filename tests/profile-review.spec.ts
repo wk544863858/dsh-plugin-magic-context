@@ -283,9 +283,11 @@ describe('planProfileReview — the union consumption rule', () => {
 describe('runProfileReview', () => {
   it('promotes three similar candidates into one profile row and consumes them', async () => {
     const path = makeDb()
+    // Two sessions: the cross-session gate (PROFILE_REVIEW_MIN_SESSIONS) only
+    // lets a promotion through when more than one session observed it.
     seedCandidate(path, 'answer in Chinese', T0)
     seedCandidate(path, 'always answer in Chinese', T0)
-    seedCandidate(path, 'reply in Chinese', T0)
+    seedCandidate(path, 'reply in Chinese', T0, 'sess-b')
     const calls: Call[] = []
     const fake = answerLlm(JSON.stringify({
       promote: [{ content: 'The user works in Chinese; always answer in Chinese.', consume_candidate_ids: [1, 2, 3] }],
@@ -382,6 +384,8 @@ describe('runProfileReview', () => {
       sessionId: 'mc-maintenance',
       journal: recordingJournal(calls),
       now: () => T0,
+      // This case is about failure containment, not the session gate.
+      minSessions: 1,
     }))
     expect(outcome.reason).toBe('llm-failed')
     expect(outcome.ran).toBe(false)
@@ -402,6 +406,8 @@ describe('runProfileReview', () => {
       sessionId: 'mc-maintenance',
       journal: recordingJournal(calls),
       now: () => T0,
+      // This case is about fail-closed parsing, not the session gate.
+      minSessions: 1,
     }))
     expect(outcome.reason).toBe('invalid-output')
     expect(outcome.promoted).toBe(0)
@@ -439,6 +445,8 @@ describe('runProfileReview', () => {
       sessionId: 'mc-maintenance',
       journal: recordingJournal([]),
       now: () => T0,
+      // This case is about idempotency across ticks, not the session gate.
+      minSessions: 1,
     }))
     expect(first.promoted).toBe(1)
     expect(candidateContents(path)).toHaveLength(2)
@@ -450,8 +458,82 @@ describe('runProfileReview', () => {
       sessionId: 'mc-maintenance',
       journal: recordingJournal([]),
       now: () => T0 + DAY,
+      minSessions: 1,
     }))
     expect(second.promoted).toBe(0)
     expect(profiles(path)).toHaveLength(1)
+  })
+
+  // ── cross-session gate (2026-10-16 user decision; execution plan §8 C-0) ────
+
+  it('refuses a batch contributed by a single session, before paying for a judgement', async () => {
+    const path = makeDb()
+    for (const text of ['a', 'b', 'c']) seedCandidate(path, text, T0)
+    const calls: Call[] = []
+    const fake = answerLlm('{"promote":[{"content":"a quirk","consume_candidate_ids":[1,2,3]}],"reject":[]}')
+    const outcome = await withWriter(path, writer => runProfileReview({
+      writer,
+      llm: fake.llm as never,
+      route: { provider: 'mock', model: 'mock' },
+      sessionId: 'mc-maintenance',
+      journal: recordingJournal(calls),
+      now: () => T0,
+    }))
+    expect(outcome.ran).toBe(false)
+    expect(outcome.reason).toBe('too-few-sessions')
+    expect(fake.calls).toHaveLength(0)
+    expect(profiles(path)).toEqual([])
+    expect(candidateContents(path)).toHaveLength(3)
+  })
+
+  it('holds back a promotion whose support is one session, and does not consume it', async () => {
+    const path = makeDb()
+    seedCandidate(path, 'solo quirk', T0)
+    seedCandidate(path, 'solo quirk', T0)
+    seedCandidate(path, 'solo quirk', T0)
+    // A second session makes the BATCH span two, so only the per-promotion gate
+    // can stop this one.
+    seedCandidate(path, 'unrelated note', T0, 'sess-b')
+    const calls: Call[] = []
+    const fake = answerLlm(JSON.stringify({
+      promote: [{ content: 'solo quirk', consume_candidate_ids: [1, 2, 3] }],
+      reject: [4],
+    }))
+    const outcome = await withWriter(path, writer => runProfileReview({
+      writer,
+      llm: fake.llm as never,
+      route: { provider: 'mock', model: 'mock' },
+      sessionId: 'mc-maintenance',
+      journal: recordingJournal(calls),
+      now: () => T0,
+    }))
+    expect(outcome.promoted).toBe(0)
+    expect(profiles(path)).toEqual([])
+    // Held back, never consumed: another session may corroborate it later.
+    expect(candidateContents(path)).toEqual(['solo quirk', 'solo quirk', 'solo quirk'])
+    const held = calls.find(call => call.summary.includes('held back'))
+    expect(held?.data?.heldBack).toEqual([1, 2, 3])
+  })
+
+  it('promotes when the supporting observations span two sessions', async () => {
+    const path = makeDb()
+    seedCandidate(path, 'answer in Chinese', T0)
+    seedCandidate(path, 'answer in Chinese', T0, 'sess-b')
+    seedCandidate(path, 'unrelated note', T0)
+    const fake = answerLlm(JSON.stringify({
+      promote: [{ content: 'answer in Chinese', consume_candidate_ids: [1, 2] }],
+      reject: [3],
+    }))
+    const outcome = await withWriter(path, writer => runProfileReview({
+      writer,
+      llm: fake.llm as never,
+      route: { provider: 'mock', model: 'mock' },
+      sessionId: 'mc-maintenance',
+      journal: recordingJournal([]),
+      now: () => T0,
+    }))
+    expect(outcome.promoted).toBe(1)
+    expect(profiles(path)).toHaveLength(1)
+    expect(candidateContents(path)).toEqual([])
   })
 })

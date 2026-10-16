@@ -49,6 +49,18 @@ export interface ProfileReviewLlm {
 
 /** Candidates needed before a review is worth an LLM call. */
 export const PROFILE_REVIEW_THRESHOLD = 3
+/**
+ * Distinct SESSIONS the supporting candidates must come from before a profile
+ * row may be promoted (2026-10-16 user decision; execution plan §8 C-0).
+ *
+ * The profile is injected into EVERY session, so the failure mode is one
+ * talkative session turning its own quirk into a standing rule for all of them.
+ * Upstream MC guards this with cross-session recurrence; the `org` domain has
+ * the symmetric gate (`distinct_identities >= 2`), while this pass only counted
+ * the pool size — three near-identical observations from ONE session could
+ * promote. Counting distinct sessions closes that hole symmetrically.
+ */
+export const PROFILE_REVIEW_MIN_SESSIONS = 2
 /** At most one review per day (MC's cadence, without MC's scheduler). */
 export const PROFILE_REVIEW_INTERVAL_MS = 24 * 60 * 60 * 1000
 /** MC's candidate TTL, enforced by expiry regardless of the switch. */
@@ -201,6 +213,7 @@ export interface ProfileReviewOutcome {
     | 'writer-unavailable'
     | 'no-candidates'
     | 'too-few'
+    | 'too-few-sessions'
     | 'throttled'
     | 'llm-off'
     | 'llm-failed'
@@ -218,6 +231,8 @@ export interface ProfileReviewDeps {
   readonly lastReviewAt?: number
   readonly threshold?: number
   readonly batch?: number
+  /** Distinct sessions the batch must span. Defaults to PROFILE_REVIEW_MIN_SESSIONS. */
+  readonly minSessions?: number
 }
 
 /** One LLM call, collected by block index — the same shape the tick uses. */
@@ -306,6 +321,20 @@ export async function runProfileReview(deps: ProfileReviewDeps): Promise<Profile
   if (candidates.length < threshold) {
     return { ...empty, expired, reason: 'too-few' }
   }
+  // Cross-session gate (see PROFILE_REVIEW_MIN_SESSIONS). Checked before the LLM
+  // call: a batch contributed by a single session cannot promote anything, so
+  // paying for a judgement on it would only burn tokens and produce a verdict
+  // that must be discarded.
+  const minSessions = Math.max(1, deps.minSessions ?? PROFILE_REVIEW_MIN_SESSIONS)
+  const sessions = new Set(candidates.map(row => row.sessionId))
+  if (sessions.size < minSessions) {
+    deps.journal.info(
+      'maintenance',
+      `profile review skipped (candidates span ${String(sessions.size)} session(s), need ${String(minSessions)}); expired ${String(expired)}`,
+      { candidates: candidates.length, sessions: sessions.size, reason: 'too-few-sessions' },
+    )
+    return { ...empty, expired, reason: 'too-few-sessions' }
+  }
 
   const prompt = PROFILE_REVIEW_INSTRUCTION + '\n\nCandidate observations:\n'
     + candidates.map(row => renderCandidate(row, now)).join('\n')
@@ -336,9 +365,36 @@ export async function runProfileReview(deps: ProfileReviewDeps): Promise<Profile
     sessions: [...new Set(candidates.map(row => row.sessionId))],
     candidateIds: candidates.map(row => row.id),
   })
+  // Per-promotion cross-session gate: the batch check above only proves that TWO
+  // sessions contributed SOMETHING; a promotion must itself rest on more than one
+  // session's observations. One that does not is held back here — and its
+  // candidates are deliberately NOT consumed, so it can be judged again once
+  // another session corroborates it.
+  const byId = new Map(candidates.map(row => [row.id, row] as const))
+  const kept: Array<{ content: string; consume: readonly number[] }> = []
+  const heldBack: number[] = []
+  for (const promotion of plan.promotions) {
+    const spanned = new Set(
+      promotion.consume
+        .map(id => byId.get(id)?.sessionId)
+        .filter((sid): sid is string => sid !== undefined),
+    )
+    if (spanned.size < minSessions) {
+      heldBack.push(...promotion.consume)
+      continue
+    }
+    kept.push(promotion)
+  }
+  if (heldBack.length > 0) {
+    deps.journal.info(
+      'maintenance',
+      `profile review held back ${String(heldBack.length)} candidate(s): a promotion needs observations from ${String(minSessions)} session(s)`,
+      { heldBack: [...new Set(heldBack)].sort((left, right) => left - right), reason: 'too-few-sessions' },
+    )
+  }
   const promotedIds: number[] = []
   const landed: number[] = []
-  for (const promotion of plan.promotions) {
+  for (const promotion of kept) {
     const id = writer.promoteProfile({
       content: promotion.content,
       candidateIds: promotion.consume,
