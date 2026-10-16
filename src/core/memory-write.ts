@@ -40,7 +40,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { MEMORY_SCHEMA_MAX_VERSION, normalizeMemoryContent } from './memory-bridge.ts'
-import { V2_MEMORY_CATEGORIES, isPromotableCategory, resolveExpiresAt } from './memory-categories.ts'
+import { V2_MEMORY_CATEGORIES, isPromotableCategory, resolveExpiresAt, resolveHistorianExpiresAt } from './memory-categories.ts'
 import { errText } from './types.ts'
 
 /** MC's `normalize-hash.ts`: md5 of the whitespace/case-normalized content. */
@@ -397,6 +397,23 @@ const INSERT_MEMORY = `
 `
 
 /**
+ * Rolling window for {@link HISTORIAN_DAILY_CAP}: 24 hours of wall clock, not a
+ * calendar day — no timezone, no reset hour, nothing to get wrong.
+ */
+const HISTORIAN_DAILY_CAP_WINDOW_MS = 24 * 60 * 60 * 1000
+
+/**
+ * Soft ceiling on NEW historian rows per rolling 24h (user decision
+ * 2026-10-16). Measured inflow was ~120/day with a 166 peak, so this is a
+ * guard against runaway extraction, not a throttle on normal operation: the
+ * excess is skipped for THIS pass with `reason: 'daily-cap'` in the promotion
+ * journal row (the facts are still in the compartment, and the next pass
+ * re-promotes idempotently). Re-encounters of an existing hash are free — they
+ * insert nothing.
+ */
+const HISTORIAN_DAILY_CAP = 150
+
+/**
  * WP9/WP10 — a DOMAIN memory: owned by a synthetic domain identity and readable
  * by every peer project.
  *
@@ -750,6 +767,17 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
     const bumpSeen = db.prepare(
       'UPDATE memories SET seen_count = seen_count + 1, last_seen_at = ?, updated_at = ? WHERE id = ?',
     )
+    // T90 (2026-10-16): MAX() keeps the window monotonic — a refresh may extend
+    // a row's life but never shorten one, so two lanes can never race a fact to
+    // an earlier expiry than one of them already granted.
+    const refreshHistorianExpiry = db.prepare(
+      'UPDATE memories SET expires_at = MAX(COALESCE(expires_at, 0), ?) WHERE id = ?',
+    )
+    // L150: only NEW rows count against the rolling window (a re-encounter
+    // inserts nothing, so it must never consume budget).
+    const countPromotedSince = db.prepare(
+      "SELECT COUNT(*) AS c FROM memories WHERE project_path = ? AND source_type = 'historian' AND created_at > ?",
+    )
     const insert = db.prepare(INSERT_MEMORY)
     const insertDomain = db.prepare(INSERT_DOMAIN_MEMORY)
     const maxId = db.prepare('SELECT MAX(id) AS id FROM memories WHERE project_path = ?')
@@ -923,6 +951,12 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
         if (accepted.length === 0) return { ...outcomeBase, maxMemoryId: maxFor(input.identity) }
 
         const timestamp = now()
+        // L150 — see HISTORIAN_DAILY_CAP. Counted once per call, then spent:
+        // nothing inside the transaction can raise the count.
+        const promotedLast24h = Number(
+          (countPromotedSince.get(input.identity, timestamp - HISTORIAN_DAILY_CAP_WINDOW_MS) as { c: number }).c,
+        )
+        let budget = Math.max(0, HISTORIAN_DAILY_CAP - promotedLast24h)
         db.exec('BEGIN IMMEDIATE')
         try {
           for (const fact of accepted) {
@@ -931,10 +965,21 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
               | undefined
             if (existing !== undefined) {
               bumpSeen.run(timestamp, timestamp, existing.id)
+              // T90: re-observed means alive. Without this refresh a fact the
+              // historian keeps re-deriving would still expire on its first
+              // window, which is precisely the row we must NOT lose.
+              refreshHistorianExpiry.run(resolveHistorianExpiresAt(fact.category, timestamp), existing.id)
               outcomeBase.seenAgain.push({ id: existing.id, category: fact.category })
               continue
             }
-            const expiresAt = resolveExpiresAt(fact.category, timestamp)
+            if (budget <= 0) {
+              // Soft, per-pass, and visible: the fact stays in the compartment
+              // and the next pass re-proposes it (the dedup makes that free).
+              outcomeBase.skipped.push({ category: fact.category, content: fact.content, reason: 'daily-cap' })
+              continue
+            }
+            budget -= 1
+            const expiresAt = resolveHistorianExpiresAt(fact.category, timestamp)
             const result = insert.run(
               input.identity,
               fact.category,

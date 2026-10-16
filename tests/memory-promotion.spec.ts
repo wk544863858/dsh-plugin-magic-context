@@ -4,7 +4,8 @@
  * What this proves (the invariants Magic Context is built on):
  *  - the historian's categorized facts become durable `memories` rows through
  *    the promotion writer, with MC's exact defaults (`source_type='historian'`,
- *    `importance=50`, `status='active'`, `expires_at` NULL for v2 categories);
+ *    `importance=50`, `status='active'`, `expires_at` = now + the category TTL
+ *    (or the 90-day historian window) for v2 categories);
  *  - promotion is a PURE APPEND: no `memory_mutation_log` row, no
  *    `project_state.project_memory_epoch` bump;
  *  - a repeated fact only bumps `seen_count` (the UNIQUE dedup key);
@@ -261,7 +262,11 @@ describe('memory write path (promotion, watermark, dedup)', () => {
         expect(row.source_type).toBe('historian')
         expect(row.status).toBe('active')
         expect(row.seen_count).toBe(1)
-        expect(row.expires_at).toBeNull()
+        // T90 (2026-10-16): every promoted row carries a window now — a v2
+        // category has no contract TTL, so the historian window (90 days)
+        // applies. Before this, expires_at stayed NULL and the pool had nothing
+        // to expire (1,941 rows, 67% never recalled).
+        expect(Number(row.expires_at) - Number(row.created_at)).toBe(90 * 24 * 60 * 60 * 1000)
         expect(String(row.normalized_hash)).toMatch(/^[0-9a-f]{32}$/)
         // Pure append: no mutation log row, no epoch bump.
         expect((db.prepare('SELECT COUNT(*) AS c FROM memory_mutation_log').get() as { c: number }).c).toBe(0)

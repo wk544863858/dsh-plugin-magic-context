@@ -67,6 +67,28 @@ export function resolveExpiresAt(category: string, now: number): number | undefi
   return ttl === undefined ? undefined : now + ttl
 }
 
+/**
+ * TTL applied to HISTORIAN-promoted rows (user decision 2026-10-16).
+ *
+ * The promoted pool grew monotonically and nothing bounded it: measured on the
+ * live corpus, 1,941 non-domain rows, 67% of the active ones never recalled,
+ * and `expires_at` non-null on exactly ZERO of them — the contract's TTL table
+ * only covers two legacy categories, so the expiry pass had nothing to expire.
+ * Every promoted fact now carries a 90-day window; a fact that is still being
+ * re-observed refreshes it (see `promoteFacts`), so only abandoned rows age out.
+ */
+export const HISTORIAN_MEMORY_TTL_MS = 90 * 24 * 60 * 60 * 1000
+
+/**
+ * `expires_at` for a promoted historian row: the category's own TTL when it has
+ * one (shorter wins — KNOWN_ISSUES already expires at 30 days), else the
+ * historian window. Unlike `resolveExpiresAt` this never returns undefined:
+ * every promoted row gets a window.
+ */
+export function resolveHistorianExpiresAt(category: string, now: number): number {
+  return now + (CATEGORY_DEFAULT_TTL[category] ?? HISTORIAN_MEMORY_TTL_MS)
+}
+
 export function isPromotableCategory(category: unknown): category is string {
   return typeof category === 'string' && PROMOTABLE_CATEGORIES.includes(category)
 }

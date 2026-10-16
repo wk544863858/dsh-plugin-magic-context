@@ -291,7 +291,7 @@ describe('promotion invariants (contract §9)', () => {
     }
   })
 
-  it('A6: the category decides expires_at', () => {
+  it('A6: every promoted row gets a window — the category TTL when it has one, else 90 days', () => {
     const path = createDb()
     const writer = openMemoryWriter({ dbPath: path, logger: silentLogger, now: () => T0 })
     try {
@@ -307,11 +307,88 @@ describe('promotion invariants (contract §9)', () => {
         .toBe(T0 + 90 * DAY_MS)
       expect(one<{ expires_at: number | null }>(path, 'SELECT expires_at FROM memories WHERE project_path = ? AND category = ?', OWN, 'KNOWN_ISSUES')?.expires_at)
         .toBe(T0 + 30 * DAY_MS)
+      // T90 (2026-10-16): a v2 category has no contract TTL, so the historian
+      // window applies. Before this decision these rows never expired at all —
+      // that is how 1,941 promoted rows accumulated with `expires_at` NULL.
       for (const category of V2_MEMORY_CATEGORIES) {
         expect(one<{ expires_at: number | null }>(path, 'SELECT expires_at FROM memories WHERE project_path = ? AND category = ?', OWN, category)?.expires_at)
-          .toBeNull()
+          .toBe(T0 + 90 * DAY_MS)
       }
       expect(writer.stats(OWN).rows).toBe(2 + V2_MEMORY_CATEGORIES.length)
+    } finally {
+      writer.close()
+    }
+  })
+
+  it('A7 (T90): re-observing a fact refreshes its window and never shortens it', () => {
+    const path = createDb()
+    const clock = { value: T0 }
+    const writer = openMemoryWriter({ dbPath: path, logger: silentLogger, now: () => clock.value })
+    try {
+      const first = writer.promoteFacts({ identity: OWN, facts: [{ category: 'CONSTRAINTS', content: 'keep the gate green' }] })
+      const id = first.inserted[0]!.id
+      expect(one<{ expires_at: number }>(path, 'SELECT expires_at FROM memories WHERE id = ?', id)?.expires_at).toBe(T0 + 90 * DAY_MS)
+
+      // Still being re-derived 30 days later: the window moves out with it.
+      clock.value = T0 + 30 * DAY_MS
+      writer.promoteFacts({ identity: OWN, facts: [{ category: 'CONSTRAINTS', content: 'keep the gate green' }] })
+      expect(one<{ expires_at: number }>(path, 'SELECT expires_at FROM memories WHERE id = ?', id)?.expires_at).toBe(T0 + 120 * DAY_MS)
+
+      // A row already granted a longer window keeps it (MAX, never a shrink):
+      // this is what stops two lanes racing a live fact to an earlier expiry.
+      run(path, 'UPDATE memories SET expires_at = ? WHERE id = ?', T0 + 999 * DAY_MS, id)
+      writer.promoteFacts({ identity: OWN, facts: [{ category: 'CONSTRAINTS', content: 'keep the gate green' }] })
+      expect(one<{ expires_at: number }>(path, 'SELECT expires_at FROM memories WHERE id = ?', id)?.expires_at).toBe(T0 + 999 * DAY_MS)
+    } finally {
+      writer.close()
+    }
+  })
+
+  it('A8 (L150): the rolling 24h promotions ceiling skips the excess and lets it through the next day', () => {
+    const path = createDb()
+    const writer = openMemoryWriter({ dbPath: path, logger: silentLogger, now: () => T0 })
+    try {
+      // Fill the window with 150 historian rows created just now, by hand: the
+      // cap counts rows, not calls, so a single call cannot fake its own budget.
+      const db = new DatabaseSync(path)
+      try {
+        const insert = db.prepare(
+          `INSERT INTO memories(project_path, category, content, normalized_hash, importance, scope, shareable,
+             source_type, seen_count, retrieval_count, first_seen_at, created_at, updated_at, last_seen_at,
+             status, expires_at, verification_status)
+           VALUES(?, 'CONSTRAINTS', ?, ?, 50, 'project', 0, 'historian', 1, 0, ?, ?, ?, ?, 'active', NULL, 'unverified')`,
+        )
+        for (let i = 0; i < 150; i += 1) {
+          const content = `filler fact ${String(i)}`
+          insert.run(OWN, content, normalizedMemoryHash(content), T0 - 1000, T0 - 1000, T0 - 1000, T0 - 1000)
+        }
+      } finally {
+        db.close()
+      }
+      const capped = writer.promoteFacts({
+        identity: OWN,
+        facts: [
+          { category: 'CONSTRAINTS', content: 'over the ceiling' },
+          { category: 'CONSTRAINTS', content: 'also over the ceiling' },
+        ],
+      })
+      expect(capped.inserted).toHaveLength(0)
+      expect(capped.skipped).toEqual([
+        { category: 'CONSTRAINTS', content: 'over the ceiling', reason: 'daily-cap' },
+        { category: 'CONSTRAINTS', content: 'also over the ceiling', reason: 'daily-cap' },
+      ])
+      // A re-encounter of a known fact is free: it inserts nothing, so it must
+      // never be refused for lack of budget.
+      const known = writer.promoteFacts({ identity: OWN, facts: [{ category: 'CONSTRAINTS', content: 'filler fact 7' }] })
+      expect(known.seenAgain).toHaveLength(1)
+      expect(known.skipped).toHaveLength(0)
+
+      // The window is rolling, not a calendar day: rows older than 24h stop
+      // counting, and the same facts then land.
+      run(path, 'UPDATE memories SET created_at = ? WHERE project_path = ?', T0 - 25 * 60 * 60 * 1000, OWN)
+      const next = writer.promoteFacts({ identity: OWN, facts: [{ category: 'CONSTRAINTS', content: 'over the ceiling' }] })
+      expect(next.inserted).toHaveLength(1)
+      expect(next.skipped).toHaveLength(0)
     } finally {
       writer.close()
     }
