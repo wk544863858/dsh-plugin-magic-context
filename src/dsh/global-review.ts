@@ -432,7 +432,7 @@ export async function reviewGlobalCandidates(input: {
       }
       approved += 1
       lines.push(`#${String(candidate.id)} ✓ 已发布为 ${published.identity} [${published.category}]`
-        + `（memory #${String(published.memoryId)}${published.created ? '' : '，已存在'}）`
+        + `（memory #${String(published.memoryId)}${published.created ? '' : published.revived === true ? '，复活已归档行' : '，已存在'}）`
         + (revised ? '，按修改稿发布' : ''))
       journalDecision('approved', { memoryId: published.memoryId })
       continue

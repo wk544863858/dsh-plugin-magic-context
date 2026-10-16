@@ -417,3 +417,52 @@ describe('the domain admission cap (domains.cap)', () => {
     expect(publishGlobalCandidate(store, { candidateId: candidate.id, writer, now: NOW }).ok).toBe(true)
   })
 })
+
+/**
+ * Publishing onto a withdrawn copy of the same text (2026-10-16).
+ *
+ * UNIQUE(project_path, category, normalized_hash) means the identical text can
+ * never get a second row — so a publish that only bumped the recurrence counter
+ * would mark the candidate APPROVED while leaving the row invisible. Measured in
+ * the live store: candidate #1 was approved at 17:56 and row #1420 stayed
+ * archived, i.e. the human's approval put nothing live.
+ */
+describe('publishing onto a withdrawn copy', () => {
+  it('revives the archived row, and a further publish is the ordinary idempotent bump', () => {
+    const path = contractDb()
+    const writer = writerFor(path)
+    const first = writer.publishDomainMemory({ identity: ORG, category: 'CONSTRAINTS', content: 'the rule that came back' })
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+    expect(writer.archiveMemory({ identity: ORG, id: first.id, reason: 'withdrawn' }).ok).toBe(true)
+    expect(writer.countDomainMemories(ORG)).toBe(0)
+
+    const revived = writer.publishDomainMemory({ identity: ORG, category: 'CONSTRAINTS', content: 'the rule that came back' })
+    expect(revived.ok).toBe(true)
+    if (!revived.ok) return
+    expect(revived).toMatchObject({ id: first.id, created: false, revived: true })
+    expect(writer.countDomainMemories(ORG)).toBe(1)
+
+    const again = writer.publishDomainMemory({ identity: ORG, category: 'CONSTRAINTS', content: 'the rule that came back' })
+    expect(again.ok).toBe(true)
+    if (!again.ok) return
+    expect(again.revived).toBeUndefined()
+    expect(writer.countDomainMemories(ORG)).toBe(1)
+  })
+
+  it('carries the revival through the approval path, so an approval always lands a live row', () => {
+    const path = contractDb()
+    const writer = writerFor(path)
+    const store = makeStore()
+    const candidate = seedCandidate(store, 'the approved rule')
+    expect(publishGlobalCandidate(store, { candidateId: candidate.id, writer, now: NOW })).toMatchObject({ ok: true, created: true })
+    const rowId = (rows(path)[0] as { id: number }).id
+    expect(writer.archiveMemory({ identity: ORG, id: rowId, reason: 'withdrawn' }).ok).toBe(true)
+    store.setGlobalCandidateState(candidate.id, 'pending', NOW)
+
+    const republished = publishGlobalCandidate(store, { candidateId: candidate.id, writer, now: NOW })
+    expect(republished).toMatchObject({ ok: true, created: false, revived: true, memoryId: rowId })
+    expect(store.getGlobalCandidate(candidate.id)?.state).toBe('approved')
+    expect(writer.countDomainMemories(ORG)).toBe(1)
+  })
+})

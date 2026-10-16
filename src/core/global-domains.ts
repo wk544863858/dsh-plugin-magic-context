@@ -340,7 +340,7 @@ export interface DomainWritePort extends DomainCapProbe {
     readonly category: string
     readonly content: string
     readonly importance?: number
-  }): { readonly ok: true; readonly id: number; readonly created: boolean } | { readonly ok: false; readonly detail: string }
+  }): { readonly ok: true; readonly id: number; readonly created: boolean; readonly revived?: boolean } | { readonly ok: false; readonly detail: string }
 }
 
 export type DomainPublishResult =
@@ -348,6 +348,8 @@ export type DomainPublishResult =
     readonly ok: true
     readonly memoryId: number
     readonly created: boolean
+    /** The row existed but was withdrawn: this publish brought it back. */
+    readonly revived?: boolean
     /** The domain identity the row was published under — a peer project. */
     readonly identity: string
     readonly category: string
@@ -412,6 +414,7 @@ export function publishGlobalCandidate(
     ok: true,
     memoryId: written.id,
     created: written.created,
+    ...written.revived === true ? { revived: true } : {},
     identity: candidate.domainId,
     category,
   }

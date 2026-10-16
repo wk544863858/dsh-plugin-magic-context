@@ -270,9 +270,10 @@ export type MemoryRetrievalOutcome =
     readonly reason: MemoryWriteFailureReason
   }
 
-/** WP9/WP10 domain publish: the row id, and whether this call created it. */
+/** WP9/WP10 domain publish: the row id, whether this call created it, and
+ *  whether it revived a withdrawn copy of the same text. */
 export type DomainPublishResult =
-  | { readonly ok: true; readonly id: number; readonly created: boolean }
+  | { readonly ok: true; readonly id: number; readonly created: boolean; readonly revived?: boolean }
   | MemoryWriteFailure
 
 /** WP11 vector write: the memory id, and whether a row was actually added. */
@@ -767,6 +768,14 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
     const bumpSeen = db.prepare(
       'UPDATE memories SET seen_count = seen_count + 1, last_seen_at = ?, updated_at = ? WHERE id = ?',
     )
+    // Reviving a withdrawn copy of the SAME text (same range key). Publish is a
+    // human decision and UNIQUE(project_path, category, normalized_hash) leaves
+    // no other way to honour it: measured 2026-10-16, approving candidate #1
+    // while row #1420 stayed archived marked the candidate approved and put
+    // NOTHING live.
+    const reviveArchived = db.prepare(
+      "UPDATE memories SET status = 'active', seen_count = seen_count + 1, last_seen_at = ?, updated_at = ? WHERE id = ?",
+    )
     // T90 (2026-10-16): MAX() keeps the window monotonic — a refresh may extend
     // a row's life but never shorten one, so two lanes can never race a fact to
     // an earlier expiry than one of them already granted.
@@ -1089,10 +1098,19 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
           const outcome = runImmediate<DomainPublishResult>(() => {
             // The contract's UNIQUE(project_path, category, normalized_hash)
             // makes republishing idempotent: the row is already visible, so the
-            // only honest change is the recurrence counter.
-            const existing = byHash.get(input.identity, input.category, hash) as { id: number } | undefined
+            // only honest change is the recurrence counter. When it is NOT
+            // visible (withdrawn since), the same key means this publication is
+            // that exact text coming back — revive the tombstone instead of
+            // reporting success for a row nobody can read.
+            const existing = byHash.get(input.identity, input.category, hash) as
+              | { id: number; status: string | null }
+              | undefined
             if (existing !== undefined) {
               const timestamp = now()
+              if (existing.status !== 'active' && existing.status !== 'permanent') {
+                reviveArchived.run(timestamp, timestamp, existing.id)
+                return { ok: true, id: existing.id, created: false, revived: true }
+              }
               bumpSeen.run(timestamp, timestamp, existing.id)
               return { ok: true, id: existing.id, created: false }
             }
