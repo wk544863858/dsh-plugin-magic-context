@@ -787,6 +787,9 @@ function computeMetrics(rows) {
     },
     memoryLane: { promoteEvents: 0, promotions: 0, seenAgain: 0 },
     // 融合 v7 运行面锚点：publish guard 与溢出通道。
+    // NOTE (2026-10-16): the publish guard is RETIRED — `compartment-guard`
+    // rows can only come from historical windows now (the kind stays in the
+    // reader so old databases still aggregate correctly).
     guard: { events: 0, drift: 0, noGain: 0, observe: 0, enforce: 0, reclaimedTokens: 0 },
     overflow: { forceEvents: 0, waits: 0, publishes: 0, published: 0 },
     errors: [],
@@ -1420,6 +1423,7 @@ function buildHealth(ctx) {  const { db, opened, dbExists, openError, valid, sch
         )
       }
       // 融合 v7 运行面扳机：真实溢出、guard enforce 动作。
+      // (guard 于 2026-10-16 退役：下面的 publish-guard-acting 只可能被历史行触发。)
       if (metrics.overflow.publishes > 0) {
         push(
           'context-overflow',
@@ -1832,7 +1836,8 @@ function renderText(payload) {
     if (gd.events > 0) {
       lines.push(
         `  publish guard : ${fmtInt(gd.events)} 次（drift ${fmtInt(gd.drift)} / no-gain ${fmtInt(gd.noGain)}；`
-        + `observe ${fmtInt(gd.observe)} / enforce ${fmtInt(gd.enforce)}），reclaimed ${fmtInt(gd.reclaimedTokens)} tok`,
+        + `observe ${fmtInt(gd.observe)} / enforce ${fmtInt(gd.enforce)}），reclaimed ${fmtInt(gd.reclaimedTokens)} tok`
+        + ' —— 该护栏已于 2026-10-16 退役，此行只统计历史窗口的行',
       )
     }
     const ov = metrics.overflow

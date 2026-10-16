@@ -19,7 +19,7 @@
  * the first mount only seeds, and every later mount can diff.
  */
 import type { MagicContextDshConfig } from './config.ts'
-import { liveBoolean, liveNumber, liveString } from './volatile.ts'
+import { liveBoolean, liveNumber } from './volatile.ts'
 import { vectorBackfillEnabled } from './maintenance-wiring.ts'
 
 /** Every tracked switch. Booleans alarm on `went-off`; the rest report changes. */
@@ -34,7 +34,6 @@ export const SWITCH_KEYS = [
   'userReview',
   'machine',
   'machineAutoStage',
-  'guardMode',
   'forceWaitMs',
 ] as const
 
@@ -54,10 +53,10 @@ export function buildSwitchSnapshot(config: MagicContextDshConfig): SwitchSnapsh
     userReview: liveBoolean(config.memory?.global?.user?.review, true),
     machine: liveBoolean(config.memory?.global?.machine?.enabled, true),
     machineAutoStage: liveBoolean(config.memory?.global?.machine?.autoStage, true),
-    // liveString/liveNumber unwrap schemastery volatile references — a raw
-    // read serialized the reference object into the boot row (measured 12:31:
-    // guardMode arrived as {"get":"[depth]"}).
-    guardMode: liveString(config.policy?.compartmentGuardMode, 'observe'),
+    // liveNumber unwraps schemastery volatile references — a raw read
+    // serialized the reference object into the boot row (measured 12:31: the
+    // retired guard-mode switch arrived as {"get":"[depth]"}). The unwrapping
+    // rule still applies to every volatile field here.
     forceWaitMs: liveNumber(config.policy?.forceWaitReadyMs, 0),
   }
 }

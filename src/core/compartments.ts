@@ -63,6 +63,12 @@ export interface Compartment extends CompartmentDraft {
    * after drafting — the row is retired and its span re-claimed for a fresh
    * digest). A row with a landed reason is never published and never retried;
    * `listUnlandedCompartments` excludes it.
+   *
+   * NOTE (2026-10-16): the guard that produced the first two reasons is
+   * RETIRED, so no producer writes them any more. The column, the reasons and
+   * the store API stay for schema-v7 compatibility, historical rows, and the
+   * replace-failed path (`compartment-published` level=error) that still
+   * retires a poisoned draft.
    */
   readonly landedReason?: string
 }

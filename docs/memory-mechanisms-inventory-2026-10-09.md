@@ -132,8 +132,9 @@ v4 `journal` → v5 `max_memory_id` → v6 变更游标 + epoch 指纹 → v7 `l
   `verifyProvider`/`verifyModel` 默认空串 = verify 关（`index.ts:706-710`）。
 - `maintenance.evidenceVerify.mode` 默认 `off`，`maxRows` 默认 4。
 - `searchHint` 默认 true、`sessionNotices` 默认 true、`historianEnabled` 默认 true。
-- `policy.compartmentGuardMode` 默认 `observe`、`compartmentEntrantTokens` 200、
-  `forceWaitReadyMs` 0。
+- ~~`policy.compartmentGuardMode` 默认 `observe`、`compartmentEntrantTokens` 200~~ ——
+  **发布护栏已于 2026-10-16 退役**（观测窗 0 命中，用户裁决整段删除；本文其余段落为 10-09 台账原文）；
+  `forceWaitReadyMs` 0 仍为现行缺省。
 - 硬编码不可配置：`CATEGORY_DEFAULT_TTL`、`VERIFY_BATCH=16`、`EXPIRE_BATCH=200`、
   `VERIFY_MAX_TOKENS=32768`、`MAX_FORCED_MEMORIES_PER_DELTA=10`、evidence 四项上限、
   drift `MAX_PROBES_PER_TURN=8`、新行 `importance=50/scope=project/shareable=0`。
@@ -363,7 +364,7 @@ evidence overturned ≥ confirmed（≥3 拍）。
 |---|---|---|---|
 | ★F1 | **`search-hint` 指向不存在的工具 `ctx_search`** | `search-hint.ts:81`（footer）、`:164`（面板摘要）；实际注册的只有 `ctx_reduce`/`ctx_expand`/`ctx_memory`（`tool-bridge.ts:199,261,442`）。`tests/search-hint.spec.ts:52` 还**断言了这个字符串** | 每轮提示都教模型调用不存在的工具（本会话 `<ctx-search-hint>` 即如此）。修法：文案改 `ctx_memory`（action search）+ 改测试 |
 | ★F2 | **`registry` 不匹配：`ctx_memory search` 的 `from`/`to` 被静默丢弃** | `tool-bridge.ts:614-631` 解析并传出，但 `MemoryToolSearch` 类型与实现（`memory-lane.ts:23-30,168-221`）**没有 from/to**，从不转发 | 工具描述承诺的日期过滤**不生效也不报错**。附带：`parseBound` 的三元两分支同值（白检正则），且 `Date.parse('YYYY-MM-DD')` 是 **UTC** 午夜而非注释声称的本地日界 |
-| ★F3 | **`guard.drift` / `guard.noGain` 恒为 0** | 生产者写 `'substantive-entrants'`/`'not-shrinkable'`（`management-pass.ts:282-285`），`mc-report.mjs:991-992` 只认 `'drift'`/`'no-gain'` | 遥测失真：`publish-guard-acting` 健康提示（要求 drift+noGain≥5）**永不触发**；按报告判断守卫效果会得出错误结论 |
+| ~~★F3~~ | ~~**`guard.drift` / `guard.noGain` 恒为 0**~~ —— **随护栏退役而失效（2026-10-16）** | 生产者写 `'substantive-entrants'`/`'not-shrinkable'`（`management-pass.ts:282-285`，该块已删除），`mc-report.mjs` 只认 `'drift'`/`'no-gain'` | 遥测失真：`publish-guard-acting` 健康提示（要求 drift+noGain≥5）**永不触发**。护栏已整段退役，本条不再是待修项（report 侧仅保留读历史行） |
 
 ### P1 —— 行为/文档不一致，影响决策可信度
 

@@ -28,7 +28,6 @@ describe('buildSwitchSnapshot', () => {
       userReview: true,
       machine: true,
       machineAutoStage: true,
-      guardMode: 'observe',
       forceWaitMs: 0,
     })
   })
@@ -41,7 +40,7 @@ describe('buildSwitchSnapshot', () => {
         scoring: { enabled: true },
         global: { user: { collect: true, review: true }, machine: { enabled: true, autoStage: true } },
       },
-      policy: { compartmentGuardMode: 'enforce', forceWaitReadyMs: 20_000 },
+      policy: { forceWaitReadyMs: 20_000 },
     })
     expect(snapshot.write).toBe(false)
     expect(snapshot.vectorBackfill).toBe(false)
@@ -49,7 +48,6 @@ describe('buildSwitchSnapshot', () => {
     expect(snapshot.userCollect).toBe(true)
     expect(snapshot.userReview).toBe(true)
     expect(snapshot.machine).toBe(true)
-    expect(snapshot.guardMode).toBe('enforce')
     expect(snapshot.forceWaitMs).toBe(20_000)
   })
 })
@@ -64,14 +62,16 @@ describe('diffSwitches', () => {
 
   it('reports came-on and changed without alarm severity', () => {
     // With the 2026-10-13 distribution defaults every boolean defaults ON, so
-    // came-on needs an explicit OFF snapshot to move away from.
+    // came-on needs an explicit OFF snapshot to move away from. `forceWaitMs`
+    // is the non-boolean half of the snapshot (the guard-mode switch that used
+    // to cover `changed` was retired 2026-10-16).
     const before = buildSwitchSnapshot({ memory: { write: false } })
     const after = buildSwitchSnapshot({
-      policy: { compartmentGuardMode: 'enforce' },
+      policy: { forceWaitReadyMs: 30_000 },
     })
     const rows = diffSwitches(before, after)
     expect(rows).toContainEqual({ key: 'write', before: false, after: true, severity: 'came-on' })
-    expect(rows).toContainEqual({ key: 'guardMode', before: 'observe', after: 'enforce', severity: 'changed' })
+    expect(rows).toContainEqual({ key: 'forceWaitMs', before: 0, after: 30_000, severity: 'changed' })
     expect(rows.every(row => row.severity !== 'went-off')).toBe(true)
   })
 

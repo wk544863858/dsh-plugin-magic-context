@@ -859,7 +859,7 @@ export async function apply(ctx: Context, config: MagicContextDshConfig = {}): P
     journal: { enabled: journal !== undefined, mirror: journal?.mirrorPath, retentionDays: liveNumber(config.journal?.retentionDays, 30) },
     tagsRetentionDays: liveNumber(config.tags?.retentionDays, 30),
     // 融合 v7 的待观察翻转（boot 行可见，巡检核对配置漂移）。
-    compartmentGuardMode: config.policy?.compartmentGuardMode,
+    // compartmentGuardMode 已于 2026-10-16 退役，不再进 boot 行。
     forceWaitReadyMs: liveNumber(config.policy?.forceWaitReadyMs, 0),
     memoryScoringEnabled: liveBoolean(config.memory?.scoring?.enabled, true),
     policy: {
@@ -993,15 +993,6 @@ export const Config = z.object({
     baselineTokens: z.number().default(2_000).volatile(),
     memoryBudgetTokens: z.number().default(8_000).volatile(),
     memoryLimit: z.number().default(40).volatile(),
-    /**
-     * The compartment publish guard (fusion v7): `observe` journals the
-     * verdicts only (shipped default); `enforce` acts on them — supersede a
-     * draft whose range gained substantive nodes, reject a digest that would
-     * not shrink the wire; `off` skips the guard.
-     */
-    compartmentGuardMode: z.string().default('observe').volatile(),
-    /** Entrant tokens past which a draft's range counts as drifted (re-digest). */
-    compartmentEntrantTokens: z.number().min(0).default(200).volatile(),
     /**
      * Overflow-path wait on an in-flight historian before the drop lane
      * (0 = never wait — the shipped default; flip after observation).

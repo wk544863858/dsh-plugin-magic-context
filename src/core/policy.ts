@@ -54,15 +54,6 @@ export interface PressurePolicy {
   /** Maximum project memories recalled into the baseline. */
   readonly memoryLimit: number
   /**
-   * The compartment publish guard (schema v7): `observe` journals what it
-   * WOULD reject, `enforce` acts on the verdicts (supersede a drifted draft,
-   * reject a digest that would not shrink the wire), `off` skips the guard.
-   * Anything else reads as `observe` — the fail-safe default.
-   */
-  readonly compartmentGuardMode: 'observe' | 'enforce' | 'off'
-  /** Entrant tokens past which a draft's range counts as drifted (0 disables the drift check). */
-  readonly compartmentEntrantTokens: number
-  /**
    * How long the provider-overflow path may wait on an in-flight historian
    * before falling back to emergency reclaim (0 = never wait — the shipped
    * default; flip after the force-path observation window).
@@ -86,8 +77,6 @@ export const DEFAULT_POLICY: PressurePolicy = {
   baselineTokens: 2000,
   memoryBudgetTokens: 8000,
   memoryLimit: 40,
-  compartmentGuardMode: 'observe',
-  compartmentEntrantTokens: 200,
   forceWaitReadyMs: 0,
 }
 

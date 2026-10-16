@@ -19,7 +19,6 @@ import {
   estimateTokens,
   findBaselineRange,
   renderBaseline,
-  renderCompartment,
   renderMemoryUpdates,
   stripBaseline,
   type Compartment,
@@ -164,10 +163,6 @@ export interface ManagementPassResult {
   readonly factsPromoted: number
   /** Facts that deduplicated against existing rows (seen_count bumped). */
   readonly factsSeenAgain: number
-  /** v7 publish-guard supersedes this pass took (enforce mode only). */
-  readonly guardSuperseded: readonly number[]
-  /** v7 publish-guard rejections this pass took (enforce mode only). */
-  readonly guardRejected: readonly number[]
 }
 
 /** Estimated tokens of every current surface node. */
@@ -217,14 +212,10 @@ function publishCompartments(input: PublishCompartmentsInput): {
   ids: number[]
   factsPromoted: number
   factsSeenAgain: number
-  guardSuperseded: number[]
-  guardRejected: number[]
 } {
   const published: number[] = []
   let factsPromoted = 0
   let factsSeenAgain = 0
-  const guardSuperseded: number[] = []
-  const guardRejected: number[] = []
   const baselineNodeSeq = input.stores.baselineState(input.sessionId)?.nodeSeq
   for (const compartment of input.stores.listUnlandedCompartments(input.sessionId)) {
     const covered = new Set(compartment.coveredSeqs)
@@ -269,66 +260,13 @@ function publishCompartments(input: PublishCompartmentsInput): {
       )
       continue
     }
-    // ── The publish guard (fusion v7, from mon3stera's landing checks) ──────
-    // Two failure shapes the tolerant positional range cannot see:
-    //  1. Drift — substantive nodes entered the positional range since the
-    //     draft was captured; publishing would shadow content the digest
-    //     never saw.
-    //  2. No-gain — the digest's own render (its baseline line, at its
-    //     natural tier, plus the placeholder) costs at least as much as the
-    //     span it would reclaim.
-    // `observe` (the shipped default) journals the verdict and publishes
-    // anyway — one observation window decides whether enforce earns its
-    // keep. `enforce` acts: drift SUPERCedes the draft (claims released, the
-    // next historian run re-digests originals plus entrants — the mon3stera
-    // SurfaceChangedError, translated to re-digest instead of discard);
-    // no-gain REJECTS it (terminal: the span stays on the wire, honestly).
-    const guardMode = input.policy.compartmentGuardMode === 'enforce'
-      || input.policy.compartmentGuardMode === 'off'
-      ? input.policy.compartmentGuardMode
-      : 'observe'
-    if (guardMode !== 'off') {
-      const now = input.now?.() ?? Date.now()
-      const entrantTokens = range
-        .filter(node => !covered.has(node.seq) && !node.isPlaceholder && node.hasText)
-        .reduce((total, node) => total + estimateTokens(node.text), 0)
-      const reclaimedTokens = range.reduce(
-        (total, node) => total + (node.hasText ? estimateTokens(node.text) : 0),
-        0,
-      )
-      const renderCost = estimateTokens(renderCompartment(compartment, now))
-        + estimateTokens(compactedPlaceholder(compartment.compartmentId))
-      const verdict = entrantTokens > input.policy.compartmentEntrantTokens
-        ? 'substantive-entrants'
-        : renderCost >= reclaimedTokens
-          ? 'not-shrinkable'
-          : 'ok'
-      if (verdict !== 'ok') {
-        const acted = guardMode === 'enforce'
-        if (acted && verdict === 'substantive-entrants') {
-          input.stores.supersedeCompartment(input.sessionId, compartment.compartmentId, 'superseded-entrants')
-          guardSuperseded.push(compartment.compartmentId)
-        } else if (acted && verdict === 'not-shrinkable') {
-          input.stores.markCompartmentRejected(input.sessionId, compartment.compartmentId, 'not-shrinkable')
-          guardRejected.push(compartment.compartmentId)
-        }
-        input.journal?.[acted ? 'warn' : 'info'](
-          'compartment-guard',
-          `compartment §C${String(compartment.compartmentId)}§ ${verdict} (${acted ? 'enforce' : 'observe'})`,
-          {
-            compartmentId: compartment.compartmentId,
-            verdict,
-            mode: guardMode,
-            entrantTokens,
-            entrantBudget: input.policy.compartmentEntrantTokens,
-            reclaimedTokens,
-            renderCost,
-          },
-          input.sessionId,
-        )
-        if (acted) continue
-      }
-    }
+    // NOTE (2026-10-16): the fusion-v7 publish guard stood here (observe /
+    // enforce over drift + no-gain verdicts). RETIRED by user decision: across
+    // its whole observation window (2026-10-09 commit 96337e00b → 2026-10-16)
+    // the journal recorded 0 `compartment-guard` hits against 58 clean
+    // `compartment-published` rows, so even `enforce` would never have acted —
+    // zero benefit, one more way to hold up a publish. The positional range +
+    // pairing closure above remains the whole landing discipline.
     const first = range[0] as SurfaceNode
     const last = range[range.length - 1] as SurfaceNode
     // A host validator refusal here (2026-10-08 live incident: the pre-fix
@@ -421,7 +359,7 @@ function publishCompartments(input: PublishCompartmentsInput): {
       }
     }
   }
-  return { ids: published, factsPromoted, factsSeenAgain, guardSuperseded, guardRejected }
+  return { ids: published, factsPromoted, factsSeenAgain }
 }
 
 /**
@@ -434,15 +372,15 @@ function publishCompartments(input: PublishCompartmentsInput): {
  * The request-error lane is a forced execute band in everything but name —
  * the same exception family as the wire-repair iron rule (the provider
  * rejected the wire as-is). Same surface discipline as the pass's publish
- * lane (pairing closure, m[0]-baseline guard, the v7 publish guard). NO
- * baseline refresh and NO fact promotion here: both belong to the next
- * execute pass, the facts stay durable in the compartment row, and the
- * promotion retry is idempotent (seen-again dedup).
+ * lane (pairing closure, m[0]-baseline defer). NO baseline refresh and NO
+ * fact promotion here: both belong to the next execute pass, the facts stay
+ * durable in the compartment row, and the promotion retry is idempotent
+ * (seen-again dedup).
  */
 export function publishReadyCompartments(
   input: Pick<ManagementPassInput, 'session' | 'sessionId' | 'stores' | 'policy' | 'journal' | 'now'>,
-): { ids: number[]; guardSuperseded: number[]; guardRejected: number[] } {  const outcome = publishCompartments(input)
-  return { ids: outcome.ids, guardSuperseded: outcome.guardSuperseded, guardRejected: outcome.guardRejected }
+): { ids: number[] } {
+  return { ids: publishCompartments(input).ids }
 }
 
 /**
@@ -702,8 +640,6 @@ export function runManagementPass(input: ManagementPassInput): ManagementPassRes
     tokensAfter: tokensBefore,
     factsPromoted: 0,
     factsSeenAgain: 0,
-    guardSuperseded: [],
-    guardRejected: [],
   }
 
   // 1. Queued ctx_reduce marks.
@@ -769,7 +705,7 @@ export function runManagementPass(input: ManagementPassInput): ManagementPassRes
 
     // 2 + 4: publish compartments, then refresh the baseline over the result.
     const nodes = enumerateSurfaceNodes(input.session)
-    const { ids: published, factsPromoted, factsSeenAgain, guardSuperseded, guardRejected } = publishCompartments(input)
+    const { ids: published, factsPromoted, factsSeenAgain } = publishCompartments(input)
     const afterPublish = published.length === 0 ? nodes : enumerateSurfaceNodes(input.session)
     const baselineUpdated = refreshBaseline(input, afterPublish)
 
@@ -829,8 +765,6 @@ export function runManagementPass(input: ManagementPassInput): ManagementPassRes
       tokensAfter: surfaceTokens(input.session),
       factsPromoted,
       factsSeenAgain,
-      guardSuperseded,
-      guardRejected,
     }
   } catch (error) {
     // A failed management pass must never wedge the turn: log and continue

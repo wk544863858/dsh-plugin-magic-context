@@ -505,6 +505,9 @@ const MIGRATIONS: readonly Migration[] = [
     //  - compartments.superseded: retires a drifted draft AND RELEASES its
     //    covered-seq claims, so the next historian run re-digests the whole
     //    span (originals plus the entrants) instead of leaking it.
+    //    NOTE (2026-10-16): the publish guard that called these two was
+    //    RETIRED (0 hits in its whole window); the column and both store APIs
+    //    remain for schema-v7 compatibility, historical rows and tests.
     //  - memory_stats: the S(t) scoring sidecar. Hits/injections for rows of
     //    the SHARED memory store are tracked HERE, adapter-local — the
     //    shared store is never written for scoring (writer-contract

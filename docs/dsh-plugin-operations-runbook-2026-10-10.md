@@ -139,7 +139,11 @@ npm run phase all                              # 阶段门 A–D
 | `memory.vectorBackfill` | **on**（2026-10-12 起缺省=true；此前 off） | 写语料库 `memory_embeddings` | 设 false 即停；已写的行留着（唯一的合法写入目标见 §7）。改缺省的理由：写入路径不嵌入 ⇒ 默认关=新记忆永远无向量、中文语义召回随行数静默衰减 |
 | `memory.vectorBackfillLimit` | 24 | — | 每拍回填上限 |
 | `memory.embedBackfill` | on | **不写库**（查询侧按需嵌入） | 与回填无关，别混淆 |
-| `policy.compartmentGuardMode` | observe | 发布守卫模式（enforce=drift/no-gain 终态退役） | 行为策略非功能开关，维持保守缺省 |
+
+> `policy.compartmentGuardMode`（发布护栏，原缺省 `observe`）已于 **2026-10-16 退役**——
+> 观测窗 2026-10-09→10-16 内 journal `compartment-guard` 命中 **0 次**（58 次
+> `compartment-published` 全 ok），enforce 也不会有动作，故整段删除（含 `compartmentEntrantTokens`）。
+> boot 行 `data.switches` 不再有 `guardMode` 键；journal kind `compartment-guard` 仅为读历史行保留。
 
 **建议打开顺序**（每步之后跑 acceptance + doctor，并做一次备份）：
 

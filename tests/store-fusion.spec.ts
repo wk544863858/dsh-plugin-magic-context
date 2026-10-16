@@ -9,6 +9,11 @@
  * re-enters the historian's eligibility pool), and memory stats live only in
  * the adapter's own database — the shared memory store is never written for
  * scoring (writer-contract discipline).
+ *
+ * NOTE (2026-10-16): the publish guard itself is RETIRED and no longer calls
+ * these store APIs. This spec still pins them: they are the schema-v7
+ * contract behind `landed_reason`, kept for historical rows and for the
+ * `replace-failed` retirement path.
  */
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'

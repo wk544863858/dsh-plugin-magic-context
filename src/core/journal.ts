@@ -33,6 +33,8 @@ export type JournalKind =
   | 'drop-landed'
   | 'compartment-published'
   | 'compartment-recomp'
+  /** RETIRED 2026-10-16 (the publish guard is gone); kept so readers/reports
+   *  can still type historical rows. No new row of this kind is ever written. */
   | 'compartment-guard'
   | 'force-path'
   | 'memory-stats'
