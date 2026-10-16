@@ -253,6 +253,17 @@ export function promoteMemoryToCandidate(
 }
 
 /**
+ * Live-row count for one domain identity — the admission cap's only input.
+ *
+ * Structural on purpose: the memory writer satisfies it. A caller that has no
+ * counter (a read-only store, a dry-run preview) passes nothing and gets no cap
+ * check, because such a caller cannot publish either.
+ */
+export interface DomainCapProbe {
+  countDomainMemories(identity: string): number
+}
+
+/**
  * Whether a candidate may be approved.
  *
  * The recurrence gate exists to stop a MACHINE-detected one-off from becoming
@@ -264,6 +275,7 @@ export function promoteMemoryToCandidate(
 export function approvalGate(
   store: AdapterStores,
   candidate: GlobalCandidateRow,
+  capProbe?: DomainCapProbe,
 ): { readonly ok: true } | { readonly ok: false; readonly error: string } {
   if (candidate.state !== 'pending') {
     return { ok: false, error: `candidate #${String(candidate.id)} is ${candidate.state}, not pending` }
@@ -293,6 +305,20 @@ export function approvalGate(
         + `(${domain.shareCategories.join(', ') || 'nothing'}) — publishing it would be invisible`,
     }
   }
+  // The admission cap (2026-10-16): `domains.cap` is DERIVED from the domain's
+  // token budget and was, until this check existed, displayed by /ctx-global
+  // list and enforced by nothing — a domain could grow past its ceiling with no
+  // signal anywhere. Counted against LIVE rows, so an archived row frees its slot.
+  if (capProbe !== undefined) {
+    const live = capProbe.countDomainMemories(candidate.domainId)
+    if (live >= domain.cap) {
+      return {
+        ok: false,
+        error: `${candidate.domainId} is at its cap (${String(live)}/${String(domain.cap)} live row(s)) — `
+          + 'withdraw a row or raise the domain budget before publishing another',
+      }
+    }
+  }
   if (candidate.sourceMemoryId !== undefined) return { ok: true }
   if (candidate.distinctIdentities < 2) {
     return {
@@ -308,7 +334,7 @@ export function approvalGate(
  * The write port a publish needs. Satisfied structurally by the adapter's memory
  * writer, so this module never opens a write connection of its own.
  */
-export interface DomainWritePort {
+export interface DomainWritePort extends DomainCapProbe {
   publishDomainMemory(input: {
     readonly identity: string
     readonly category: string
@@ -362,7 +388,7 @@ export function publishGlobalCandidate(
   // The gate is the single implementation of every publish prerequisite, so the
   // command surface, the tests and this function can never disagree about what
   // is publishable.
-  const gate = approvalGate(store, candidate)
+  const gate = approvalGate(store, candidate, options.writer)
   if (!gate.ok) return { ok: false, error: gate.error }
   const domain = store.getDomain(candidate.domainId)
   if (domain === undefined) return { ok: false, error: `unknown domain '${candidate.domainId}'` }

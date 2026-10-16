@@ -242,6 +242,7 @@ describe('/ctx-global', () => {
         published.push({ identity: input.identity, category: input.category, content: input.content })
         return { ok: true as const, id: 9001, created: true }
       },
+      countDomainMemories: () => 0,
     }
     const result = planGlobalCommand(s, `approve ${String(candidate.id)} --yes`, NOW, undefined, publisher)
     expect(result.kind).toBe('success')
@@ -265,6 +266,7 @@ describe('/ctx-global', () => {
 
     const refusing = {
       publishDomainMemory: () => ({ ok: false as const, detail: 'contract is read-only' }),
+      countDomainMemories: () => 0,
     }
     const result = planGlobalCommand(s, `approve ${String(candidate.id)} --yes`, NOW, undefined, refusing)
     expect(result.kind).toBe('error')

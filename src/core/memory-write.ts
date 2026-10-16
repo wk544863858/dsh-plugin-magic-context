@@ -320,6 +320,13 @@ export interface MemoryWriter {
     readonly importance?: number
   }): DomainPublishResult
   /**
+   * Live rows under a domain identity (`active`/`permanent`). Read-only, and the
+   * ONLY input to the approval gate's admission check: a domain's `cap` is
+   * derived from its token budget, so without this count the number was
+   * displayed and never enforced (2026-10-16).
+   */
+  countDomainMemories(identity: string): number
+  /**
    * WP11: the content behind a backfill plan's ids, in the order asked.
    * Unscoped by identity on purpose — a vector is a property of the row, not of
    * the project that happens to read it.
@@ -672,6 +679,7 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
       stats: () => ({ rows: 0, mutationLog: 0, epoch: 0, verified: 0, unverified: 0 }),
       writeMemory: () => refused,
       publishDomainMemory: () => refused,
+      countDomainMemories: () => 0,
       readContents: () => [],
       storeEmbedding: () => refused,
       updateMemory: () => refused,
@@ -749,6 +757,11 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
     const statsMutations = db.prepare('SELECT COUNT(*) AS c FROM memory_mutation_log WHERE project_path = ?')
     const statsEpoch = db.prepare('SELECT project_memory_epoch AS e FROM project_state WHERE project_path = ?')
     // Verification coverage for the telemetry panel: the dreamer slice's own KPI.
+    // Admission cap input: the live rows of ONE domain identity. `permanent`
+    // counts too — a permanent row occupies the domain exactly like an active one.
+    const countDomainRows = db.prepare(
+      "SELECT COUNT(*) AS c FROM memories WHERE project_path = ? AND status IN ('active','permanent')",
+    )
     const statsVerification = db.prepare(
       `SELECT
          COALESCE(SUM(CASE WHEN verified_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS verified,
@@ -1056,6 +1069,16 @@ export function openMemoryWriter(options: MemoryWriterOptions): MemoryWriter {
           return outcome
         } catch (error) {
           return databaseFailure('publish-domain', error)
+        }
+      },
+      countDomainMemories: (identity) => {
+        try {
+          return Number((countDomainRows.get(identity) as { c: number }).c)
+        } catch {
+          // Never a gate the publisher cannot evaluate: an unreadable count is
+          // reported as an empty domain, and the write below fails on its own
+          // terms if it cannot proceed.
+          return 0
         }
       },
       readContents: (ids) => {

@@ -406,7 +406,7 @@ export function planGlobalCommand(
     // `approve` IS the publish: the state flag alone made a candidate that was
     // "approved" and visible to nobody. The gate runs before the preview and
     // before the apply, so the two can never disagree about publishability.
-    const gate = approvalGate(store, row)
+    const gate = approvalGate(store, row, publisher)
     if (!gate.ok) return { kind: 'error', text: `Magic Context: ${gate.error}` }
     if (!apply) {
       return {

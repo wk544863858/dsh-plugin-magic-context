@@ -241,7 +241,10 @@ describe('publishGlobalCandidate — the gate protects the store', () => {
     const candidate = seedCandidate(store, 'a rule the store will refuse')
     const result = publishGlobalCandidate(store, {
       candidateId: candidate.id,
-      writer: { publishDomainMemory: () => ({ ok: false as const, detail: 'contract is read-only' }) },
+      writer: {
+        publishDomainMemory: () => ({ ok: false as const, detail: 'contract is read-only' }),
+        countDomainMemories: () => 0,
+      },
       now: NOW,
     })
     expect(result.ok).toBe(false)
@@ -339,5 +342,78 @@ describe('a published domain row is visible to peers — and retirable', () => {
     const store = makeStore()
     const candidate = seedCandidate(store, 'token: ghp_abcdefghijklmnopqrstuvwxyz0123456789')
     expect(approvalGate(store, candidate).ok).toBe(false)
+  })
+})
+
+/**
+ * The admission cap (2026-10-16). `domains.cap` was derived from the domain's
+ * token budget and displayed by `/ctx-global list`, but nothing enforced it: a
+ * domain could grow past its ceiling with no signal anywhere. These cases pin
+ * the enforcement to LIVE rows, so an archived row frees its slot.
+ */
+describe('the domain admission cap (domains.cap)', () => {
+  function storeWithCap(cap: number) {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-publish-cap-'))
+    dirs.push(dir)
+    const store = openStores(dir)
+    opened.push(store)
+    store.upsertDomain(
+      { domainId: ORG, kind: 'org', enabled: true, budgetTokens: 40, cap, shareCategories: ['CONSTRAINTS'] },
+      NOW,
+    )
+    store.addDomainMember(ORG, 'dir:global:org', NOW)
+    return store
+  }
+
+  it('refuses a publish once the domain holds cap live rows, and leaves it pending', () => {
+    const path = contractDb()
+    const writer = writerFor(path)
+    const store = storeWithCap(2)
+    // Fill the domain through the real writer, so the count is over real rows.
+    expect(writer.publishDomainMemory({ identity: ORG, category: 'CONSTRAINTS', content: 'org rule one' }).ok).toBe(true)
+    expect(writer.publishDomainMemory({ identity: ORG, category: 'CONSTRAINTS', content: 'org rule two' }).ok).toBe(true)
+    expect(writer.countDomainMemories(ORG)).toBe(2)
+
+    const candidate = seedCandidate(store, 'the third rule that must wait')
+    // The gate the card and the command both run refuses BEFORE the write ...
+    const gate = approvalGate(store, candidate, writer)
+    expect(gate.ok).toBe(false)
+    if (!gate.ok) expect(gate.error).toContain('cap (2/2')
+    // ... and the publish path agrees, because it runs the same gate.
+    const refused = publishGlobalCandidate(store, { candidateId: candidate.id, writer, now: NOW })
+    expect(refused.ok).toBe(false)
+    if (!refused.ok) expect(refused.error).toContain('cap')
+    expect(rows(path)).toHaveLength(2)
+    expect(store.getGlobalCandidate(candidate.id)?.state).toBe('pending')
+  })
+
+  it('lets the next publish through once an archived row frees a slot', () => {
+    const path = contractDb()
+    const writer = writerFor(path)
+    const store = storeWithCap(1)
+    const first = writer.publishDomainMemory({ identity: ORG, category: 'CONSTRAINTS', content: 'org rule one' })
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+
+    const candidate = seedCandidate(store, 'the rule that was waiting')
+    expect(publishGlobalCandidate(store, { candidateId: candidate.id, writer, now: NOW }).ok).toBe(false)
+
+    // Withdrawal is the ordinary archive path — the cap counts live rows only.
+    expect(writer.archiveMemory({ identity: ORG, id: first.id, reason: 'retired' }).ok).toBe(true)
+    expect(writer.countDomainMemories(ORG)).toBe(0)
+    const published = publishGlobalCandidate(store, { candidateId: candidate.id, writer, now: NOW })
+    expect(published.ok).toBe(true)
+    expect(store.getGlobalCandidate(candidate.id)?.state).toBe('approved')
+  })
+
+  it('counts only the domain identity asked for', () => {
+    const path = contractDb()
+    const writer = writerFor(path)
+    const store = storeWithCap(1)
+    expect(writer.publishDomainMemory({ identity: 'dir:global:machine', category: 'CONSTRAINTS', content: 'machine rule' }).ok).toBe(true)
+    // The machine row must not consume the org domain's slot.
+    expect(writer.countDomainMemories(ORG)).toBe(0)
+    const candidate = seedCandidate(store, 'the org rule that fits')
+    expect(publishGlobalCandidate(store, { candidateId: candidate.id, writer, now: NOW }).ok).toBe(true)
   })
 })

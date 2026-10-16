@@ -108,6 +108,7 @@ function fakePublisher(): { readonly port: DomainWritePort; readonly calls: Arra
         calls.push({ identity: input.identity, content: input.content })
         return { ok: true, id: 100 + calls.length, created: true }
       },
+      countDomainMemories: () => 0,
     },
   }
 }

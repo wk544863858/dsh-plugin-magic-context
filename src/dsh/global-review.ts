@@ -168,7 +168,7 @@ export async function reviewGlobalCandidates(input: {
   // the dispatch loop.
   const cardable: Array<{ readonly candidate: GlobalCandidateRow; readonly writer: DomainWritePort }> = []
   for (const candidate of batch) {
-    const gate = approvalGate(input.store, candidate)
+    const gate = approvalGate(input.store, candidate, publisher)
     if (!gate.ok) {
       failed += 1
       lines.push(`#${String(candidate.id)} ✗ ${gate.error}`)
@@ -388,7 +388,7 @@ export async function reviewGlobalCandidates(input: {
         journalDecision('reclassified-duplicate', { toDomain: targetDomainId, reroutedCandidateId: rerouted.id })
         continue
       }
-      const rerouteGate = approvalGate(input.store, rerouted)
+      const rerouteGate = approvalGate(input.store, rerouted, writer)
       if (!rerouteGate.ok) {
         failed += 1
         lines.push(`#${String(candidate.id)} ✗ 改判被目标域 gate 拒绝：${rerouteGate.error}`)
