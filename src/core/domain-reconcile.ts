@@ -149,8 +149,14 @@ export interface DomainReconcileReport {
     readonly candidateId: number
     readonly domainRowId: number
     readonly sourceMemoryId: number
-    readonly via: 'published' | 'staged'
-    /** The row id (published) or candidate id (staged) doing the covering. */
+    /**
+     * `published` — an alive row already holds the current text;
+     * `staged` — a pending candidate proposes it (the design's own repair);
+     * `declined` — a human REJECTED exactly that text, so re-proposing it every
+     *   run would be nagging, not repair.
+     */
+    readonly via: 'published' | 'staged' | 'declined'
+    /** The row id (published) or candidate id (staged/declined) doing the covering. */
     readonly coveredBy: number
   }[]
   readonly divergences: readonly DomainDivergence[]
@@ -232,24 +238,29 @@ type Verdict =
 /**
  * Is the source's CURRENT text already handled under this domain?
  *
- * Two honest forms of coverage: an ALIVE domain row holding that text, or a
+ * Three honest forms of coverage: an ALIVE domain row holding that text; a
  * PENDING candidate proposing it (the design's own repair — a rewrite stages a
- * proposal rather than republishing). A merely `approved` candidate proves
- * nothing: approval is a state flag, and the point of this audit is that the
- * copy it produced may since have been withdrawn (live case #1420, archived).
+ * proposal rather than republishing); or a REJECTED candidate for exactly that
+ * text, which is a recorded human decision rather than an outstanding task. A
+ * merely `approved` candidate proves nothing: approval is a state flag, and the
+ * point of this audit is that the copy it produced may since have been
+ * withdrawn (live case #1420, archived).
  */
 function findCoverage(
   domainId: string,
   sourceNormalizedHash: string,
   rowsByKey: ReadonlyMap<string, readonly ReconcileDomainRow[]>,
   candidatesByKey: ReadonlyMap<string, readonly ReconcileCandidate[]>,
-): { readonly via: 'published' | 'staged'; readonly coveredBy: number } | undefined {
+): { readonly via: 'published' | 'staged' | 'declined'; readonly coveredBy: number } | undefined {
   const key = linkKey(domainId, sourceNormalizedHash)
   for (const row of rowsByKey.get(key) ?? []) {
     if (isAlive(row.status)) return { via: 'published', coveredBy: row.id }
   }
   for (const candidate of candidatesByKey.get(key) ?? []) {
     if (candidate.state === 'pending') return { via: 'staged', coveredBy: candidate.id }
+  }
+  for (const candidate of candidatesByKey.get(key) ?? []) {
+    if (candidate.state === 'rejected') return { via: 'declined', coveredBy: candidate.id }
   }
   return undefined
 }

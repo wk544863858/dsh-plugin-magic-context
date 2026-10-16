@@ -384,7 +384,11 @@ export function renderReport({ report, plan, mode, adapterDbPath, corpusDbPath }
   if (report.covered.length > 0) {
     lines.push(`已覆盖 ${String(report.covered.length)} 条（源已改写，但当前文本已在同域被处理：不计分歧、无需修复）：`)
     for (const item of report.covered) {
-      const via = item.via === 'published' ? `域行 #${String(item.coveredBy)}` : `待审候选 #${String(item.coveredBy)}`
+      const via = item.via === 'published'
+        ? `域行 #${String(item.coveredBy)}`
+        : item.via === 'staged'
+          ? `待审候选 #${String(item.coveredBy)}`
+          : `人工拒绝候选 #${String(item.coveredBy)}（该文本已被拒，工具不再自动提案）`
       lines.push(`  候选 #${String(item.candidateId)}（域行 #${String(item.domainRowId)} 是旧文本）→ 当前文本见 ${via}`)
     }
   }

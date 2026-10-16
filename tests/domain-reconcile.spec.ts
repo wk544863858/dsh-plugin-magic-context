@@ -214,6 +214,23 @@ describe('auditDomainDivergences', () => {
     expect(report).toMatchObject({ checked: 2, healthy: 1, unlinked: 0 })
   })
 
+  it("④'''' 源已改写但同键文本已被人工拒绝 ⇒ covered(declined)：拒绝是决定，不是待办", () => {
+    const report = audit({
+      candidates: [
+        candidate({ id: 14, normalizedHash: 'hash-old', sourceMemoryId: 1549 }),
+        candidate({ id: 218, normalizedHash: 'hash-new', state: 'rejected', sourceMemoryId: 1549 }),
+      ],
+      domainRows: [domainRow({ id: 1552, normalizedHash: 'hash-old' })],
+      sourceMemories: [sourceMemory({ id: 1549, normalizedHash: 'hash-new' })],
+    })
+    expect(report.covered).toEqual([
+      { candidateId: 14, domainRowId: 1552, sourceMemoryId: 1549, via: 'declined', coveredBy: 218 },
+    ])
+    expect(report.divergences).toEqual([])
+    // 人工拒绝过的文本不再进修复计划（否则每跑一次就重新提案一遍）
+    expect(planRepair(report)).toEqual({ archiveRowIds: [], stageCandidates: [], unrepairable: [] })
+  })
+
   it('⑤ 没有域行 ⇒ unlinked：pending/rejected 从未发布过，不算故障', () => {
     const report = audit({
       candidates: [
