@@ -95,6 +95,9 @@ const PHASE_C = [
   'tests/org-domain.spec.ts',
   'tests/domain-publish.spec.ts',
   'tests/machine-domain.spec.ts',
+  // "publishing is a copy, not a mirror": the audit of published domain rows
+  // against the memories they were promoted from (2026-10-16).
+  'tests/domain-reconcile.spec.ts',
 ]
 
 /** Phase D: the operating loop — commands, telemetry, backfill, drill. */
@@ -153,10 +156,10 @@ export const PHASES = [
     specs: PHASE_C,
     checks: [],
     blind: [
-      '三个域都有实现与用例；真库上 org 5 成员、machine 6 成员且 machine 已 enabled+autoStage（2026-10-12 裁决开），user 写侧 collect=on、review=on（10-13 生效）',
-      '复现检测在真实语料上是空门（1292 行 / 33 项目 / 0 共享 hash）——见 global-domain-source-finding',
+      '三个域都有实现与用例；真库上 org 5 成员、machine 10 成员且 machine 已 enabled+autoStage（2026-10-12 裁决开），user 写侧 collect=on、review=on（10-13 生效）',
+      '复现检测在真实语料上是空门（1941 行 / 39 项目 / 0 共享 hash，剔除域行副本口径；2026-10-16 实测）——见 global-domain-source-finding',
       '真库已发布域行（org：16 现行 + 1 归档，含 2026-10-10 #1431 与 10-13 #1528；machine：3 现行 + 1 归档，'
-      + '#1527 误归域已归档迁 org）；跨项目真实注入已发生——域命中 14d（2026-10-14 12:00）：machine 19 次/3 读者、org 7 次/1 读者',
+      + '#1527 误归域已归档迁 org）；跨项目真实注入已发生——域命中 14d（2026-10-16 16:00）：machine 35 次/7 读者、org 9 次/1 读者',
       'C-7 产品判据埋点已落地（scripts/report-hits.mjs + mc-report「域命中(14d)」行 + tests/report-hits.spec.ts）；'
       + '剩余盲区=观察期未满：org 域 2026-10-10 启用、14 天窗到 2026-10-24，期间域命中=0 属"未起算"，'
       + 'WP9 判据（<2 读取项目 ⇒ 停止投入）到 10-24 才能出结论',
