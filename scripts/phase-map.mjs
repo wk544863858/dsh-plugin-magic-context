@@ -156,10 +156,10 @@ export const PHASES = [
     specs: PHASE_C,
     checks: [],
     blind: [
-      '三个域都有实现与用例；真库上 org 5 成员、machine 10 成员且 machine 已 enabled+autoStage（2026-10-12 裁决开），user 写侧 collect=on、review=on（10-13 生效）',
+      '三个域都有实现与用例；真库上 org 5 成员、machine 11 成员且 machine 已 enabled+autoStage（2026-10-12 裁决开；11 成员＝2026-10-17 新项目 service-a 导入，成员随项目导入自动增长），user 写侧 collect=on、review=on（10-13 生效）',
       '复现检测在真实语料上是空门（1941 行 / 39 项目 / 0 共享 hash，剔除域行副本口径；2026-10-16 实测）——见 global-domain-source-finding',
-      '真库已发布域行（org：16 现行 + 1 归档，含 2026-10-10 #1431 与 10-13 #1528；machine：3 现行 + 1 归档，'
-      + '#1527 误归域已归档迁 org）；跨项目真实注入已发生——域命中 14d（2026-10-16 16:00）：machine 35 次/7 读者、org 9 次/1 读者',
+      '真库已发布域行（org：17 现行 + 1 归档，含 2026-10-10 #1431 与 10-13 #1528、10-16 #1420 按批准复活；machine：3 现行 + 1 归档，'
+      + '#1527 误归域已归档迁 org）；跨项目真实注入已发生——域命中 14d（2026-10-17 08:00）：machine 52 次/8 读者、org 9 次/1 读者',
       'C-7 产品判据埋点已落地（scripts/report-hits.mjs + mc-report「域命中(14d)」行 + tests/report-hits.spec.ts）；'
       + '剩余盲区=观察期未满：org 域 2026-10-10 启用、14 天窗到 2026-10-24，期间域命中=0 属"未起算"，'
       + 'WP9 判据（<2 读取项目 ⇒ 停止投入）到 10-24 才能出结论',
@@ -185,7 +185,7 @@ export const PHASES = [
       'WP11 向量回填已真写并收口（2026-10-10 09:52 开启 → 15:19 dominant 100%）；'
       + '残余特性：缺口随新晋升行回升、靠 30 分钟维护拍清理，机器空闲时段不补跑',
       'doctor / mc-acceptance 的域判定已有 hermetic 正负样本（tests/domain-checks.spec.ts），'
-      + '真库采样已积累（候选 21 批准 / 5 拒绝 / 1 待定、域注入 26 次）：阈值与采样量的长期漂移仍只能靠趋势，不能靠这两条判据',
+      + '真库采样已积累（候选 21 批准 / 8 拒绝 / 0 待定、域注入 26 次）：阈值与采样量的长期漂移仍只能靠趋势，不能靠这两条判据',
       'profile 依赖卫生判据（tests/profile-checks.spec.ts，2026-10-11 启动失败后加）是静态检查：'
       + '只看 profile 根 node_modules/@deepseek-ai/（Node 真能解析到的位置），看不到 .pnpm 内部未提升的副本；'
       + '宿主包清单读不到时（app.asar 不可达）dependencies 一项降级为 WARN，不冒充绿灯',
