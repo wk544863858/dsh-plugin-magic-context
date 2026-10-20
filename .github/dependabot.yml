@@ -18,6 +18,14 @@ updates:
       timezone: Asia/Shanghai
     open-pull-requests-limit: 5
     versioning-strategy: increase-if-necessary
+    # The @deepseek-ai/* host packages and onnxruntime-common are pinned on
+    # purpose: the adapter is written and tested against one DSH release line,
+    # and the embedding runtime version must match the vendored WASM backend.
+    # Moving either is a compatibility decision, not a dependency bump — do it
+    # by hand after re-running the suite against the new host.
+    ignore:
+      - dependency-name: "@deepseek-ai/*"
+      - dependency-name: onnxruntime-common
     commit-message:
       prefix: chore
       include: scope
