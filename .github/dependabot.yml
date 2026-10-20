@@ -26,6 +26,12 @@ updates:
     ignore:
       - dependency-name: "@deepseek-ai/*"
       - dependency-name: onnxruntime-common
+      # Major toolchain bumps (TypeScript, Vitest, @types/node, ...) are
+      # compatibility decisions for a host-fenced plugin; they arrive as
+      # manual upgrades, not as weekly pull requests.
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
     commit-message:
       prefix: chore
       include: scope
