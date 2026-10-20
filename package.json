@@ -92,7 +92,7 @@
     "@types/node": "^24.19.1",
     "onnxruntime-common": "1.31.0-dev.20260911-2a43ec07e",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.8"
+    "vitest": "^5.0.5"
   },
   "dependencies": {
     "@huggingface/tokenizers": "0.2.0",
