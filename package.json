@@ -85,7 +85,7 @@
     "@deepseek-ai/dsh-session-projection": "0.2.1-rc.1",
     "@deepseek-ai/dsh-session-title": "0.2.1-rc.1",
     "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.1",
-    "@deepseek-ai/dsh-token-meter": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-token-meter": "0.2.1-rc.2",
     "@deepseek-ai/dsh-tools": "0.2.1-rc.1",
     "@deepseek-ai/schemastery": "3.18.5",
     "@huggingface/tokenizers": "0.2.0",
