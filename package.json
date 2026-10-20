@@ -89,7 +89,7 @@
     "@deepseek-ai/dsh-tools": "0.2.1-rc.1",
     "@deepseek-ai/schemastery": "3.18.5",
     "@huggingface/tokenizers": "0.2.0",
-    "@types/node": "^24.19.1",
+    "@types/node": "^26.6.5",
     "onnxruntime-common": "1.31.0-dev.20260911-2a43ec07e",
     "typescript": "^5.9.3",
     "vitest": "^4.1.8"
