@@ -2,8 +2,8 @@
 
 > 目标：回答「一个 host 侧插件如何把自己正在做什么的实时日志显示到 GUI 主界面」，并给出 magic-context 落地的最小改造配方与不可行路径的黑名单。
 >
-> 标注约定：〔码〕= 源码行号证据；〔测〕= 本机实测（隔离 `DSH_HOME`，未触碰用户 `desktop` profile）；〔档〕= 仓库 README/文档。
-> 证据基线：DSH Desktop **0.2.0-rc.2**（打包路径 `<path> Harness\resources\`）；源码参考 `deepseek-harness-master`（下称源码树，仓内相对路径）。
+> 标注约定：〔码〕= 源码行号证据；〔测〕= 隔离环境实测（隔离 `DSH_HOME`，未触碰真实 profile）；〔档〕= 仓库 README/文档。
+> 证据基线：DSH Desktop **0.2.0-rc.2**（打包路径 `%USERPROFILE%\AppData\Local\Programs\DeepSeek Harness\resources\`）；源码参考 `deepseek-harness-master`（下称源码树，仓内相对路径）。
 > 姊妹文档：`docs/dsh-plugin-config-ui-contract.md`（配置界面契约，task-2）。本文不重复其内容，§8 只做交叉引用。
 
 ---
@@ -90,7 +90,7 @@ window.__ModuleLoader__.load({
 | 步骤 | 命令/动作 | 观察 |
 |---|---|---|
 | 建隔离 profile | `dsh probe --from-default-profile web --dump-config` | 成功，组合里含 web 组合（`dsh-client-modules`） |
-| 装包 | profile `node_modules\mc-ui-probe` = junction 到包目录；`cordis.patch.yml` 加 `- insert: [{ id: mc-ui-probe, name: 'mc-ui-probe' }]` | profile 与真实 `desktop` 同型（真实 profile 是 `link:D:/…`） |
+| 装包 | profile `node_modules\mc-ui-probe` = junction 到包目录；`cordis.patch.yml` 加 `- insert: [{ id: mc-ui-probe, name: 'mc-ui-probe' }]` | profile 与真实 `desktop` 同型（真实 profile 用的是 `link:<path>` 形态） |
 | 启动 | `dsh probe --no-open --port 31987` | stdout 打印 `http://127.0.0.1:31987/?token=…`（index 需 token，无 token = 401） |
 | **boot graph** | `GET /?token=…` | 含 `{"id":"mc-ui-probe","url":"plugins/??mc-ui-probe/client.js&rev=4a516f99b975","rev":"4a516f99b975"}`，位于 application 相位 |
 | **产物被服务** | `GET /plugins/??mc-ui-probe/client.js&rev=4a516f99b975` | 200；**989 字节，与磁盘文件逐字节一致**；含 `__ModuleLoader__.load({ id: "mc-ui-probe"` |
@@ -101,14 +101,14 @@ window.__ModuleLoader__.load({
 ### 2.5 生效机制（两个半侧不同，容易踩）〔测〕〔码〕
 
 - **client 半侧：自动热更，不需要 `hmr.root`。** 追加一行注释后 8 秒内 boot graph 的 `rev` 从 `4a516f99b975` 变为新值〔测〕；源码侧 `dsh-client-hmr` 的 README 写明 “The **Host half watches each package's stamped entry artifact** and serves `/plugins/events`”，客户端订阅 SSE 后换入新产物。〔档〕`packages/client/hmr/README.md`；路由 `{ kind:'exact', path: EVENTS_ENDPOINT }` 〔码〕`packages/client/hmr/src/index.ts:182`。
-- **host 半侧：不进 `hmr.root` 就不重载。** 把 `lib/index.js` 改成注册一条路由后不重启，`GET /mc-probe/status` 仍 404〔测〕；重启后 200。这与用户 profile 里已有 `hmr.root: [<path>` 的作用对象一致（**它只覆盖 host 半**）。
+- **host 半侧：不进 `hmr.root` 就不重载。** 把 `lib/index.js` 改成注册一条路由后不重启，`GET /mc-probe/status` 仍 404〔测〕；重启后 200。这与 profile 里已有 `hmr.root: [<repo-root>]` 的作用对象一致（**它只覆盖 host 半**）。
 
 ---
 
 ## 3. 模块表：client 半侧到底能拿到什么〔码〕
 
 - 浏览器半侧跑在 `window.__ModuleLoader__` 下，工厂参数 `require` 只解析**模块表**里的 id；表由 `PLATFORM_MODULES` 播种（`react`、`react-dom`、cordis、少数官方 client 包如 ui-primitives），再由每个 client 入口的 `dsh.client.inject` 补边。〔码〕`packages/client/web/src/platform.ts`（`PLATFORM_MODULES`）、`packages/client/modules/src/index.ts`（`dependencies`/`dependsOn` 边）。
-- **purity 规则**：构建期拒绝把 `@deepseek-ai/dsh-*` 打进产物（必须走模块表），只有显式 `dsh.client.external` 才放行。〔码〕`packages/client/tsdown.client.ts`、`packages/client/AGENTS.md`。
+- **purity 规则**：构建期拒绝把 `@deepseek-ai/dsh-*` 打进产物（必须走模块表），只有显式 `dsh.client.external` 才允许。〔码〕`packages/client/tsdown.client.ts`、`packages/client/AGENTS.md`。
 - **动态浏览器半**（`cordis-client-runner`，即 LLM 现写 UI 的那条路）更严格：`require` 由 sandbox 提供，**只有** `React`、`console`、`styles`、`host`、`harness`、少量 trap 参数可用。它的 `styles.insert(css)` 是**该平面专有**符号，普通编译产物里没有。〔码〕`packages/extensions/cordis-client-runner/src/client/evaluator.ts:173`、`providers.ts:61-63`。
 - ⇒ **落地方案请假设「只能 `require('react')`」**：样式用 inline style 或自建 `<style>` 标签。
 
@@ -398,11 +398,11 @@ window.__ModuleLoader__.load({
 
 ## 9. 给 magic-context 的最小改造配方
 
-现状（改动前）：`packages/dsh-plugin/package.json` 只有 `main: lib/index.js`，**无 `dsh.client`**，无 `lib/client.js` ⇒ 与 DSH 客户端零耦合（风险为 0）。
+现状（改动前）：`package.json` 只有 `main: lib/index.js`，**无 `dsh.client`**，无 `lib/client.js` ⇒ 与 DSH 客户端零耦合（风险为 0）。
 
 **步骤**
-1. host 半（`packages/dsh-plugin/src/`）：新增遥测环形缓冲（最近 N 条 + 计数），`inject: ['webServer']`，注册 `/mc-telemetry/events`（SSE）与 `/mc-telemetry/status`（JSON），注册放进 `ctx.effect`。已实测该写法在 0.2.0-rc.2 上可用。
-2. client 半：新增 `packages/dsh-plugin/src/client/index.ts`（或直接手写产物），内容 = §5.4 模板，注册进 `shell.overlay`，`id` 用 `magic-context.telemetry`（新鲜 id ⇒ 追加不覆盖）。
+1. host 半（`src/`）：新增遥测环形缓冲（最近 N 条 + 计数），`inject: ['webServer']`，注册 `/mc-telemetry/events`（SSE）与 `/mc-telemetry/status`（JSON），注册放进 `ctx.effect`。已实测该写法在 0.2.0-rc.2 上可用。
+2. client 半：新增 `src/client/index.js`（手写产物；本仓即此形态），内容 = §5.4 模板，注册进 `shell.overlay`，`id` 用 `magic-context.telemetry`（新鲜 id ⇒ 追加不覆盖）。
 3. 构建：产出 `lib/client.js`。若不想引入 tsdown 预设，可用一个 6 行的 esbuild/rolldown 包装脚本手工套上 `__ModuleLoader__.load({ id, factory })`（实测手写产物可被服务）。
 4. `package.json`：加 `exports["./client"]`、`dsh.client = { platform: "web" }`（可选加 `inject: ["@deepseek-ai/dsh-client-ui-layout"]` 以获得排序边），并把 `lib/client.js` 加进 `files`。
 5. profile 侧**无需新增行**（client 半挂在 `magic-context-dsh` 这一行上），但**新增 client 入口属于新的 boot-graph 依赖边** ⇒ 本次生效需要重启 DSH，或走插件页的安装/刷新/启用流程（源码说明该流程驱动的增量组合能在同一会话内把新入口组合进来〔码〕`packages/client/modules/src/index.ts:806-814`）；之后改 `lib/client.js` 即热更（§2.5）。
@@ -428,7 +428,7 @@ window.__ModuleLoader__.load({
 
 ```powershell
 $env:DSH_HOME="$env:TEMP\dsh-probe-home"           # 隔离，未触碰 %USERPROFILE%\.dsh
-$dsh="<path> Harness\resources\runtime\cli\bin\dsh.cmd"
+$dsh="%USERPROFILE%\AppData\Local\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"
 & $dsh probe --from-default-profile web --dump-config      # 建 profile
 # 包：%TEMP%\dsh-probe-plugin { package.json(dsh.client), lib/index.js, lib/client.js }
 # profile：node_modules\mc-ui-probe = junction → 包目录；cordis.patch.yml 插入 mc-ui-probe 行
@@ -463,7 +463,7 @@ $dsh="<path> Harness\resources\runtime\cli\bin\dsh.cmd"
 实现本插件的浏览器半侧时，下面几点与本文正文的表述不同，以本节为准：
 
 1. **`__ModuleLoader__.load({ id })` 的 id 是「包名」，不是 loader 行 id**。boot graph 行形如
-   `{"id":"@cortexkit/dsh-magic-context","url":"plugins/??@cortexkit/dsh-magic-context/client.js&rev=a0b07ec77735","rev":"a0b07ec77735"}`；
+   `{"id":"dsh-plugin-magic-context","url":"plugins/??dsh-plugin-magic-context/client.js&rev=a0b07ec77735","rev":"a0b07ec77735"}`；
    `system.ts:221` 会校验「已载入但未注册 <id>」。文中的 `id:"magic-context-dsh"` 写法会让外壳注册失败。
    （配置表单的**命名空间**仍然是 loader 行 id `magic-context-dsh`——两处取值口径不同，勿混。）
 2. **只有 combo URL 可取 client bundle**：`GET /plugins/??<包名>/client.js&rev=<rev>` → 200；
@@ -479,25 +479,24 @@ $dsh="<path> Harness\resources\runtime\cli\bin\dsh.cmd"
    （官方写法见 `packages/client/modules/src/index.ts:653`）。
 5. **client bundle 的注册表在应用启动时构建**：给一个已安装的包**新加** `exports["./client"]` / `dsh.client`
    之后，运行中的应用不会自动把它纳入 boot graph（`dsh-client-hmr` 只 watch **已注册**的产物）。
-   实测：desktop 实例上 `GET /plugins/??@cortexkit/dsh-magic-context/client.js&rev=…` 仍 404，**需要重启应用**。
+   实测：desktop 实例上 `GET /plugins/??dsh-plugin-magic-context/client.js&rev=…` 仍 404，**需要重启应用**。
 6. **`defaultDataDir()` 不受 `DSH_HOME` 约束**：隔离 profile 里启动本插件仍会打开
    `~/.local/share/cortexkit/magic-context-dsh-poc`（往共享 `activity.log` 追加行、并发 WAL 打开库）。
    做隔离实验时请显式传插件配置 `dataDir`，避免污染真实观测数据。
 7. **多语言（2026-10-07 实现）——语言开关只覆盖浏览器 UI**。`@deepseek-ai/dsh-client-locale` 是
    **浏览器侧**服务：`ctx.locale.register(ns, { zh, en })` 注册字典、`ctx.locale.bind(ns)` 取翻译函数；
    槽位注册项声明 `locale: ns` 后由渲染器注入 `t` prop，切换语言即时重渲染（机制见 4.1）。宿主的
-   `locale.preference` 存在 profile 的 `cordis.patch.yml`（本机现为 `en`），但**宿主（node）侧没有任何
+   `locale.preference` 存在 profile 的 `cordis.patch.yml`（当前默认 `en`），但**宿主（node）侧没有任何
    locale 服务**：实测 asar 内除 `dsh-client-locale` 外没有任何包读取 `locale.preference`，自带宿主包
    （compaction/commands/agent-instructions/session/…）全部纯英文。因此本插件的分工是：
    - **client 半侧**：`inject: ['slots','locale']`，注册 `magic-context` 命名空间（zh/en 各 78 键，
      键集合必须一致），四个槽位注册项都声明 `locale: 'magic-context'`，面板/徽标文案一律 `t('key')`；
    - **宿主半侧**：`session-notice` 的 notice（写进会话流、**模型可见**）保持英文常量，与其它宿主面
      一致，也避免同一会话中途换语言造成 cached prefix 抖动——改语言只影响浏览器 UI，不改变模型可见文本。
-   验收：`node packages/dsh-plugin/scripts/mc-i18n-check.mjs`（无浏览器、无 DB：断言宿主 notice 英文与
+   验收：`node scripts/mc-i18n-check.mjs`（无浏览器、无 DB：断言宿主 notice 英文与
    120 字上限、字典键对齐、源码引用的键都存在、字典之外无硬编码中文、`apply` 接线、en/zh 渲染结果）。
-   注：`src/dsh/session-notice.spec.ts` 是 DSH checkout 里
-   `packages/test-support/mc-dsh-poc/tests/session-notice.spec.ts` 的镜像，断言已同步改为英文，
-   **镜像侧需要同样的改动**（本机没有该 checkout，无法代改）。
+   注：本仓 `tests/session-notice.spec.ts` 的断言已同步改为英文；该 spec 早期是 DSH 测试树的镜像，
+   独立仓后已脱离镜像关系。
 8. **胶囊面板「操作记录」的记录模型（2026-10-08 补齐回收 lane）**。面板把 journal 行映射成记录的顺序是：
    `recordOf()`（一个 kind/分支 → 一条记录或 `null`）→ `recordsOf()`（相邻同文案同明细折叠成 `×N`）→
    `recordCounts()`（按分类出 chips），最多 `MAX_RECORDS = 12` 条。本次修掉的两处**丢弃**：
@@ -514,8 +513,8 @@ $dsh="<path> Harness\resources\runtime\cli\bin\dsh.cmd"
      「HARD 基线重建仍是记录」。同一脚本的采样也补成**每个 `tool`/`action` 各取最新一行**
      （`perFlavour`）：此前 `tool-call` 只按 (kind, level) 取一行，最新那行几乎总是 ctx_memory，
      回收 lane 的断言其实是空断言。
-   验收：`node packages/dsh-plugin/scripts/mc-records-check.mjs`（真实 journal 行 → 面板将显示的记录，
+   验收：`node scripts/mc-records-check.mjs`（真实 journal 行 → 面板将显示的记录，
    含分类表漂移、噪声折叠、HARD/SOFT 拆分、zh/en 渲染无中文残留）与
-   `node packages/dsh-plugin/scripts/mc-i18n-check.mjs`（新增 `detail.verb.search` 后，动态键族的
+   `node scripts/mc-i18n-check.mjs`（新增 `detail.verb.search` 后，动态键族的
    动作清单同步加了 `search`）。client 半侧改动需要 `node scripts/copy-client.mjs` 重建 `lib/client.js`
    并**刷新页面**才生效（浏览器不热更）。

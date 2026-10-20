@@ -1,9 +1,11 @@
 # DSH 适配器：全局测试设计审计（2026-10-07）
 
 > 触发事件：maintenance verify 扫描的 **6 个真实缺陷**全部逃过 222 个测试、24 个 spec，
-> 直到在真实库上跑「40 条记忆提炼」才暴露。本审计回答的不是"哪条测试没写"，
+> 直到在实测库上跑「40 条记忆提炼」才暴露。本审计回答的不是"哪条测试没写"，
 > 而是"测试设计的哪几类盲区让整类缺陷系统性不可见"。
 > 全部结论附现场测量（数字/文件:行），不含推测。
+>
+> **历史说明（公开版）**：本文写于适配器独立成仓之前的 2026-10-07，文中 `package.json` / 测试入口 / `packages/dsh-plugin` 的描述对应当日状态；当前仓库已有 `npm test`、`scripts/mc-test.mjs` 与完整 `tests/`。
 
 ## 0. 结论先行
 
@@ -14,11 +16,11 @@
    - **G1 装配层零覆盖且无注入缝隙**：`src/index.ts` 的定时器、身份登记、事件钩子（preStep）
      没有任何测试，且 `setInterval` 直接写在 index.ts 里，测试无法驱动（无时钟/调度注入）。
      `index.ts` 共 1418 行，其中**只有**"装配层成立"的行为基本零断言（逐条清单见 §3 G1）。
-   - **G2 唯一可执行的测试套件不在版本控制内**：套件住在
-     `%TEMP%\dsh-src\deepseek-harness-master\packages\test-support\mc-dsh-poc\tests`
-     （临时目录，可被系统清理），仓库里只有 15 个镜像，且其中 9 个 spec **完全没有副本**
+   - **G2 唯一可执行的测试套件不在版本控制内**：套件住在 DSH 源码树
+     `packages/test-support/mc-dsh-poc/tests`
+     （不在本仓版本控制内），仓库里只有 15 个镜像，且其中 9 个 spec **完全没有副本**
      ——**包括全部真 E2E（poc/phase1/phase2）与唯一测 `Config` 的文件**。
-     本次审计当场发现 1 个镜像已损坏（见 §3 G2），另 `packages/dsh-plugin/package.json`
+     本次审计当场发现 1 个镜像已损坏（见 §3 G2），另 `package.json`
      **没有 test 脚本、仓库内无 vitest 配置**，即"跑测试"这件事本身也无人把门。
    - **G3 测试替身不校验契约形状**：所有 LLM 替身都忽略入参，因此"参数形状错误"这一类
      缺陷在测试里恒不可见。**本次审计据此又实锤了第二个被掩盖的真实缺陷**（见 §2.5）。
@@ -154,7 +156,7 @@
 ## 4. 建议（按性价比排序）
 
 **P0**
-1. **套件入库**：把 24 个 spec 收进 `packages/dsh-plugin/tests/`（canonical），
+1. **套件入库**：把 24 个 spec 收进 `tests/`（canonical），
    新增 `scripts/sync-specs.mjs`（含 historian-terminal 的 rebase 规则）写入 DSH checkout 运行，
    并把「checkout 副本 == 仓库副本」做成 `npm run check:specs`（替代靠记忆维持的镜像约定）。
 2. **装配层可测化**：把调度与身份登记抽成可注入单元（`now`/`timer` 注入），

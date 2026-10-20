@@ -1,8 +1,8 @@
 # DSH 适配器：historian 事实提升与 dreamer 策展契约
 
-> 目标读者：要在 `packages/dsh-plugin` 里实现"记忆能产生"的工程师。
+> 目标读者：要在本仓库里实现"记忆能产生"的工程师。
 > 证据分级：〔码〕源码行 · 〔档〕文档 · 〔测〕测试/实测取样。
-> 本文只读 MC 仓库与用户真实库；无任何写入（真实库以 `mode=ro` + `PRAGMA query_only=1` 探测）。
+> 本文只读 MC 仓库与实测库；无任何写入（实测库以 `mode=ro` + `PRAGMA query_only=1` 探测）。
 
 ---
 
@@ -82,7 +82,7 @@ historian 的 `importance` 只用于 compartment 衰减渲染，**不参与事�
 | embedding 相似度闸门 | 不存在，且 embedding **在提交之后**才产生，不可能作为前筛 | 〔码〕`promotion.ts:96-143` |
 | compartment 的 importance | 与提升无关 | 〔码〕`historian.rs:213-227` |
 
-〔测〕真实库佐证：614 条 historian 行的 `importance` **无一条为 NULL**，其中 294 条恰为默认值 50（其余由 `classify-memories` 后置调整），说明落库走的是"默认 50"的写入器而非 Rust 的 `importance = None`。〔测〕`<path>`（schema v94，只读）
+〔测〕实测库佐证：614 条 historian 行的 `importance` **无一条为 NULL**，其中 294 条恰为默认值 50（其余由 `classify-memories` 后置调整），说明落库走的是"默认 50"的写入器而非 Rust 的 `importance = None`。〔测〕`%USERPROFILE%\.local\share\cortexkit\magic-context\context.db`（schema v94，只读）
 
 ---
 
@@ -115,7 +115,7 @@ historian 的 `importance` 只用于 compartment 衰减渲染，**不参与事�
 
 - 共用：`insertMemory` / `getMemoryByHash` / `updateMemorySeenCount`。
 - 差异 1：agent 走 `ctx_memory` 工具，`update/archive/merge` 会 `queueMemoryMutation` 写 mutation log。〔码〕`tools/ctx-memory/tools.ts:682,884,893,972,979`；提升只 INSERT/seen++，**不写 mutation log**。
-- 差异 2：`source_type` 不同（historian vs agent vs dreamer）。〔测〕真实库三源分布：historian 614 / agent 194 / dreamer 33。
+- 差异 2：`source_type` 不同（historian vs agent vs dreamer）。〔测〕实测库三源分布：historian 614 / agent 194 / dreamer 33。
 - 差异 3：权威守卫相同——`assertTsMemoryWriteAllowed` 对 module 管理项目抛错。〔码〕`storage-memory.ts:606-619,636`
 - 差异 4：`sourceType: "user"` 被写入器硬拒（保留给 dashboard 手工录入），提升不会走到。`storage-memory.ts:627-635`
 
@@ -137,7 +137,7 @@ historian 的 `importance` 只用于 compartment 衰减渲染，**不参与事�
 | embedding | 提交后 best-effort | 事务内 `raise_embedding_watermark_tx` | 由 publish 流程驱动 |
 | 证据 | `promotion.ts:49-94` | `mc-store/src/lib.rs:16318-16398` | `host_store.rs:1286-1346` |
 
-〔测〕真实库 614 条 historian 行的 `normalized_hash` **全部为 32 位 md5 十六进制，`historian-exact:` 前缀 0 条** → 该库当前由 TS/host 写入器写，`promote_facts_tx` 不是活跃路径。同时 `(project_path, category, normalized_hash)` 重复对为 **0**，UNIQUE 约束成立。〔码〕`storage-db.ts:1372`
+〔测〕实测库 614 条 historian 行的 `normalized_hash` **全部为 32 位 md5 十六进制，`historian-exact:` 前缀 0 条** → 该库当前由 TS/host 写入器写，`promote_facts_tx` 不是活跃路径。同时 `(project_path, category, normalized_hash)` 重复对为 **0**，UNIQUE 约束成立。〔码〕`storage-db.ts:1372`
 
 ---
 
@@ -194,7 +194,7 @@ historian 的 `importance` 只用于 compartment 衰减渲染，**不参与事�
 | 语义 | mutation log 只覆盖"非追加"变更；`update` 非终态，`archive/delete/superseded` 终态且终态优先于后续 update | 〔码〕`storage-memory-mutation-log.ts:9-19` |
 | 过期归档 | TTL 到期的 active 行由 `archiveExpiredMemories` 以 `reason='expired'` 归档并入队 mutation；与 curate 是不同任务路径 | 〔码〕`expire-memories.ts:12-13,122-171` |
 
-〔测〕真实库 `memory_mutation_log` 分布：`update 170 / archive 62 / superseded 22`；614 条 historian 行中**148 条**后来成为 mutation 的 target（即 curate/verify/expire 的后续产物，而非创建时写入）。
+〔测〕实测库 `memory_mutation_log` 分布：`update 170 / archive 62 / superseded 22`；614 条 historian 行中**148 条**后来成为 mutation 的 target（即 curate/verify/expire 的后续产物，而非创建时写入）。
 
 ---
 
@@ -231,7 +231,7 @@ historian 的 `importance` 只用于 compartment 衰减渲染，**不参与事�
 | 7.1 | **提升写入器**（校验 → hash 查重 → INSERT / seen++） | ✅ **适合在本适配器复刻** | 约 60 行纯 SQL；前置依赖：`resolveProjectIdentity`（已有 `memory-bridge.ts:188-190`）、`md5(normalize)`（已有 `normalizeMemoryContent` `:134-136`）。**必须与 7.2 同时做**，否则无类别可写 |
 | 7.2 | **facts 契约升级为 `{category, content}`** | ✅ **必须复刻，且是硬前提** | 现状 `facts: string[]` 无类别 ⇒ 提升器会 100% 丢弃。改动点：`historian.ts:127-149`（指令）、`core/compartments.ts:198-203,246`（parser）、`renderCompartment` 的 `facts:` 行 `:103` 需兼容新旧形状 |
 | 7.3 | **触发点：与 compartment 发布同事务** | ⚠️ **可复刻但需改结构** | 本适配器把 compartment 存入 `stores.allocateCompartment`（`historian.ts:370-375`），事务边界在 `stores.ts` 内；提升要么并入同一事务，要么接受"compartment 已落、记忆未落"的窗口。建议先做**同函数内紧邻写入**并在 journal 中记录原子性降级 |
-| 7.4 | **importance / TTL / scope / shareable 默认值** | ✅ 适合复刻 | 常量表 + 默认值，无外部依赖。注意 `scope/shareable` 在 MC 由 `classify-memories` 后置改写（〔测〕真实库已有 `universe/ecosystem` 行），复刻写入器只需写默认值 |
+| 7.4 | **importance / TTL / scope / shareable 默认值** | ✅ 适合复刻 | 常量表 + 默认值，无外部依赖。注意 `scope/shareable` 在 MC 由 `classify-memories` 后置改写（〔测〕实测库已有 `universe/ecosystem` 行），复刻写入器只需写默认值 |
 | 7.5 | **UNIQUE 约束 + seen_count 幂等** | ✅ 适合复刻 | 建索引即可；但**要意识到我们在写一个共享库**：约束由 MC 的 schema 拥有，我们不得修改 schema |
 | 7.6 | **embedding（提交后 best-effort）** | ❌ **本节不做** | 需要 embedding provider 配置与模型注册表；MC 有完整 embedding 身份/水位机制（`raise_embedding_watermark_tx`）。缺失只影响语义检索，不影响文本召回与注入 |
 | 7.7 | **m[1] `maxMemoryId` 水位 + `<new-memories>`** | ⚠️ **必须做（前置），但形态不同** | MC 的水位是 DB 级；本适配器的基线状态在 `stores.baselineState`。最小做法：把 `maxMemoryId` 存进 `BaselineState`，增量行单独渲染；**否则**新提升的记忆会改召回 digest → 每次提升都 HARD 重建 |
@@ -240,7 +240,7 @@ historian 的 `importance` 只用于 compartment 衰减渲染，**不参与事�
 | 7.10 | **dreamer curate 全任务** | ❌ **必须留在 MC 存储层** | 需要：①跨宿主共享的 15 分钟 timer 与 per-project lease；②`ctx_memory` 工具环（agentic tool-loop）；③按类别轮转的持久游标；④LLM 预算（`curate` 1.5M token）。任何一项单独复刻都得不到 curate 的效果 |
 | 7.11 | **curate 的产物（mutation log 行）如何被我们消费** | ✅ 读侧可复刻 | 我们可以在召回时读 `memory_mutation_log > 上次水位` 渲染 `<memory-updates>`；语义定义在〔码〕`inject-compartments.ts:2823-2875`。这比复刻 curate 便宜得多 |
 | 7.12 | **过期归档（expire）** | ⚠️ 可复刻但不建议优先 | 逻辑简单（`status='active' AND expires_at <= now`），但会写共享库；且 MC 的 dreamer tick 已经在做。**重复做会产生双重归档** |
-| 7.13 | **Rust parity** | ❌ 不在本次范围 | 本适配器不经 module 权威路径（〔测〕真实库无 `historian-exact:` 行）。但若用户开启 `single_store`/module 权威，我们的直写会被 MC 拒绝——这正是 7.8 的守卫要处理的 |
+| 7.13 | **Rust parity** | ❌ 不在本次范围 | 本适配器不经 module 权威路径（〔测〕实测库无 `historian-exact:` 行）。但若用户开启 `single_store`/module 权威，我们的直写会被 MC 拒绝——这正是 7.8 的守卫要处理的 |
 
 ---
 
@@ -306,7 +306,7 @@ inject-compartments.ts
 
 > **如果只能做一件事让"记忆能产生"：把 `facts` 契约升级为 `{category, content}`，并在 historian 落库的同一函数里加一个 60 行的幂等提升写入器。这两件事不可拆——没有类别，提升器写不进去；有类别没写入器，事实仍然只是 compartment 里的文本。**
 
-具体落点（不改 MC，只改 `packages/dsh-plugin`）：
+具体落点（不改 MC，只改本仓库）：
 
 1. **契约**（必改，这是"0 条记忆"的直接原因）
    - `src/dsh/historian.ts:127-149`：把 `"facts": ["..."]` 改为按类别分组的对象数组，或保留 `string[]` 但并行输出 `[{category, content}]`；在指令里列出五个 v2 类别。
@@ -328,10 +328,10 @@ inject-compartments.ts
 
 ---
 
-## 附录 A：只读实测（真实库，未做任何写入）
+## 附录 A：只读实测（实测库，未做任何写入）
 
 ```
-db   : <path>
+db   : %USERPROFILE%\.local\share\cortexkit\magic-context\context.db
 mode : file:...?mode=ro + PRAGMA query_only=1
 schema_migrations(LATEST < 10000): 94
 ```
@@ -370,5 +370,5 @@ schema_migrations(LATEST < 10000): 94
 | dreamer 调度 | `packages/plugin/src/features/magic-context/dreamer/task-scheduler.ts:37, 235-269, 319-344, 552`；`plugin/dream-timer.ts:80`；`dreamer/cron.ts:20-25` |
 | curate 提示与阶段 | `packages/plugin/src/features/magic-context/dreamer/task-prompts.ts:40-57, 97-129`；`dreamer/curate-category-rotation.ts:77-162` |
 | 默认 cron | `packages/plugin/src/config/schema/magic-context.ts:540-560` |
-| 本适配器缺口 | `packages/dsh-plugin/src/core/compartments.ts:26, 122-166, 198-203, 246`；`src/dsh/historian.ts:127-149, 370-375`；`src/dsh/management-pass.ts:177-181, 336-363`；`src/core/memory-bridge.ts:134-136, 421-423`；`src/core/policy.ts:35, 51` |
-| 既有文档 | `docs/reports/historian-memory-promotion.md`；`docs/architecture/memory-and-search.md:27`；`docs/architecture/historian.md:73`；`CONFIGURATION.md:741`；`docs/dsh-plugin-project-memory-review-2026-10-06.md:72-74` |
+| 本适配器缺口 | `src/core/compartments.ts:26, 122-166, 198-203, 246`；`src/dsh/historian.ts:127-149, 370-375`；`src/dsh/management-pass.ts:177-181, 336-363`；`src/core/memory-bridge.ts:134-136, 421-423`；`src/core/policy.ts:35, 51` |
+| 既有文档 | 上游 checkout 内的 `docs/reports/historian-memory-promotion.md`；`docs/architecture/memory-and-search.md:27`；`docs/architecture/historian.md:73`；`CONFIGURATION.md:741` |

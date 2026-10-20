@@ -1,16 +1,16 @@
 # DSH ↔ OpenCode / Pi: effective-behavior parity
 
 This document records the **effective-behavior contract** between the DSH adapter
-(`packages/dsh-plugin`) and the two upstream adapters — OpenCode 1/2
+(`src/` in this repository) and the two upstream adapters — OpenCode 1/2
 (`packages/plugin`) and Pi (`packages/pi-plugin`). Comparison target as of
-2026-10-08:
+2026-10-08 (host anchor refreshed to the 0.2.1-rc.1 desktop line on 2026-10-17):
 
 | Item | Value |
 |---|---|
 | Magic Context | **v0.46.0** (`v0.46.0-0-g651c105a9`, released 2026-10-08; the `dsh-base` ref) |
 | MC store contract | **schema v95** (`src/core/memory-bridge.ts:42`) |
-| DeepSeek Harness | **Desktop 0.2.0-rc.2** (host paths below are relative to the DSH checkout) |
-| Adapter | `@cortexkit/dsh-magic-context` 0.2.0, own store **schema v6** (`src/core/stores.ts:21`) |
+| DeepSeek Harness | **Desktop 0.2.1-rc.1** (host paths below are relative to the DSH checkout) |
+| Adapter | `dsh-plugin-magic-context` 0.9.0, own store **schema v10** (`src/core/stores.ts`) |
 
 Scope split: `docs/dsh-plugin-upgrade-followup.md` says **how** to follow an
 upgrade; this file says **where we differ**. Three verdicts are used below:

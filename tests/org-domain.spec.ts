@@ -118,7 +118,7 @@ describe('credential shapes never cross a project boundary', () => {
     // hex would block nearly every real candidate.
     const ordinary = [
       'git:93eea8cdeebd2eb57f476137abf32fa0c42cd3f5 的 HEAD 是 70418d40c，契约摘要 8bd1476f9a07…',
-      '共享库位于 C:\\Users\\wukai\\.local\\share\\cortexkit\\magic-context\\context.db（v94 只读）',
+      '共享库位于 C:\\Users\\<user>\\.local\\share\\cortexkit\\magic-context\\context.db（v94 只读）',
       'session-you need to check whether the guard fires before the recall lane runs',
       '「必须先在 plan 模式内讨论」是用户的流程要求',
       'pin memory #1298 / docs/memory-mechanisms-inventory-2026-10-09.md',

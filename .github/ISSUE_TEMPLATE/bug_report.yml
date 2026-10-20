@@ -1,0 +1,105 @@
+name: 缺陷报告 / Bug report
+description: 报告一个可复现的问题（提交前请先搜索是否已有相同 issue）
+title: "[bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > **你提交的内容是公开的。** 请勿贴出 API key、token、cookie、私人会话正文、
+        > 记忆库内容或本机绝对路径；贴 journal 前请先脱敏。敏感问题不要开公开 issue，
+        > 请走 [SECURITY.md](https://github.com/wk544863858/dsh-plugin-magic-context/blob/main/SECURITY.md)
+        > 里的私密报告通道。
+        > 中文或英文都可以，English is welcome too。
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么 / What happened
+      description: 实际发生了什么，和你预期差在哪里。有报错请贴完整消息（脱敏后）。
+      placeholder: |
+        实际行为：
+        报错信息（脱敏后）：
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为 / Expected behavior
+      description: 你认为正确的结果是什么。
+      placeholder: 我期望……
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤 / Reproduction steps
+      description: 尽量最小化：从哪个配置/哪个命令开始，做了什么，看到什么。
+      placeholder: |
+        1. 安装并启用插件（版本见下）
+        2. 在会话中执行 / 触发 …
+        3. 观察到 …
+    validations:
+      required: true
+
+  - type: input
+    id: dsh-version
+    attributes:
+      label: DSH 版本 / DSH version
+      description: 运行 `dsh --version` 的输出。
+      placeholder: 0.2.1-rc.1
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: 插件版本 / Plugin version
+      description: GUI 插件页显示的版本，或 `package.json` 里的 `version`。
+      placeholder: 0.9.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: 操作系统 / Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS
+        - Linux
+        - 其他 / Other
+    validations:
+      required: true
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js 版本 / Node version
+      description: 运行 `node --version` 的输出。本插件要求 >= 22.19。
+      placeholder: v24.15.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: journal
+    attributes:
+      label: 相关 journal 片段 / Relevant journal lines
+      description: >-
+        与问题相关的 journal 行（脱敏后：去掉 token、密钥、会话正文、绝对路径）。
+        没有相关行请填「无 / none」。
+      render: shell
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: disclosure
+    attributes:
+      label: 提交前确认 / Before you submit
+      options:
+        - label: 我已确认以上内容不含密钥、token 或他人隐私，并知道 issue 内容对所有人可见。
+          required: true
+        - label: 我已搜索过现有 issue，没有找到相同问题。
+          required: true

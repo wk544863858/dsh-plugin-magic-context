@@ -1,0 +1,16 @@
+# Issue template chooser.
+#
+# Blank issues are disabled so every report arrives with the environment
+# details we need (DSH version, plugin version, OS, Node). Questions that are
+# really documentation or security reports go through the links below.
+blank_issues_enabled: false
+contact_links:
+  - name: 使用文档 / Documentation
+    url: https://github.com/wk544863858/dsh-plugin-magic-context/blob/main/README.md
+    about: 安装、配置、命令与常见问题的首选入口；先看 README 再开 issue。
+  - name: 贡献指南 / Contributing
+    url: https://github.com/wk544863858/dsh-plugin-magic-context/blob/main/CONTRIBUTING.md
+    about: 构建、测试、代码约定与 PR 流程。
+  - name: 安全报告 / Security
+    url: https://github.com/wk544863858/dsh-plugin-magic-context/blob/main/SECURITY.md
+    about: 漏洞请走私密通道；不要用公开 issue 提交安全问题或敏感数据。

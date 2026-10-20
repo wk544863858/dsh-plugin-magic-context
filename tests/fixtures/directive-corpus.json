@@ -1,0 +1,110 @@
+{
+  "note": "Directive-shape regression corpus. Every sample is synthetic: 15 profile-shaped rows (7 directive, 8 descriptive) plus three English/Chinese control pairs, written to exercise the keyword classifier rather than to describe any real person. The safety property is asymmetric — a directive mislabelled descriptive becomes an unreviewed behavioural rule in every session, so the suite requires ZERO such misses and merely BOUNDS the harmless direction (over-triggering).",
+  "samples": [
+    {
+      "id": "profile-1",
+      "expected": "descriptive",
+      "text": "用户在多轮对话里倾向使用简体中文，表达简洁，习惯用一句话给出方向（如\"按这个思路继续\"、\"可以\"），核心意图集中在开头，不做过多的背景铺垫，更愿意让协作方先梳理现状与风险再给出建议。"
+    },
+    {
+      "id": "profile-2",
+      "expected": "descriptive",
+      "text": "用户提供授权与背景时习惯一次给齐：完整的上下文、约束条件、参考文件位置、当前版本状态、已完成与未完成清单会一并说明，结构清晰、少有含糊；同时也喜欢用明确的产出约束（先给大纲、不要明细表、给定范围、要全量而非抽样）来引导结果，反感被反复追问，希望协作方自行消化规则后一次落地。"
+    },
+    {
+      "id": "profile-3",
+      "expected": "directive",
+      "text": "项目协作要求『先规划后执行、未确认不动』的严格节奏：方案阶段必须先在计划模式内讨论，拿到对关键决策点的明确确认后才能写文件；一旦发现提前实施，会要求切回计划模式并撤销改动。推送、部署这类高风险动作要求先做独立、可验证的预检（依赖扫描、全量测试、配置审查），并以其确认结果作为放行门禁，未确认前保持本地不推进。确认之后则放手让协作方自主推进后续链路。"
+    },
+    {
+      "id": "profile-4",
+      "expected": "descriptive",
+      "text": "用户审视设计方案时更关注架构本质与系统性复杂度，习惯用本质问题（\"能否快速接入新的数据源\"、\"链路是否过于复杂\"）来驱动设计方向；当阶段性收口或技术路线成本上升时，会主动推动方法论的复盘与收敛，分析顺序上倾向静态优先、少入侵。对中间结论保持独立审视，喜欢以第一性原理追问细节后再认可方案，也常追问旧版本当时如何解决同类问题，倾向于沿用已被验证的路径。"
+    },
+    {
+      "id": "profile-5",
+      "expected": "descriptive",
+      "text": "用户看重数据与结论的正确性：习惯以真实数据实测来拍板，倾向路径级差异定位而非表面解释，并坚持改动前后用同一数据集对比；对批量自动化归并的产出比较警惕，会逐条核对并指出具体条目的分类问题，倾向先人工核实再采纳；排查时希望能追到代码层面的因果链，会主动提供精确的证据入口（原始日志、运行环境、构件位置）来帮助收敛。"
+    },
+    {
+      "id": "profile-6",
+      "expected": "directive",
+      "text": "用户坚持『实现先于流程文档』的工程立场：要求实现与路线图对齐后再扩大范围，重视可回滚的提交边界（分阶段提交、每阶段独立可回退），一律以持续集成为唯一的部署与验证入口，不得用手工拷贝绕过；面对同类问题只改一处是不够的，要求一次把同类问题清理干净；拒绝任何以\"兼容旧写法\"为名的双轨映射，字段命名必须一次统一。"
+    },
+    {
+      "id": "profile-8",
+      "expected": "descriptive",
+      "text": "用户对交付形态比较在意可控性：在产出最终格式文件之前，更愿意先看到可审阅的中间产物（大纲、草稿，或数据类产出的本地预览）再定稿；习惯严格遵循既定模板，不喜欢模板外的自选章节、段落或格式元素；审阅意见偏好克制、有分寸的定性措辞，而不是加重语气。整体上体现为对『产出形态可审可控』的诉求。"
+    },
+    {
+      "id": "profile-9",
+      "expected": "directive",
+      "text": "用户偏好即时、端到端的验证闭环：要求在目标环境直接验证而不是停在本地调试（先提交、再推送、过 CI，最后在目标环境确认）；面对多种验证方案时优先可即时触发的方案，而不是等待自然触发；必须按跨仓库的 CI→合并请求→合并请求 CI 的严格顺序推进，把 CI 作为唯一可信的部署与验证入口；环境分层务必保持边界清晰，本地开发环境也按同一标准执行，让基础设施问题尽量在 CI 阶段暴露。"
+    },
+    {
+      "id": "profile-10",
+      "expected": "descriptive",
+      "text": "用户倾向选择协调成本低的方案：偏好单边修改以减少跨服务协调开销，也喜欢把暴露不同环节问题的同批问题拆开独立陈述而不是合并归并，整体上体现出『降低耦合、减少归并歧义』的系统性偏好。"
+    },
+    {
+      "id": "profile-11",
+      "expected": "directive",
+      "text": "用户对工具链缺陷零容忍：遇到技能或工具的问题，要求先修复工具再继续业务工作，不允许外围工具问题持续干扰主线任务；同时会把注意力拉回核心项目，明确约束文档与说明类工作不得长期占用主线时间。"
+    },
+    {
+      "id": "profile-12",
+      "expected": "directive",
+      "text": "用户对\"未确认先动\"高度敏感，执行纪律严格：设计方案阶段必须先在计划模式内完成讨论，拿到对关键决策点的明确确认后才能写文件；一旦发现提前实施，会立即要求切回计划模式，必要时撤销改动；对推送等高风险动作同样要求先做独立、可验证的预检（依赖扫描、全量测试、配置审查），并以其确认结果作为放行门禁，未确认前保持在本地不推进。"
+    },
+    {
+      "id": "profile-14",
+      "expected": "descriptive",
+      "text": "用户有较强的源头治理意识：认为数据问题宜在源头彻底解决，而不是在下游做兜底或冻结历史包袱的妥协；会主动识别并回避已知不准的数据源，倾向以可信源为准，并希望权威源的字段命名与规范真正对齐。"
+    },
+    {
+      "id": "profile-15",
+      "expected": "directive",
+      "text": "用户在方案讨论与内容产出中会持续施加\"最简、最小范围\"的压力：会直接否定偏重的设计，提出更具体的简化替代方案；方案批准后仍会追问整组化简的可能，要求优先使用原生能力而不是机械移植；技术选型前要求先做收益与成本评估，显著加权长期维护成本；对只有一个消费方的抽象设计持怀疑态度，并要求删除已被覆盖或冗余的通用条目，不得为单一消费方提前抽象。"
+    },
+    {
+      "id": "profile-16",
+      "expected": "descriptive",
+      "text": "用户对基础设施与部署层面的问题有务实直觉，倾向低成本、低破坏的解决方式：网络受阻时会寻找变通通道（如备用代理线路），上传慢或本地缺工具时改用替代路径（服务端直接下载、改用其他运行环境），不让环境问题拖停主线任务；服务上线倾向于非破坏性落地，新服务放进独立的编排配置，旧服务保持在线直到替换验证通过再切换。"
+    },
+    {
+      "id": "profile-17",
+      "expected": "directive",
+      "text": "在需要人工配合的联调与验证流程中，协作方务必在每个需要人工介入的时机提前给出明确提示，并以双方约定的开始信号作为计时起点；收到提示后即时执行并简短回报，风险类操作应由人亲自完成、协作方负责引导与分析；不得把\"未提示\"与\"不配合\"混为一谈，执行间隙应自行监控目标进程并报告状态变化。"
+    },
+    {
+      "id": "synthetic-en-directive-1",
+      "expected": "directive",
+      "text": "Always run the full test suite before pushing, and never commit directly to main."
+    },
+    {
+      "id": "synthetic-en-descriptive-1",
+      "expected": "descriptive",
+      "text": "The user writes in Chinese and keeps requests short, with the core signal in the first sentence."
+    },
+    {
+      "id": "synthetic-en-directive-2",
+      "expected": "directive",
+      "text": "Wait for explicit confirmation on the plan before writing any file."
+    },
+    {
+      "id": "synthetic-en-descriptive-2",
+      "expected": "descriptive",
+      "text": "The user is comfortable with terse, technical answers and rarely asks for background."
+    },
+    {
+      "id": "synthetic-zh-directive-1",
+      "expected": "directive",
+      "text": "修改共享库结构前必须先备份并跑一遍冻结校验。"
+    },
+    {
+      "id": "synthetic-zh-descriptive-1",
+      "expected": "descriptive",
+      "text": "用户偏好一次性拿到完整背景，不喜欢被反复追问细节。"
+    }
+  ]
+}

@@ -67,7 +67,7 @@ These are ranked interventions, **not a claim that every cached token is wasted*
 
 ## Quantitative appendices
 
-Model keys: **G** = antigravity-gemini-3.8-flash; **D** = model-b; **D0** = model-b:0731; **M** = muse-spark-1.3-contributor-free; **O** = antigravity-claude-opus-4-6-thinking; **F** = claude-fable-5-1; **O5** = claude-opus-5; **O55** = claude-opus-5-5; **?** = not recorded. `OC` is the ledger's opencode harness, not an assertion that every call used the OpenCode model loop. `PI` is pi. Counts are invocations unless explicitly marked children or scheduler tasks.
+Model keys: **G** = antigravity-gemini-3.8-flash; **D** = deepseek-v4.1-flash; **D0** = deepseek-v4-flash:0731; **M** = muse-spark-1.3-contributor-free; **O** = antigravity-claude-opus-4-6-thinking; **F** = claude-fable-5-1; **O5** = claude-opus-5; **O55** = claude-opus-5-5; **?** = not recorded. `OC` is the ledger's opencode harness, not an assertion that every call used the OpenCode model loop. `PI` is pi. Counts are invocations unless explicitly marked children or scheduler tasks.
 
 ### A. Invocation outcomes by host, task and model
 Completed percentage is completed / all rows. Non-completed includes failed, timed_out, empty and aborted; it is not uniformly a provider failure. Failure-kind percentages use all rows in that same group. Unknown model is retained rather than attributed to a configured fallback.

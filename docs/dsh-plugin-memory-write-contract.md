@@ -6,23 +6,23 @@
 > DDL 与写形状（= 自有库形状）。已成为历史的部分：§8 权威守卫（authority 机制随切换
 > 退役）、"受 MC 约束/共享"的表述、schema 版本跟随上游的说法。保留原文作为溯源性档案。
 >
-> 提取自 Magic Context 源码 + 用户真实生产库（只读实测）。
-> 目标读者：`packages/dsh-plugin` 写入路径的实现者。
-> 标注约定：〔码〕= 源码 file:line；〔档〕= 仓库文档；〔测〕= 本次实测（Node 24 / 真实 context.db）。
-> 所有文件名相对于仓库根 `<path>`。
+> 提取自 Magic Context 源码 + 生产环境实测库（只读实测）。
+> 目标读者：本仓库写入路径的实现者。
+> 标注约定：〔码〕= 源码 file:line；〔档〕= 仓库文档；〔测〕= 本次实测（Node 24 / 实测 context.db）。
+> 所有文件名相对于仓库根 `<upstream-checkout>`。
 
 ---
 
 ## 0. 结论先行（12 条硬结论）
 
-1. **真实库 schema 版本 = 94**（`schema_migrations` 表 94 行，`MAX(version)=94`；`PRAGMA user_version` 是 **0**，不要用它判版本）。〔测〕
-2. `memories` 表 **28 列**，权威 `CREATE TABLE` 在 `storage-db.ts:1342-1373`，与真实库 DDL **逐字节一致**。〔测〕
+1. **实测库 schema 版本 = 94**（`schema_migrations` 表 94 行，`MAX(version)=94`；`PRAGMA user_version` 是 **0**，不要用它判版本）。〔测〕
+2. `memories` 表 **28 列**，权威 `CREATE TABLE` 在 `storage-db.ts:1342-1373`，与实测库 DDL **逐字节一致**。〔测〕
 3. 去重键是 **`UNIQUE(project_path, category, normalized_hash)`**，作用域 = 项目身份 × 类别 × 内容哈希（**不含 status**——archived 行仍占位，重复写入会命中已归档行）。〔码〕`storage-db.ts:1372`
 4. `normalized_hash` = `md5(content.toLowerCase().replace(/\s+/g," ").trim())` 的**小写 hex**。Rust 侧用等价的 JS-`\s` 码点集合复刻，两运行时同哈希。〔码〕`normalize-hash.ts:3-12`、`mc-store/src/lib.rs:17506-17536`
 5. **写入前必须查重并走"已存在则 bump seen_count"分支**：`insertMemory` 本身不做查重，靠 UNIQUE 抛错；工具层与 Rust facade 各自显式查重。直接用裸 INSERT 会在重复内容上抛 `UNIQUE constraint failed`。〔码〕`storage-memory.ts:627-652,660-678`；`mc-store/src/lib.rs:6568-6620`
 6. **新增（additive write）不 bump epoch、不写 mutation log**。它靠 `maxMemoryId` 水位在 m[1] 的 `<new-memories>` 里浮现；只有 `update`/`archive`/`merge(superseded)` 写 `memory_mutation_log`，渲染成 m[1] 的 `<memory-updates>`。〔档〕`ARCHITECTURE.md:97,106`；〔码〕`inject-compartments.ts:1932-1935`
 7. **`project_memory_epoch` 只由外部写入者（dashboard）与身份迁移 bump**；活跃会话内的 `ctx_memory` 写路径**绝不** bump。〔档〕`ARCHITECTURE.md:106`
-8. **真实库已装权威守卫触发器**：`memories_authority_guard_{insert,update,delete}` 会在项目被标记进 `authority_managed`/`authority_repair_pending` 且 `context_privilege_state.enabled=0` 时 `RAISE(ABORT,'context.db memory writes are managed by the Rust module')`。**当前两表均为空 → 现阶段直写不会被拒**，但契约必须实现"检测 + 让路"。〔测〕〔码〕`migrations.ts:216-244`
+8. **实测库已装权威守卫触发器**：`memories_authority_guard_{insert,update,delete}` 会在项目被标记进 `authority_managed`/`authority_repair_pending` 且 `context_privilege_state.enabled=0` 时 `RAISE(ABORT,'context.db memory writes are managed by the Rust module')`。**当前两表均为空 → 现阶段直写不会被拒**，但契约必须实现"检测 + 让路"。〔测〕〔码〕`migrations.ts:216-244`
 9. FTS 靠 **AFTER 触发器**同步（`memories_ai/ad/au`），外部内容表 `memories_fts`。**不要**手动写 FTS，否则与触发器双写、索引损坏。〔测〕〔码〕`storage-db.ts:1746-1757`
 10. `UPDATE memories` 的 `memories_au` 触发器会重建 FTS 行，所以更新内容**无需**另写 FTS。〔测〕
 11. 第二个宿主（我们）与 OpenCode 里的 MC 同时写是**安全的**，前提是：每次写用 **`BEGIN IMMEDIATE`**、`busy_timeout` ≥ 5000ms、WAL 已是库级持久设置、**绝不**在 `BEGIN` 之前缓存"查重结果"。`memory_mutation_log.id` 是 AUTOINCREMENT 全局单调，天然给两侧一个统一顺序。〔码〕`sqlite.ts:286-330,834-871`
@@ -34,7 +34,7 @@
 
 ### 1.1 权威 DDL
 
-〔码〕`packages/plugin/src/features/magic-context/storage-db.ts:1342-1373`（新库建表）；真实库 DDL 与之逐字节相同〔测〕：
+〔码〕`packages/plugin/src/features/magic-context/storage-db.ts:1342-1373`（新库建表）；实测库 DDL 与之逐字节相同〔测〕：
 
 ```sql
 CREATE TABLE memories (
@@ -82,7 +82,7 @@ CREATE TABLE memories (
 | `category` | TEXT | — | ✔ | 五类之一，见 §3 |
 | `content` | TEXT | — | ✔ | 工具层已 `trim()`；见 §11.1 |
 | `normalized_hash` | TEXT | — | ✔ | `computeNormalizedHash(content)`，见 §2 |
-| `importance` | INTEGER | NULL | ✘ | 插入时 `input.importance ?? 50`〔码〕`storage-memory.ts:564`；Rust 传 `None` 时留 NULL，但真实库 0 行 NULL（classify 已回填）〔测〕 |
+| `importance` | INTEGER | NULL | ✘ | 插入时 `input.importance ?? 50`〔码〕`storage-memory.ts:564`；Rust 传 `None` 时留 NULL，但实测库 0 行 NULL（classify 已回填）〔测〕 |
 | `scope` | TEXT | `'project'` | ✔ | 插入固定 `'project'`；classify 后续改，见 §4 |
 | `shareable` | INTEGER | `0` | ✔ | 插入固定 0；classify 置位，见 §4 |
 | `source_session_id` | TEXT | NULL | ✘ | 调用方 sessionID |
@@ -95,8 +95,8 @@ CREATE TABLE memories (
 | `last_seen_at` | INTEGER | — | ✔ | 插入 = `now`；见 §9 |
 | `last_retrieved_at` | INTEGER | NULL | ✘ | 插入 NULL；显式检索时 = now |
 | `status` | TEXT | `'active'` | ✘ | 插入 `'active'`；见 §4 |
-| `expires_at` | INTEGER | NULL | ✘ | 插入 = `input.expiresAt ?? null`；真实库 0 行非空〔测〕 |
-| `verification_status` | TEXT | `'unverified'` | ✘ | 插入 `'unverified'`；真实库 100% `unverified`〔测〕 |
+| `expires_at` | INTEGER | NULL | ✘ | 插入 = `input.expiresAt ?? null`；实测库 0 行非空〔测〕 |
+| `verification_status` | TEXT | `'unverified'` | ✘ | 插入 `'unverified'`；实测库 100% `unverified`〔测〕 |
 | `verified_at` | INTEGER | NULL | ✘ | 插入 NULL；仅 `updateMemoryVerification` 在 status='verified' 时写，见 §9 |
 | `classified_at` | INTEGER | NULL | ✘ | 插入不写（NULL）；classify 打点；内容更新时清 NULL |
 | `superseded_by_memory_id` | INTEGER | NULL | ✘ | merge 时置替换者 id，见 §11.4 |
@@ -119,7 +119,7 @@ if (input.sourceType === "user") {
 }
 ```
 
-真实库只有 `historian`(614) / `agent`(194) / `dreamer`(33)，无 `user`〔测〕。
+实测库只有 `historian`(614) / `agent`(194) / `dreamer`(33)，无 `user`〔测〕。
 
 ### 1.4 `project_path` 的取值（写错 = 记忆分裂）
 
@@ -129,9 +129,9 @@ if (input.sourceType === "user") {
 - 解析失败时**保留原始字符串**，绝不臆造第二个身份。〔码〕`project-identity.ts:795-800`
 - 归属判定：`storedProjectPath === identity || normalizeStoredProjectPath(storedProjectPath) === identity`〔码〕`project-identity.ts:812-820`
 
-〔测〕真实库 28 个不同 `project_path`，全部为 `git:`/`dir:` 形态，例如 `git:dfbf85f5…`(247 条)、`dir:b107f9d493dd`(98 条)。
+〔测〕实测库 28 个不同 `project_path`，全部为 `git:`/`dir:` 形态，例如 `git:dfbf85f5…`(247 条)、`dir:b107f9d493dd`(98 条)。
 
-### 1.5 索引与触发器（真实库实测）
+### 1.5 索引与触发器（实测库实测）
 
 索引〔测〕（源码：`storage-db.ts:2035-2037`）：
 
@@ -300,7 +300,7 @@ duplicates, one is miscategorized — archive the redundant one instead of mergi
 
 5. **dreamer curate** 一次只处理一个类别（`curate-category-rotation`）。
 
-〔测〕真实库**只有 5 个 v2 类别**，零 legacy 行——漂移已经完成：
+〔测〕实测库**只有 5 个 v2 类别**，零 legacy 行——漂移已经完成：
 
 | category | 条数 |
 |---|---|
@@ -351,7 +351,7 @@ export type MemoryStatus = "active" | "permanent" | "archived";
 
 **没有"归档 → 取消归档"的写路径**：`memory_mutation_log` 的注释明确说 un-archive 只能靠 **epoch bump 触发的整块 re-materialize**，绝不通过 mutation log。〔码〕`storage-memory-mutation-log.ts:9-14`
 
-真实库分布〔测〕：`active` 757、`archived` 84，**无 `permanent`**（但类型与查询都支持）。
+实测库分布〔测〕：`active` 757、`archived` 84，**无 `permanent`**（但类型与查询都支持）。
 
 ### 4.2 `scope` 取值与含义
 
@@ -363,7 +363,7 @@ export type MemoryScope = "project" | "ecosystem" | "universe";
 
 - 插入固定 `'project'`〔码〕`storage-memory.ts:576`
 - 只有 `setMemoryClassification` 能改（classify 任务/dreamer），且非法值抛 `invalid memory scope: X`〔码〕`storage-memory.ts:1161-1170`
-- 真实库分布〔测〕：`project` 808、`universe` 18、`ecosystem` 15
+- 实测库分布〔测〕：`project` 808、`universe` 18、`ecosystem` 15
 
 **对外可见性语义**（`FOREIGN_VISIBLE_SQL`，`memory/visibility.ts:5-6`，注释要求与 mc-store 的 `FOREIGN_VISIBLE_SQL` **逐字节一致**）：
 
@@ -394,7 +394,7 @@ UPDATE memories SET shareable = 0 WHERE id = ?   -- 内容更新事务内
 
 同一不变量在 rust facade（`mc-store/src/lib.rs:6664`）与 dashboard（`db.rs:6081-6086`）都复刻了。
 
-真实库 `shareable` 分布：0 → 445、1 → 396〔测〕。
+实测库 `shareable` 分布：0 → 445、1 → 396〔测〕。
 
 ### 4.4 `expires_at` 规则
 
@@ -402,7 +402,7 @@ UPDATE memories SET shareable = 0 WHERE id = ?   -- 内容更新事务内
 - 存储的是**绝对 epoch ms**，不是 TTL
 - 过期不改 `status`；读取侧统一用 `(expires_at IS NULL OR expires_at > <cutoff>)` 过滤
 - **cutoff 必须可冻结**：m[1] 渲染路径传入 m[0] 物化时间戳作为冻结 cutoff，避免两次 defer 之间一条记忆跨过 `expires_at` 导致 wire 字节变化（cache bust）〔码〕`storage-memory.ts:697-701`
-- 真实库 0 行非空 `expires_at`〔测〕
+- 实测库 0 行非空 `expires_at`〔测〕
 
 ### 4.5 内容更新必须连带清空的字段
 
@@ -428,7 +428,7 @@ DELETE FROM memory_embeddings WHERE memory_id = ?;                              
 
 ### 5.1 表结构
 
-〔码〕`storage-db.ts:1573-1578`；真实库一致〔测〕：
+〔码〕`storage-db.ts:1573-1578`；实测库一致〔测〕：
 
 ```sql
 CREATE TABLE project_state (
@@ -439,7 +439,7 @@ CREATE TABLE project_state (
 );
 ```
 
-〔测〕真实库 6 行；epoch 分布：3 → 5 个项目、0 → 1 个项目。
+〔测〕实测库 6 行；epoch 分布：3 → 5 个项目、0 → 1 个项目。
 
 ### 5.2 何时 bump（确切判定）
 
@@ -496,7 +496,7 @@ ON CONFLICT(project_path) DO UPDATE SET
 
 ### 6.1 表结构
 
-〔码〕`storage-db.ts:1476-1491`；真实库一致〔测〕：
+〔码〕`storage-db.ts:1476-1491`；实测库一致〔测〕：
 
 ```sql
 CREATE TABLE memory_mutation_log (
@@ -514,7 +514,7 @@ CREATE INDEX idx_memory_mutation_log_visibility ON memory_mutation_log(project_p
 CREATE INDEX idx_memory_mutation_log_target     ON memory_mutation_log(project_path, target_memory_id, id);
 ```
 
-⚠️ **`mutation_type` 没有 `merge`** —— 本地库 CHECK 只允许四个值。merge 由 **`superseded`（每个源）+ `update`（目标）** 组合表达。〔码〕`storage-db.ts:1479`；〔测〕真实库实测三类：`archive` 62、`superseded` 22、`update` 170（**无 `delete`**，虽然 schema 允许）。
+⚠️ **`mutation_type` 没有 `merge`** —— 本地库 CHECK 只允许四个值。merge 由 **`superseded`（每个源）+ `update`（目标）** 组合表达。〔码〕`storage-db.ts:1479`；〔测〕实测库实测三类：`archive` 62、`superseded` 22、`update` 170（**无 `delete`**，虽然 schema 允许）。
 
 ### 6.2 何时 append（逐操作行为）
 
@@ -620,7 +620,7 @@ These memories changed since the snapshot below — trust these:
 
 ### 7.1 水位存在哪
 
-**`session_meta.cached_m0_max_memory_id INTEGER`**，与 `cached_m1_bytes` 一起持久化。〔测〕真实库 `session_meta` 列确认存在；〔码〕`storage-db.ts:1829`、迁移 `migrations.ts:977`。
+**`session_meta.cached_m0_max_memory_id INTEGER`**，与 `cached_m1_bytes` 一起持久化。〔测〕实测库 `session_meta` 列确认存在；〔码〕`storage-db.ts:1829`、迁移 `migrations.ts:977`。
 
 同族列（同一物化快照）：`cached_m0_bytes`、`cached_m0_project_memory_epoch`、`cached_m0_workspace_fingerprint`、`cached_m0_max_compartment_seq`、`cached_m0_max_mutation_id`、**`cached_m0_max_memory_mutation_id`**（mutation log 游标）、`cached_m1_bytes`、`cached_m0_materialized_at` 等〔测〕。
 
@@ -797,7 +797,7 @@ Archived memory [ID: {id}] ({reason}).            # 带 reason
 
 ### 8.4 权威触发器（数据库层面的第二道闸）
 
-**这是真实库上已存在、必须让路的机制。** 〔码〕`migrations.ts:216-244`（`installLatestAuthorityTriggers`），真实库实测 DDL 如下〔测〕：
+**这是实测库上已存在、必须让路的机制。** 〔码〕`migrations.ts:216-244`（`installLatestAuthorityTriggers`），实测库实测 DDL 如下〔测〕：
 
 ```sql
 CREATE TRIGGER memories_authority_guard_insert
@@ -860,7 +860,7 @@ function assertTsMemoryWriteAllowed(db, projectPath) {
 memory writes for module-managed project {projectPath} must use the Rust ctx_memory module facade
 ```
 
-**〔测〕真实库现状**：`authority_managed` **0 行**、`authority_repair_pending` **0 行**、`context_privilege_state` = `{id:1, enabled:0}`。⇒ **今天直写不会被拒**；但守卫已安装，若用户将来把某项目交给 Rust module 托管，我们的写入会立刻被 ABORT。
+**〔测〕实测库现状**：`authority_managed` **0 行**、`authority_repair_pending` **0 行**、`context_privilege_state` = `{id:1, enabled:0}`。⇒ **今天直写不会被拒**；但守卫已安装，若用户将来把某项目交给 Rust module 托管，我们的写入会立刻被 ABORT。
 
 **给我们的实现**：写入前先跑 `assertTsMemoryWriteAllowed` 等价检查（读两张表，容忍 `no such table`）；命中就拒绝并给出可诊断的错误，**不要**试图通过写 `context_privilege_state.enabled=1` 绕过——那是 MC 自己特权写入者的协议，冒充它会破坏"第二连接永不可见 enabled=1"的不变量。
 
@@ -889,7 +889,7 @@ UPDATE memories SET retrieval_count = retrieval_count + 1, last_retrieved_at = ?
 
 ⇒ 实现要点：**整个 batch 在一个 `.immediate()` 事务里循环 bump**；遇到 `ModuleMemoryAuthorityError` **吞掉继续**（telemetry 不得让搜索失败）；其它错误照抛。
 
-〔测〕真实库：841 行中 192 行 `retrieval_count > 0`，总和 594（大量记忆从未被显式检索）。
+〔测〕实测库：841 行中 192 行 `retrieval_count > 0`，总和 594（大量记忆从未被显式检索）。
 
 **DSH 适配器接线（task-9 ②，2026-10-07）**：计数点唯一地落在 `ctx_memory` 的 recall 通道
 （`src/dsh/tool-bridge.ts` 的 `list`、以及不带 `id` 的 `get` 分支）——即"显式 agent 检索"。
@@ -914,7 +914,7 @@ UPDATE memories SET seen_count = seen_count + 1, last_seen_at = ?, updated_at = 
 **何时 +1**：内容哈希重复写入时（`write` 命中已存在 / `insertMemoryIdempotent` 撞 UNIQUE）〔码〕`tools.ts:554-558`、`storage-memory.ts:660-677`。
 Rust facade 用 `COALESCE(seen_count, 0) + 1`，容忍历史 NULL〔码〕`mc-store/src/lib.rs:6583-6587`。
 
-⚠️ **注意：这不是"每次被注入 +1"**——`seen_count` 是**写入去重计数**，不是注入计数。〔测〕真实库 829 行 =1、11 行 =2、1 行 =3，与之吻合。
+⚠️ **注意：这不是"每次被注入 +1"**——`seen_count` 是**写入去重计数**，不是注入计数。〔测〕实测库 829 行 =1、11 行 =2、1 行 =3，与之吻合。
 
 〔测〕**`last_seen_at` 与 `retrieval_count>0` 的 192 行完全一致**（`SUM(CASE WHEN last_retrieved_at IS NOT NULL…) = 192`），说明 `seen_count` 路径与 `retrieval_count` 路径互不覆盖。
 
@@ -943,7 +943,7 @@ WHERE id = ?
 - 真正的"验证"由 dreamer 的 verify 任务 + `memory_verifications` 表（文件级映射）驱动，不是注入时自动发生
 - `memory_verifications` 表〔码〕`storage-db.ts:1463-1474`：`verified_at=0` 表示"已映射文件但未内容验证"〔码〕注释 `:1466-1467`
 
-〔测〕真实库 **841 行全部 `unverified`，0 行 `verified_at` 非空**。⇒ 我们的写路径**不应该**去写 verification（那是 dreamer 的活）。
+〔测〕实测库 **841 行全部 `unverified`，0 行 `verified_at` 非空**。⇒ 我们的写路径**不应该**去写 verification（那是 dreamer 的活）。
 
 ### 9.4 `classified_at`
 
@@ -953,7 +953,7 @@ classify（dreamer）打点；**即使没有任何列值变化也 stamp**，以�
 
 ## 10. 并发写入安全
 
-### 10.1 连接级设置（真实库实测）
+### 10.1 连接级设置（实测库实测）
 
 〔测〕`PRAGMA journal_mode = "wal"`（**库级持久**）、`PRAGMA foreign_keys = 1`（连接级；由写入者设置）。
 
@@ -1030,7 +1030,7 @@ db.exec("PRAGMA journal_mode=WAL");      // 库级持久，重复设置是无害
 
 ## 11. 写入 SQL 原文（可直接照抄到 `node:sqlite`）
 
-以下全部为可粘贴语句，占位符是 `?`（位置参数）。列名/顺序与真实库逐字一致〔测〕。
+以下全部为可粘贴语句，占位符是 `?`（位置参数）。列名/顺序与实测库逐字一致〔测〕。
 
 ### 11.1 `write`（新增）— TS 版本
 
@@ -1115,7 +1115,7 @@ ON CONFLICT(project_path) DO UPDATE SET
   updated_at = excluded.updated_at
 ```
 
-⚠️ **TS 的 `insertMemory` 不写这个水位**（由 embedding backfill 自己扫 `MAX(id)`）。若我们想与 Rust 宿主一致，可以写；若不想引入额外耦合，可省略——但要知道两边行为不同。〔测〕真实库 `memory_embedding_watermarks` 当前为**空表**。
+⚠️ **TS 的 `insertMemory` 不写这个水位**（由 embedding backfill 自己扫 `MAX(id)`）。若我们想与 Rust 宿主一致，可以写；若不想引入额外耦合，可省略——但要知道两边行为不同。〔测〕实测库 `memory_embedding_watermarks` 当前为**空表**。
 
 ### 11.3 `update`
 
@@ -1228,7 +1228,7 @@ INSERT INTO memory_mutation_log
 VALUES (?, 'archive', ?, NULL, NULL, NULL, ?)
 ```
 
-〔测〕真实库 `metadata_json` 实例：`{"archive_reason":"docs/architecture/field-normalization.md 不存在于仓库…"}`。
+〔测〕实测库 `metadata_json` 实例：`{"archive_reason":"docs/architecture/example.md 不存在于仓库…"}`。
 
 ### 11.6 `get` / `list` 读取
 
@@ -1330,13 +1330,13 @@ ON CONFLICT(project_path) DO UPDATE SET
 
 〔测〕
 - `node --version` → **v24.15.0**
-- `bun --version` → 1.4.0（`<path>`）
+- `bun --version` → 1.4.0（`%USERPROFILE%\.bun\bin\bun.exe`）
 - `node:sqlite` 导出：`DatabaseSync, StatementSync, Session, constants, backup`
 - 类型剥离在 Node 24 **默认开启**；但 strip-only **不支持** enum / namespace / **参数属性**，需要 `--experimental-transform-types`
 
 ### 12.2 逐个候选实测结果
 
-**实验方式**：临时 harness 放在 `$env:TEMP`，用 `await import("file:///D:/…")`。
+**实验方式**：临时 harness 放在 `$env:TEMP`，用 `await import("file:///<path>")`。
 
 **第一轮 — 裸 Node 24（无任何 flag/hook）**：
 
@@ -1385,10 +1385,10 @@ import { register } from 'node:module';
 register('./hooks.mjs', import.meta.url);
 ```
 
-运行（**Windows 上 `--import` 必须传 `file://` URL，传裸 `C:\…` 会 `ERR_UNSUPPORTED_ESM_URL_SCHEME: Received protocol 'c:'`**）：
+运行（**Windows 上 `--import` 必须传 `file://` URL，传裸盘符路径会 `ERR_UNSUPPORTED_ESM_URL_SCHEME: Received protocol 'c:'`**）：
 
 ```powershell
-node --experimental-transform-types --import file:///C:/…/register.mjs probe.mjs
+node --experimental-transform-types --import file:///<path>/register.mjs probe.mjs
 ```
 
 结果：
@@ -1412,9 +1412,9 @@ node --experimental-transform-types --import file:///C:/…/register.mjs probe.m
 - enum/namespace/decorator：候选集合里**没有**，不是阻塞点。
 - `shared/sqlite.ts` 有**顶层 `await`**（`:189`）：import 它的模块必须也是 ESM 且接受异步初始化。
 
-### 12.5 真实库（只读）验证
+### 12.5 实测库（只读）验证
 
-〔测〕用 `node:sqlite` 的 `new DatabaseSync(path, { readOnly: true })` 直接打开用户真实库（**只读**，未做任何写；未备份、未 checkpoint、未触碰 `-wal`/`-shm`）：
+〔测〕用 `node:sqlite` 的 `new DatabaseSync(path, { readOnly: true })` 直接打开用户实测库（**只读**，未做任何写；未备份、未 checkpoint、未触碰 `-wal`/`-shm`）：
 
 - `PRAGMA user_version` → `0`（**不是版本号**）
 - `schema_migrations` → **94 行，MAX(version)=94**，最新一条 description = `store LKG prefixes as slices and replay decisions as rows instead of growing records`
@@ -1450,7 +1450,7 @@ node --experimental-transform-types --import file:///C:/…/register.mjs probe.m
 ```powershell
 $tmp = Join-Path $env:TEMP "mc-import-probe"; New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 # hooks.mjs / register.mjs 见 §12.3
-$repo = "<path>"
+$repo = "<upstream-checkout>"
 $url  = "file:///$repo/packages/plugin/src/features/magic-context/memory/storage-memory.ts"
 node --experimental-transform-types --import "file:///$(($tmp -replace '\\','/'))/register.mjs" `
   --input-type=module -e "await import('$url'); console.log('OK')"
@@ -1484,7 +1484,7 @@ node --experimental-transform-types --import "file:///$(($tmp -replace '\\','/')
 
 - epoch bump（除**显式外部编辑**场景；dashboard 语义）
 - `memory_embedding_watermarks`（TS 路径本来就不写）
-- `verification_status` / `verified_at` / `memory_verifications`（dreamer 专责；真实库 100% unverified）
+- `verification_status` / `verified_at` / `memory_verifications`（dreamer 专责；实测库 100% unverified）
 - `mural_cue*` 的**写入**（我们只清空）
 - `retrieval_count` / `last_retrieved_at`（telemetry；可选，且必须在显式检索时才 +1）
 - 硬 `delete`（建议完全不暴露）
@@ -1525,23 +1525,23 @@ import { resolveWorkspaceIdentitySet, resolveWorkspaceShareCategories }
 **代价/注意事项**：
 - 进程启动必须带 `--experimental-transform-types`（参数属性）与 loader hook（无扩展名解析）。DSH 若不能控制 node 启动参数，这个方案就要退回"复制这几个文件 + 加扩展名"，或预先构建。
 - 会打印 `ExperimentalWarning: Transform Types is an experimental feature`。
-- 相对路径的深度要按 `packages/dsh-plugin/src/...` 的实际位置调整。
+- 相对路径的深度要按 `src/...` 的实际位置调整。
 
 ### 13.3 **不建议**复刻的部分与理由
 
 | 不建议复刻 | 理由 |
 |---|---|
 | `tools/ctx-memory/tools.ts` 整层 | 依赖未安装的 `@opencode-ai/plugin`；且含 OpenCode 专属的 `toolContext.agent`/`directory`/`sessionID`、curate 轮转、imitated-reduced-args 解包。**语义照抄，代码用我们自己的工具定义**。 |
-| FTS 索引维护 | 真实库靠 `memories_ai/ad/au` 触发器；再写一遍会双写并损坏 `memories_fts`。 |
+| FTS 索引维护 | 实测库靠 `memories_ai/ad/au` 触发器；再写一遍会双写并损坏 `memories_fts`。 |
 | 翻转 `context_privilege_state.enabled=1` | 这是 MC 特权写入者协议（`withPrivilegedWriter`），要求 `enabled` 在同一 `BEGIN IMMEDIATE` 内从 1 置回 0，且"第二连接永不可见 1"。冒充会破坏该不变量并可能让另一宿主在错误窗口绕过守卫。**正确做法是 detection + 让路**。 |
 | `bumpProjectMemoryEpoch` 用于**会话内**写 | 会击穿 prompt-cache 前缀——这正是 m[0]/m[1] 分裂要解决的 bug（`inject-compartments.ts:1926-1935`）。我们应与 MC 一致：additive → 水位；non-additive → mutation log。 |
 | `bumpEpochsForWorkspaceMembers` 的 workspace 广播 | 只在 workspace 成员资格/共享类别**结构变化**时用；逐条记忆写入用它会造成 6 个项目同时 HARD fold。 |
 | `memory_embeddings` 的 embedding provider 链 | 我们已实现只读召回；写入侧 embedding 可交由 MC 的 backfill（它按 `MAX(id)` / `memory_embedding_watermarks` 自扫）。若要写，只需 `DELETE FROM memory_embeddings WHERE memory_id = ?`（内容变更时的失效）。 |
 | `mural_cue*` 压缩逻辑 | 属 mural 渲染子系统；我们只做"内容变更时清空"。 |
-| `memory_verifications` / validate / verify | dreamer 专责；真实库 100% `unverified`、0 行 `verified_at`。 |
+| `memory_verifications` / validate / verify | dreamer 专责；实测库 100% `unverified`、0 行 `verified_at`。 |
 | dreamer 的 curate/expire/classify 任务 | 属另一条产品线（记忆策展），不是"写一条记忆"的最小契约。见同目录的另一份 promotion 契约。 |
 | 硬 `delete` | 已注入的活跃会话收不到 `<removed>`（不写 log），会造成"库里没了、上下文里还在"的分裂。**建议我们的写路径不暴露 delete**。 |
-| `metadata_json` 的自由写入 | 真实库中只用于 `archive_reason`；自由写入会污染 dashboard 展示与 dreamer 判断。 |
+| `metadata_json` 的自由写入 | 实测库中只用于 `archive_reason`；自由写入会污染 dashboard 展示与 dreamer 判断。 |
 
 ---
 

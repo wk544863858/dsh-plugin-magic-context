@@ -1,0 +1,26 @@
+# Line endings and binary detection.
+#
+# The repository is developed on Windows and run on Windows, macOS and Linux,
+# so the tree is normalized to LF: every text file is stored LF and checked
+# out LF. Windows batch files are the one deliberate exception (cmd.exe wants
+# CRLF), and binary assets are marked so git never diffs, merges or converts
+# them.
+
+* text=auto eol=lf
+
+# Windows batch files: CRLF in the working tree, on every platform.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets — no text conversion, no textual diff, no merge.
+*.wasm binary
+*.tgz binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.db binary
+*.sqlite binary
+*.sqlite3 binary

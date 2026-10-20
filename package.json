@@ -2,8 +2,32 @@
   "name": "dsh-plugin-magic-context",
   "version": "0.9.0",
   "description": "Magic Context for DeepSeek Harness: reversible context reclaim, an out-of-band historian, an m[0]/m[1] baseline, project memories in the plugin's own corpus, and the compaction seam.",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "magic-context",
+    "context-management",
+    "context-compaction",
+    "memory",
+    "llm",
+    "ai-agent",
+    "typescript"
+  ],
+  "homepage": "https://github.com/wk544863858/dsh-plugin-magic-context#readme",
+  "bugs": {
+    "url": "https://github.com/wk544863858/dsh-plugin-magic-context/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wk544863858/dsh-plugin-magic-context.git"
+  },
   "type": "module",
   "license": "MIT",
+  "author": "wukai",
+  "engines": {
+    "node": ">=22.19"
+  },
   "main": "lib/index.js",
   "exports": {
     ".": {
@@ -16,10 +40,10 @@
   "files": [
     "lib",
     "vendor",
-    "assets",
     "cordis.patch.yml",
     "README.md",
-    "NOTICE"
+    "NOTICE",
+    "LICENSE"
   ],
   "dsh": {
     "bundle": {
@@ -51,19 +75,19 @@
     "@deepseek-ai/schemastery": "*"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.5-alpha.1",
-    "@deepseek-ai/dsh-agent": "0.2.1-alpha.1",
-    "@deepseek-ai/dsh-agent-loop": "0.2.1-alpha.1",
-    "@deepseek-ai/dsh-compaction": "0.2.1-alpha.1",
-    "@deepseek-ai/dsh-compaction-basic": "^0.2.1-alpha.1",
-    "@deepseek-ai/dsh-llm": "0.2.1-alpha.1",
-    "@deepseek-ai/dsh-session": "0.2.1-alpha.1",
-    "@deepseek-ai/dsh-session-projection": "0.2.1-alpha.1",
-    "@deepseek-ai/dsh-session-title": "0.2.1-alpha.1",
-    "@deepseek-ai/dsh-system-prompt": "0.2.1-alpha.1",
-    "@deepseek-ai/dsh-token-meter": "^0.2.1-alpha.1",
-    "@deepseek-ai/dsh-tools": "0.2.1-alpha.1",
-    "@deepseek-ai/schemastery": "3.18.5-alpha.1",
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-agent": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-agent-loop": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-compaction": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-compaction-basic": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-session": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-session-projection": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-session-title": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-token-meter": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.1",
+    "@deepseek-ai/schemastery": "3.18.5",
     "@huggingface/tokenizers": "0.2.0",
     "@types/node": "^24.19.1",
     "onnxruntime-common": "1.31.0-dev.20260911-2a43ec07e",

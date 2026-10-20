@@ -298,7 +298,7 @@ export function createAdapterPort(db, now, corpus) {
       if (existing !== undefined) {
         // 同键候选默认只读复用。唯一例外 = **死批准**：它在 corpus 里的已发布副本已经不是
         // active/permanent（被归档），却永久占着唯一键，挡住这份当前文本唯一诚实的提案。
-        // 此时原地重新提审（content/state 回 pending），既不发布、也不 DELETE（2026-10-16 用户裁决）。
+        // 此时原地重新提审（content/state 回 pending），既不发布、也不 DELETE（2026-10-16 人工裁定）。
         // 活批准与人工拒绝一律不动：前者说明文本已在库里，后者是人说过的"不"。
         // 死活要问 corpus（memories 表不在 adapter 库里），所以这个口必须拿到 corpus 连接。
         if (existing.state === 'approved') {

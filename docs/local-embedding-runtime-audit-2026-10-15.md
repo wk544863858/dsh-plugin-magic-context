@@ -11,7 +11,7 @@ MC 0.49.1 release notes（`Fixed › Local embeddings`）：
 > embeddings under Bun and Node, including compiled Bun hosts. On Windows, ONNX Runtime uses the
 > operating system's event tracing instead, and a one-time log line explains this.
 
-同一版 `local_runtime` 配置项的说明（tarball 实证 `<tmp>/mc0491/package/dist/index.js:9214`）锁定对象：
+同一版 `local_runtime` 配置项的说明（MC 0.49.1 npm tarball 的 `dist/index.js:9214` 实证）锁定对象：
 
 > `'auto'` uses native under Node and uses WASM under Bun versions before 1.4.0 … **Inference runs in a
 > dedicated worker after disabling POSIX telemetry in the native process environment.** … **Windows
@@ -19,7 +19,7 @@ MC 0.49.1 release notes（`Fixed › Local embeddings`）：
 
 即：上游的遥测面属于 **native（onnxruntime-node / C++）** 运行时——POSIX 进程环境里的遥测、Windows 的 ETW。
 其 `memory/onnx-telemetry.ts` 模块在发布包 bundle 内是空实现（`var init_onnx_telemetry = () => {}`，
-`<tmp>/mc0491/package/dist/index.js:47154-47160`），真正动作发生在原生加载之前。
+MC 0.49.1 npm tarball 的 `dist/index.js:47154-47160`），真正动作发生在原生加载之前。
 
 ## 2. 我们的实际运行时（证据）
 

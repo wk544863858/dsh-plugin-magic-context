@@ -423,9 +423,9 @@ describe('the domain admission cap (domains.cap)', () => {
  *
  * UNIQUE(project_path, category, normalized_hash) means the identical text can
  * never get a second row — so a publish that only bumped the recurrence counter
- * would mark the candidate APPROVED while leaving the row invisible. Measured in
- * the live store: candidate #1 was approved at 17:56 and row #1420 stayed
- * archived, i.e. the human's approval put nothing live.
+ * would mark the candidate APPROVED while leaving the row invisible. Observed
+ * against the live store: an approved candidate's domain row stayed archived,
+ * i.e. the human's approval put nothing live.
  */
 describe('publishing onto a withdrawn copy', () => {
   it('revives the archived row, and a further publish is the ordinary idempotent bump', () => {

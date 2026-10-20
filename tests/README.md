@@ -1,7 +1,7 @@
 # The adapter's test suite
 
-72 specs plus the shared fixtures under `helpers/`. They run in this repository,
-against this repository's `src/`:
+73 specs / 761 tests, plus the shared fixtures under `helpers/`. They run in this
+repository, against this repository's `src/`:
 
 ```bash
 npm install
@@ -45,8 +45,9 @@ checkout is needed. Nothing else in the suite reaches outside this repository.
 
 ## History
 
-The suite used to execute inside a DSH checkout, mirrored there by
-`scripts/sync-specs.mjs` and addressed by absolute path, because these sources
-had no `node_modules` of their own to resolve even the bare `vitest` specifier.
+The suite used to execute inside a DSH checkout, mirrored there by an old sync
+script and addressed by absolute path, because these sources had no
+`node_modules` of their own to resolve even the bare `vitest` specifier.
 Extraction to a standalone package removed that reason: the suite now runs where
-it lives, and the mirror, the host resolver and the bootstrap script are gone.
+it lives, and the old mirror script, the host resolver and the bootstrap script
+were removed when the suite was extracted.

@@ -8,7 +8,7 @@
  * 产出：① 质量——各模型在融合网格下的 hit@10/MRR/recall@10（全部/中文），
  *        与 MiniLM 基线同代码对比；判据 = 中文 recall@10 相对改善 ≥15%。
  *      ② 性能——池均每条嵌入毫秒（WASM 后端，与线上一致）。
- * 模型资产下载到 <tmp>/<key>/，不碰线上 models/ 缓存。
+ * 模型资产下载到 .tmp-eval-models/<key>/，不碰线上 models/ 缓存。
  * 用法：node scripts/embedder-precheck.mjs [--skip-minilm]
  */
 import { DatabaseSync } from 'node:sqlite'
@@ -22,7 +22,7 @@ import { loadQueries, requiredTermOf, termsOf } from './retrieval-eval.mjs'
 
 const CORPUS = join(homedir(), '.local', 'share', 'cortexkit', 'magic-context-dsh-poc', 'memories.db')
 const LIVE_CACHE = join(homedir(), '.local', 'share', 'cortexkit', 'magic-context-dsh-poc', 'models')
-const OUT_ROOT = join(process.cwd(), '<tmp>')
+const OUT_ROOT = join(process.cwd(), '.tmp-eval-models')
 const MAX_SEQ = 512
 
 const MODELS = [

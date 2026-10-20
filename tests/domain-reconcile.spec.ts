@@ -1,14 +1,14 @@
 /**
  * 域行对账与修复：纯函数用例 + 合成库上的 CLI 用例。
  *
- * 这份 spec 的八条要求（对应用户放行的验收清单）：
+ * 这份 spec 的八条要求（对应人工裁定的验收清单）：
  *   ① 健康  ② 源行不存在  ③ 源行已归档  ④ 源行已改写  ⑤ 未关联不算故障
  *   ⑥ 只读：applyRepair 不被调用、库一行不改
  *   ⑦ 修复路径绝不发布（用一个会抛错的 publish seam 反证）
  *   ⑧ 幂等：同一分歧重复 plan / apply 不重复暂存
  *
- * 之外还钉住三件在真库上会咬人的事：域行已归档时跳过（真库里正好 2 条，`healthy`
- * 必须是 18 而不是 16）、`permanent` 源算活着、以及 `--write` 的备份闸门（没有可验证
+ * 之外还钉住三件在实测数据上会咬人的事：域行已归档时跳过（归档行不计入 `healthy`）、
+ * `permanent` 源算活着、以及 `--write` 的备份闸门（没有可验证
  * 的备份就拒绝写，一行都不写）。
  */
 import { DatabaseSync } from 'node:sqlite'
@@ -196,7 +196,7 @@ describe('auditDomainDivergences', () => {
     expect(report).toMatchObject({ checked: 2, healthy: 1, unlinked: 1 })
   })
 
-  it("④''' 「批准」不是覆盖：副本已被归档的同键候选挡不住分歧（真库 #1/#1420 的形状）", () => {
+  it("④''' 「批准」不是覆盖：副本已被归档的同键候选挡不住分歧（实测数据的形状）", () => {
     const report = audit({
       candidates: [
         candidate({ id: 3, normalizedHash: 'hash-old', sourceMemoryId: 1311 }),
@@ -258,7 +258,7 @@ describe('auditDomainDivergences', () => {
     expect(report).toMatchObject({ checked: 1, healthy: 1, unlinked: 0 })
   })
 
-  it('域行本身已归档 ⇒ 跳过、不计分歧（真库里正好两条，healthy 才是 18）', () => {
+  it('域行本身已归档 ⇒ 跳过、不计分歧（归档行不计入 healthy）', () => {
     const report = audit({
       candidates: [
         candidate({ id: 1, normalizedHash: 'hash-a' }),          // 域行已归档 → 跳过
@@ -920,7 +920,7 @@ describe('scripts/domain-reconcile.mjs（合成库）', () => {
 
   it('--write 撞上"死批准"（已发布副本已归档）⇒ 用它自己的键原地重新提审，不新建、不 DELETE', () => {
     const seed = seedDivergentBanks()
-    // 真库里就是这个形状：候选 1 已批准，但它的域行 #1420 已被归档 —— 键被占着，什么都没发布
+    // 实测数据里就是这个形状：候选已批准，但它的域行已被归档 —— 键被占着，什么都没发布
     const staleId = insertCandidate(seed.adapterPath, {
       domainId: ORG,
       content: '已批准候选的正文，但副本已被撤回',

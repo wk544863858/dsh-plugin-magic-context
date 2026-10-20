@@ -4,6 +4,7 @@
  *
  *   packages/core/agent-loop/tests/mock-adapter.ts
  *   https://github.com/deepseek-ai/deepseek-harness  (MIT)
+ *   Copyright (c) 2026 DeepSeek
  *
  * The body below is byte-identical to the upstream file; only this header was
  * added. Taken from the checkout pinned in NOTICE.

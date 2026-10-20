@@ -11,10 +11,10 @@ import { defineConfig } from 'vitest/config'
  * adapter is written against — so the suite is simply part of the repository.
  *
  * The `@deepseek-ai/*` versions in `devDependencies` are the *tested* baseline:
- * DSH publishes a coordinated dist-tag per release (`dsh-0-2-1-alpha-1` at the
- * time of writing), which is what the pinned `0.2.1-alpha.1` matches. Anything
- * labelled `latest` on npm is an older release line and is not what this
- * adapter is written against.
+ * DSH publishes a coordinated dist-tag per release (`next` = `0.2.1-rc.1` at
+ * the time of writing), which is what the pinned `0.2.1-rc.1` matches — the
+ * same line the desktop host currently runs. Anything labelled `latest` on npm
+ * is an older release line and is not what this adapter is written against.
  */
 export default defineConfig({
   test: {

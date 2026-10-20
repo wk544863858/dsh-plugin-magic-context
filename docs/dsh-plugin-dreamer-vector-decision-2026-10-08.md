@@ -46,7 +46,7 @@
 `src/dsh/maintenance-wiring.ts` 的既有 interval，不新增定时器。
 
 **验收**：新 spec 覆盖"无候选 → 零写行"与"有候选 → 行数/去重正确"两条；tick tally
-增加 promoted 计数并进入 telemetry health；先在真实库上跑一次 dry-run 对比行数。
+增加 promoted 计数并进入 telemetry health；先在实测库上跑一次 dry-run 对比行数。
 
 ### D3 verify 的"无工具降级"是**有意偏差**（记录，不修）
 

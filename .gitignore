@@ -28,6 +28,12 @@ coverage/
 # `dsh plugin --profile <name> add .\<file>.tgz`). Anchored like /lib/.
 /*.tgz
 
+# Hand-out bundles (`npm run pack:dist` = tarball + tools/install-magic-context.bat).
+# The two travel together because the profile manifest records the tarball's
+# absolute path, so the installer moves it into a stable archive first.
+# Anchored, for the same reason /lib/ is.
+/dist/
+
 # Logs
 *.log
 npm-debug.log*

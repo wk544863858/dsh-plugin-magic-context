@@ -28,8 +28,8 @@ DSH is a separate project and is **not** included here; its packages are
 consumed as dependencies. The adapter implements the DSH plugin seams
 (`@deepseek-ai/cordis`, `@deepseek-ai/dsh-agent`, `-compaction`, `-llm`,
 `-session`, `-tools`, and the client/session services). It is written against
-DSH **0.2.1-alpha.1** — checkout `e0f83cbfe`, published on npm under the
-coordinated dist-tag `dsh-0-2-1-alpha-1`.
+DSH **0.2.1-rc.1** — checkout `1600d8a1e`, published on npm under the
+coordinated dist-tag `next`.
 
 Note that npm's `latest` tag on those packages is an *older* release line
 (`0.0.1-rc.x` / `0.1.0-rc.6`); the pinned `devDependencies` are what the suite
@@ -38,6 +38,8 @@ than MIT where their own metadata says so; that is their licence, not this
 repository's.
 
 ## Vendored file: `tests/helpers/mock-adapter.ts`
+
+MIT License, Copyright (c) 2026 DeepSeek.
 
 Taken verbatim from DSH (`packages/core/agent-loop/tests/mock-adapter.ts`,
 MIT) so that this repository's suite runs without a DSH checkout. The body is
@@ -49,10 +51,11 @@ MIT License, Copyright (c) Microsoft Corporation.
 
 Three files taken verbatim from `onnxruntime-web`
 **1.31.0-dev.20260914-8d85527a0** (`dist/ort.node.min.mjs`,
-`dist/ort-wasm-simd-threaded.jsep.mjs`, `dist/ort-wasm-simd-threaded.jsep.wasm`)
+`dist/ort-wasm-simd-threaded.mjs`, `dist/ort-wasm-simd-threaded.wasm`)
 so the local embedding lane runs on WebAssembly without the ~287 MB native
 `onnxruntime-node` package. Verified against the native fp32 pipeline at
-cosine 1.0000000 (2026-10-09). The tokenizers binding (`@huggingface/tokenizers`,
+cosine 1.0000000 (2026-10-09). The upstream MIT license text travels with them
+at `vendor/onnx/LICENSE`. The tokenizers binding (`@huggingface/tokenizers`,
 Apache-2.0) is consumed as a normal npm dependency, not vendored.
 
 ## Everything else

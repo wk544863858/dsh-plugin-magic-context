@@ -1,0 +1,48 @@
+# Dependabot — https://docs.github.com/code-security/dependabot/dependabot-options-reference
+#
+# Weekly, grouped minor/patch updates for npm and for the GitHub Actions used
+# by the CI workflow. Major bumps arrive as individual pull requests so they
+# get read before they are merged.
+version: 2
+
+updates:
+  # Runtime + dev dependencies. `package-lock.json` is the canonical lockfile
+  # (npm is the package manager of record), so Dependabot must update the npm
+  # dependency set here and nowhere else.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    versioning-strategy: increase-if-necessary
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      npm-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  # Workflow actions (actions/checkout, actions/setup-node, ...).
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:15"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      actions-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch

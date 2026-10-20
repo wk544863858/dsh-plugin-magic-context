@@ -26,7 +26,7 @@ vi.setConfig({ testTimeout: 30_000 })
 const tempDirs: string[] = []
 
 function makeRepo(): string {
-  const dir = mkdtempSync(join(homedir(), '<tmp>'))
+  const dir = mkdtempSync(join(homedir(), '.tmp-mc-drift-'))
   tempDirs.push(dir)
   writeFileSync(join(dir, 'file.txt'), 'seed\n')
   execFileSync('git', ['init', '-q'], { cwd: dir })
@@ -36,7 +36,7 @@ function makeRepo(): string {
 }
 
 function makePlainDir(): string {
-  const dir = mkdtempSync(join(homedir(), '<tmp>'))
+  const dir = mkdtempSync(join(homedir(), '.tmp-mc-drift-plain-'))
   tempDirs.push(dir)
   return dir
 }

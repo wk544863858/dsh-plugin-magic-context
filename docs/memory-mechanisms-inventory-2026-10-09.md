@@ -5,9 +5,9 @@
 >
 > **口径**：以 **代码为准**（`src/` + `package.json` v0.4.3，HEAD `70418d40c`），文档只作
 > 旁证；与代码冲突的一律进 §9。锚点 `file:line`；不写未核实的结论，推断项标〔待核〕。
-> **证据方式**：Lead 亲读关键路径（配置/策略/评分/类目/stores/检索/工具/召回/lane），
-> 另有三名只读副手分片交叉核实（存储与写入、检索与注入、生命周期与治理）。
-> §9 中带 ★ 的条目由 Lead 逐条回读代码确认（不是转述）。
+> **证据方式**：对关键路径（配置/策略/评分/类目/stores/检索/工具/召回/lane）做代码走读，
+> 并由分片复核交叉核实（存储与写入、检索与注入、生命周期与治理）。
+> §9 中带 ★ 的条目经逐条回读代码确认（不是转述）。
 >
 > 日期：2026-10-09。适配器自有库 schema **v7**；共享 MC 库契约上限 **v95**。
 >
@@ -20,7 +20,7 @@
 > ③ 全局域 **org 与 machine 均已启用**（machine 另有 LLM 域分类 `autoStage`，adapter 自有库 schema **v10**）；
 >    用户画像 collect 与 review 均已开；
 > ④ 契约库仍 v94（`MEMORY_SCHEMA_MAX_VERSION=95`，无迁移）；巡检 prompt 已到 v8。
-> 现行判据以代码 + [patrol-prompt-v8.md](patrol-prompt-v8.md) 为准。
+> 现行判据以代码为准（巡检 prompt 属内部运维资料，未随仓库发布）。
 
 ---
 
@@ -133,7 +133,7 @@ v4 `journal` → v5 `max_memory_id` → v6 变更游标 + epoch 指纹 → v7 `l
 - `maintenance.evidenceVerify.mode` 默认 `off`，`maxRows` 默认 4。
 - `searchHint` 默认 true、`sessionNotices` 默认 true、`historianEnabled` 默认 true。
 - ~~`policy.compartmentGuardMode` 默认 `observe`、`compartmentEntrantTokens` 200~~ ——
-  **发布护栏已于 2026-10-16 退役**（观测窗 0 命中，用户裁决整段删除；本文其余段落为 10-09 台账原文）；
+  **发布护栏已于 2026-10-16 退役**（观测窗 0 命中，人工裁定整段删除；本文其余段落为 10-09 台账原文）；
   `forceWaitReadyMs` 0 仍为现行缺省。
 - 硬编码不可配置：`CATEGORY_DEFAULT_TTL`、`VERIFY_BATCH=16`、`EXPIRE_BATCH=200`、
   `VERIFY_MAX_TOKENS=32768`、`MAX_FORCED_MEMORIES_PER_DELTA=10`、evidence 四项上限、
@@ -384,7 +384,7 @@ evidence overturned ≥ confirmed（≥3 拍）。
 
 | # | 事项 |
 |---|---|
-| F13 | README 说 schema v6 / MC v94 / "记忆写入未实现" / 路径 `packages/dsh-plugin/…`；`PARITY.md` 头部说 adapter 0.2.0 / schema v6；`docs/dsh-plugin-memory-acceptance.md` 是 v6/v94 时代数字；`memory-promotion-contract.md` §8.2/§10 说"记忆只进 m[0]"、"autoPromote 默认 false"；`upgrade-followup.md:167` 把 from/to 列为已完成 |
+| F13 | README 说 schema v6 / MC v94 / "记忆写入未实现" / 路径 `src/…`；`PARITY.md` 头部说 adapter 0.2.0 / schema v6；`docs/dsh-plugin-memory-acceptance.md` 是 v6/v94 时代数字；`memory-promotion-contract.md` §8.2/§10 说"记忆只进 m[0]"、"autoPromote 默认 false"；`upgrade-followup.md:167` 把 from/to 列为已完成 |
 | F14 | 注释级陈旧：`memory-write.ts:8` 说 "live v94 schema"（常量是 95）；`memory-search.ts:28-30` 说"没有 visibleMemoryIds 抑制"（早已实现）；`memory-search.ts:6` 自称 "ctx_search's memory lane" |
 | F15 | README 的 journal 表列了 `memory-write` kind（不存在，实为 `tool-call`）；`mc-report.mjs:53` 的 `MAJOR_KINDS` 也含它 |
 
@@ -407,7 +407,7 @@ evidence overturned ≥ confirmed（≥3 拍）。
 - drift 的 `rootCache` 是进程级无界 Map。
 - `promote24h` 语义偏窄（事件数 vs GUI 文案"Memories promoted"）。
 - evidence `maxRows`：超上限的 stage-1 破坏性判定在 enforce 下不 deferred，直接落下。
-- 副手未独立复核 MC 真实库 DDL/触发器（本仓无 MC 源码），相关结论采信
+- 副手未独立复核 MC 实测库 DDL/触发器（本仓无 MC 源码），相关结论采信
   `docs/dsh-plugin-memory-write-contract.md` 的转述。
 
 ---

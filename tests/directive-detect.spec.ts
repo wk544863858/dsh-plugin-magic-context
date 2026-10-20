@@ -1,12 +1,11 @@
 /**
  * Directive-shape detection — the confirmation gate's classifier.
  *
- * The corpus is the 2026-10-09 human review of the live profile
- * (docs/user-profile-review-2026-10-09.md): 7 directive-shaped rows, 8
- * descriptive ones, plus synthetic English/Chinese pairs. It is a REGRESSION
- * corpus, not a benchmark: the live rows are the ones this machine actually
- * carries, and any future change to the rule set must not start auto-promoting
- * them.
+ * The corpus is a synthetic regression corpus built to mirror the shape of the
+ * 2026-10-09 human review labels: 7 directive-shaped rows, 8 descriptive ones,
+ * plus three synthetic English/Chinese control pairs. It is a REGRESSION
+ * corpus, not a benchmark: the samples are written to exercise the rule set,
+ * and any future change to it must keep their shapes classified as labelled.
  *
  * The safety property is asymmetric and the assertions say so:
  *   - ZERO false negatives are allowed (a directive read as a description
@@ -34,10 +33,10 @@ const corpus = JSON.parse(
   readFileSync(new URL('./fixtures/directive-corpus.json', import.meta.url), 'utf8'),
 ) as { samples: CorpusSample[] }
 
-/** Measured on 2026-10-09 with this rule set; a regression raises it. */
+/** Measured with this rule set; a regression raises it. */
 const FALSE_POSITIVE_BUDGET = 1
 
-describe('directive detection on the live-profile corpus', () => {
+describe('directive detection on the synthetic regression corpus', () => {
   it('never reads a directive as a description (the dangerous direction)', () => {
     const misses = corpus.samples.filter(
       sample => sample.expected === 'directive' && classifyProfileShape(sample.text).shape !== 'directive',

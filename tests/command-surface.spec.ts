@@ -405,7 +405,7 @@ describe('/ctx-global promote --domain', () => {
     seedDomain(s)
     seedMachineDomain(s)
     const contract = makeContract([
-      { id: 10, projectPath: 'git:alpha', content: '提交信息走 <tmp>。' },
+      { id: 10, projectPath: 'git:alpha', content: '提交信息走 .tmp-commit。' },
     ])
     const result = planGlobalCommand(s, 'promote 10 --domain dir:global:nope', NOW, contract)
     expect(result.kind).toBe('error')

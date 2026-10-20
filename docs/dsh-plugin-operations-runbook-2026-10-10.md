@@ -1,10 +1,10 @@
 # 运维手册（可执行清单）
 
-> 规划 WP14 的第二个交付物（第一个是巡检 prompt v5，见 [`patrol-prompt-v5.md`](patrol-prompt-v5.md)）。
+> 规划 WP14 的第二个交付物（第一个是内部巡检 prompt，未随仓库发布）。
 > 来源：设计 v2 §7「稳态运维」的节拍表 —— 那份表回答"什么时候做什么"，本文回答
 > **"敲哪条命令、看到什么算正常、看到什么该动手、动不了怎么办"**。
 >
-> **脚本类命令全部在真库上实跑过**（2026-10-10），含备份命令与 `verify` 的退出码；
+> **脚本类命令全部在实测库上实跑过**（2026-10-10），含备份命令与 `verify` 的退出码；
 > DSH 里的斜杠命令（`/ctx-profile`、`/ctx-global`）无法从终端跑，其用法逐字取自
 > `src/dsh/command-surface.ts` 的 `PROFILE_USAGE` / `GLOBAL_USAGE`。
 
@@ -53,7 +53,7 @@ node scripts/dsh-doctor.mjs
 | 看到 | 含义 | 动作 |
 |---|---|---|
 | `全部域停用：路由已就绪但未接管` | 正常态（**每个域开关默认 off 是刻意的**） | 无需动作；要接管见 §5 |
-| `dir:global:org [org] 停用 · budget 768 · cap 30 · 5 成员` | 成员已导入、开关未开 | 无需动作（这是当前真库状态） |
+| `dir:global:org [org] 停用 · budget 768 · cap 30 · 5 成员` | 成员已导入、开关未开 | 无需动作（这是当前实测库状态） |
 | `画像确认队列待确认 N 条（/ctx-profile list）` | **约束型内容在等人** | 进 DSH 敲 `/ctx-profile list` → `confirm <id>` 或 `reject <id> --yes` |
 | `全局候选待定 N 条（/ctx-global candidates）` | org/machine 候选待复核 | `/ctx-global candidates` → `approve <id> --yes` 或 `reject-candidate <id> --yes` |
 | `已启用却没有任何成员` | **病态**：域看起来配好了却看不到任何项目 | 见 §6 第 2 条 |
@@ -150,7 +150,7 @@ npm run phase all                              # 阶段门 A–D
 1. 默认已全开——分发即用。要收窄时：先 `excludeProjects` 排除不该共享的项目
 2. 首次真写前做一次备份（下面命令），此后每周体检即可
 
-备份（真写前必做；**下面这条在真库上实测过**，输出 `backup ok: ... memories= 1359`）：
+备份（真写前必做；**下面这条在实测库上实测过**，输出 `backup ok: ... memories= 1359`）：
 
 ```powershell
 node -e 'const {DatabaseSync}=require("node:sqlite"); const p=process.env.USERPROFILE+"/.local/share/cortexkit/magic-context-dsh-poc/memories.db"; const out=p.replace(/\.db$/,"")+"-backup-"+Date.now()+".db"; new DatabaseSync(p).exec("VACUUM INTO ''"+out+"''"); console.log("backup ok:", out)'
@@ -174,7 +174,7 @@ node -e 'const {DatabaseSync}=require("node:sqlite"); const p=process.env.USERPR
    `read-only` 表示 corpus fence 生效，**所有写路径都在失败**（这是历史上出现过的
    "全写失败却对外宣称 read-write"形态，acceptance 的 `fence.exposure` 专门盯它）。
 5. **向量覆盖率下降** ⇒ `memory.vectorBackfill` 自 2026-10-12 起缺省 on
-   （写入路径不嵌入，默认关曾让新记忆永远无向量）；真库 dry-run 结论是
+   （写入路径不嵌入，默认关曾让新记忆永远无向量）；实测库 dry-run 结论是
    parity 1.000000 PASS。排查前先确认主导空间：
    **只允许写 dominant `model_id`**，写错就是第三个空间（见 §7）。
    本地模型的缓存在**适配器库同级的 `models/`**（`defaultEmbeddingCacheDir`），~87 MB；
@@ -193,7 +193,7 @@ node -e 'const {DatabaseSync}=require("node:sqlite"); const p=process.env.USERPR
    结构继续 append）。
 4. **不把约束型候选直接写进 `user_memories`**：必须过二次确认队列（未确认 ⇒ 注入与检索均
    不可见，这是设计不变量 I8）。
-5. **不动 `<session-id>` 之外的巡检任务**：`schedule_*` 是会话作用域，
+5. **不动其他会话作用域的定时任务**：`schedule_*` 是会话作用域，
    禁止带外编辑 `schedule.json`。
 6. **不用 `pnpm run`**（本仓会 EPERM 中断）；统一 `node node_modules/...` 或 `npm run`。
 
@@ -209,7 +209,7 @@ npm run phase d          # 含 domain-checks / report-classify / strip-drill / �
 
 - `tests/domain-checks.spec.ts` —— doctor 每条 WARN 与 acceptance 每条 `domain.*` 都有
   **触发用例 + 静默用例**（人为破坏必须报警）；含"未建域 ≠ 零域""语料库句柄缺失 ≠ 池子空"。
-- `tests/report-classify.spec.ts` —— historian 成因分类用真库语料逐字回归。
+- `tests/report-classify.spec.ts` —— historian 成因分类用实测库语料逐字回归。
 - `tests/strip-drill.spec.ts` —— 无任何 MC 组件下两条闭环（org / user）各走完 5 步。
 - `tests/phase-map.spec.ts` —— 任何空阶段直接判失败（门禁不能靠"没跑"变绿）。
 

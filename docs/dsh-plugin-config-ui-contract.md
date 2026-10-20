@@ -37,7 +37,7 @@
 - **行页只在被注册者点名时存在**；没有注册者时，行上只有开关（启用/禁用），没有任何配置入口。
   〔档〕`ui-plugin-manager/README.md:69,93`
 
-结论：对 `@cortexkit/dsh-magic-context#magic-context-dsh` 这一行，**只要没有人注册该 key，用户点进去只能看到行状态和开关，没有任何配置表单**。今天我确认没有这样一个注册者存在（我们没有任何 client 半侧产物）。
+结论：对 `dsh-plugin-magic-context#magic-context-dsh` 这一行，**只要没有人注册该 key，用户点进去只能看到行状态和开关，没有任何配置表单**。今天我确认没有这样一个注册者存在（我们没有任何 client 半侧产物）。
 
 ### 1.2 设置页（Settings）——只有官方手写 section，没有"所有插件"列表
 
@@ -223,7 +223,7 @@ export function resolveConfig(runtime: Plugin.Runtime, config: any) {
 
 | 层 | 内容 | 谁写 |
 | --- | --- | --- |
-| 包内 patch（`packages/dsh-plugin/cordis.patch.yml`） | `- insert: [{ id, name, config }]` | 仓库维护者（发布物） |
+| 包内 patch（`cordis.patch.yml`） | `- insert: [{ id, name, config }]` | 仓库维护者（发布物） |
 | profile patch（`cordis.patch.yml`） | `- id: <rowId>` 覆盖行（`disabled` / `config` / …） | 用户 / plugin-manager / configEditor |
 
 组合顺序：**各 bundle layer（按 `dsh.profile.bundles` 顺序）→ profile `cordis.patch.yml` → `--patch` overlay**。
@@ -245,11 +245,11 @@ for (const [key, value] of Object.entries(overrides)) {
 
 ```js
 applyEntryPatches(
-  [{ id:'magic-context-dsh', name:'@cortexkit/dsh-magic-context',
+  [{ id:'magic-context-dsh', name:'dsh-plugin-magic-context',
      config:{ registerCompactionEngine:false, policy:{ executeThreshold:0.8, forceThreshold:0.95 } } }],
   [{ id:'magic-context-dsh', config:{ policy:{ executeThreshold:0.5 } } }],
   warn)
-// => [{ id:'magic-context-dsh', name:'@cortexkit/dsh-magic-context',
+// => [{ id:'magic-context-dsh', name:'dsh-plugin-magic-context',
 //       config:{ policy:{ executeThreshold:0.5 } } }]
 // registerCompactionEngine 与 forceThreshold 全部消失
 ```
@@ -268,7 +268,7 @@ applyEntryPatches(
 - 上述 rows 来自 `flatten(composeEntries([patches.filter(item => item.insert !== undefined)]))`。
   〔码〕同上 `:664`
 - UI 配置 key = `${包名}#${rowId}` 〔码〕`config-ledger.ts:36-38`
-  → 我们是 `@cortexkit/dsh-magic-context#magic-context-dsh`。
+  → 我们是 `dsh-plugin-magic-context#magic-context-dsh`。
 - 行可寻址性（开关能否落到 patch）要求：id 唯一、`name` 与被保护模块匹配、且父级是 `include`；否则标 `unaddressable` / `management-required`。
   〔码〕`plugin-manager/src/index.ts:256-271`
 
@@ -292,7 +292,7 @@ applyEntryPatches(
 | 插件值读取 | 直接读 `config.policy.executeThreshold`（数字） | ❌ volatile 后是 `{get()}` 引用对象 |
 | 界面 | 无 client 半侧 | ❌ 无入口 |
 
-### 6.1 修改 `packages/dsh-plugin/package.json`
+### 6.1 修改 `package.json`
 
 ```jsonc
 {
@@ -318,7 +318,7 @@ applyEntryPatches(
 - `dsh.client` 的合法字段只有 `platform`（必填 string）、`inject`、`external`、`immediately`；解析器会拒绝其它形状。〔码〕`client/modules/src/client/manifest.ts:161-181`
 - `dsh.client` 声明了但 `exports["./client"]` 缺失 → Host 侧扫描直接抛错。〔码〕`client/modules/src/index.ts:847,194-204`
 
-### 6.2 修改 `packages/dsh-plugin/src/index.ts`（host 侧）
+### 6.2 修改 `src/index.ts`（host 侧）
 
 **第一步**：`import z from '@deepseek-ai/schemastery'`
 
@@ -390,7 +390,7 @@ export async function apply(ctx, config) { /* ... */ }
 ```yaml
 - insert:
     - id: magic-context-dsh
-      name: '@cortexkit/dsh-magic-context'
+      name: 'dsh-plugin-magic-context'
       config:
         registerCompactionEngine: false
 ```
@@ -401,7 +401,7 @@ export async function apply(ctx, config) { /* ... */ }
 
 没有这一步，host 侧 schema 再完整，用户也**看不到任何入口**（§1）。
 
-1. 新文件 `packages/dsh-plugin/src/client/index.ts`（browser half，模式照抄 `ui-settings-agent-loop/src/client/index.ts:36-49`）：
+1. 新文件 `src/client/index.js`（browser half；示例仍按 TypeScript 写法，模式照抄 `ui-settings-agent-loop/src/client/index.ts:36-49`）：
 
 ```ts
 export const inject = ['slots', 'configForms']
@@ -418,7 +418,7 @@ export function apply(ctx) {
   ctx.effect(() => ctx.configForms.whileServed([NS], () => ctx.slots.inject('plugins.row.config', () =>
     ctx.slots.register({
       name: 'plugins.row.config',
-      key: '@cortexkit/dsh-magic-context#magic-context-dsh',   // ← 包名#行id
+      key: 'dsh-plugin-magic-context#magic-context-dsh',   // ← 包名#行id
     }, Card))), 'magic-context: page')
 }
 ```
@@ -430,7 +430,7 @@ export function apply(ctx) {
 
 ```js
 window.__ModuleLoader__.load({
-  id: "@cortexkit/dsh-magic-context",
+  id: "dsh-plugin-magic-context",
   factory: (require) => {
     const React = require('react')
     // ...
@@ -443,14 +443,14 @@ window.__ModuleLoader__.load({
 - **坏消息**：官方构建预设 `@deepseek-ai/dsh-client-tsdown`（即 `packages/client/tsdown.client.ts`）**未发布到 npm**（〔测〕`npm view` → E404），且它是 monorepo 内文件。第三方需要自己写 esbuild/tsdown 包装脚本产出上面那个 `__ModuleLoader__.load` 外壳（或在发行包里手写这份 artifact 并冒烟验证）。
 - Host 侧只服务 `exports["./client"]` 指向的文件，路由为 `/plugins/<包名>/client.js`。〔码〕`client/modules/src/index.ts:194-204,229-236`
 
-3. 无需额外重建 DSH：`clientModules` 扫描**已启用的 Loader 行**里声明了 `dsh.client` 的包；我们的行 `name` 恰为 `@cortexkit/dsh-magic-context`，满足"说明符恰为包名"的挂载条件。〔档〕`ui-plugin-manager/README.md:121`
+3. 无需额外重建 DSH：`clientModules` 扫描**已启用的 Loader 行**里声明了 `dsh.client` 的包；我们的行 `name` 恰为 `dsh-plugin-magic-context`，满足"说明符恰为包名"的挂载条件。〔档〕`ui-plugin-manager/README.md:121`
 
 ### 6.4 改完是否 HMR 即时生效？
 
 | 改动 | 生效方式 |
 | --- | --- |
 | profile `cordis.patch.yml` 的值 | **实时**：写盘后 configEditor 触发 Loader reconcile；volatile-only 变更**不重挂 fiber**，直接把新值提交进运行中的 `Volatile` 引用并 emit `loader/volatile-update` 〔码〕`vendor/loader/src/config/entry.ts:145-191`、`vendor/loader/README.md:53` |
-| host 侧 `src/index.ts`（`Config`/读取方式） | 需 `tsc -p tsconfig.build.json` 重新构建 `lib/`。profile patch 里已有 `hmr.root: <path>`，因此**重建后热重载**；未启用 hmr 时需重启 app。〔码〕`<path>` 的 `hmr` 行 |
+| host 侧 `src/index.ts`（`Config`/读取方式） | 需 `tsc -p tsconfig.build.json` 重新构建 `lib/`。profile patch 里已有 `hmr.root: <repo-root>`，因此**重建后热重载**；未启用 hmr 时需重启 app。〔码〕`%USERPROFILE%\.dsh\profiles\desktop\cordis.patch.yml` 的 `hmr` 行 |
 | client 半侧 `lib/client.js` | 需重新构建 + **刷新页面**；`client-modules` 通过 `/plugins/events` SSE 与 `clientModules.rebuilt(id)` 支持热替换（需 hmr 客户端行启用），否则刷新即可 〔码〕`packages/client/hmr/src/index.ts:77,130-196` |
 | `package.json` 的 `dsh.client` / `exports` | 属于 Host 扫描输入，改后建议重启 app（会话上下文中 client-plugin HMR 仅在 `pnpm run dev:web` 同源监视时免刷新） |
 
@@ -519,5 +519,5 @@ npm install --prefix $t @deepseek-ai/schemastery@3.18.5-alpha.1 @deepseek-ai/cor
 2. `src/index.ts`：`export const Config = z.object({...})`，**每个界面要改的叶子字段加 `.volatile()` 和 `.default()`**（未声明的键透传，可只声明要暴露的部分）；把 `Config` 放进 `export default { name, inject, apply, Config }`（否则 loader 看不到）。
 3. `src/index.ts`：阈值读取改为使用点 `config.policy.executeThreshold.get()`（volatile 引用；这也是"改了立刻生效"的前提）。
 4. 包内 patch 只留默认值；profile patch 因为是整体替换，必须重复所有要保留的键。
-5. 要做界面：新增 `src/client/index.ts`，`ctx.configForms.get('magic-context-dsh')` + `ctx.slots.register({ name:'plugins.row.config', key:'@cortexkit/dsh-magic-context#magic-context-dsh' })`；用自备打包脚本产出 `lib/client.js`（`window.__ModuleLoader__.load({id, factory})` 外壳）；`react`/`ui-primitives` 走静态模块表，无需 `external`。
+5. 要做界面：新增 `src/client/index.js`，`ctx.configForms.get('magic-context-dsh')` + `ctx.slots.register({ name:'plugins.row.config', key:'dsh-plugin-magic-context#magic-context-dsh' })`；用自备打包脚本产出 `lib/client.js`（`window.__ModuleLoader__.load({id, factory})` 外壳）；`react`/`ui-primitives` 走静态模块表，无需 `external`。
 6. 生效：数值改动即时（volatile 提交，不重挂）；host 代码重建后经 `hmr.root` 热重载；client 半侧重建后刷新页面。

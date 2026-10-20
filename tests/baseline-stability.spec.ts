@@ -3,7 +3,7 @@
  *
  * 2026-10-15 18:00/20:00 巡检在 gate 上抓到 FAIL：
  *   `delta.byteStable 1 处缓存前缀不稳定: session- 08:00:00→10:00:01 35231≠31410`
- * 取证实证（<tmp>/bytestable-pairs.cjs，552 条 baseline / 518 对）显示那不是记忆
+ * 取证实证（.tmp-diag/bytestable-pairs.cjs，552 条 baseline / 518 对）显示那不是记忆
  * 缺陷：该对是 **hard rebuild(reason=route-changed) → soft refresh**，四段载荷（含画像）
  * 逐字节相同，而 hard/soft 组装的 block 本来就不是同一个东西（management-pass.ts:620/:626
  * —— hard 把 rendered/newRows 归零），`bytes` 又是 block 长度（:630）。

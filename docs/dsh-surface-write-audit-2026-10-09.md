@@ -85,7 +85,7 @@ replace 型写入的 seq 引用**全部取自 `session.snapshotEvents()` 的 liv
 
 `verify-all.cjs` 报告 7 个会话存在 `user/message sources omit <seqs>`：被替换区间内的宿主注入节点
 （runtime-context / skill-catalog / time-context 三连组）未被 `sourceEventSeqs` 全覆盖。
-**真 loader 放行**，属本插件自审比宿主严格；不得据此改写。
+**真 loader 通过校验**，属本插件自审比宿主严格；不得据此改写。
 
 ## 6. 如何复跑这份审计
 
@@ -93,7 +93,7 @@ replace 型写入的 seq 引用**全部取自 `session.snapshotEvents()` 的 liv
 # 列出全部 surface 写入点
 rg -n "\.append\(|surfaceOp|replaceSurfaceRange|replaceToolResultContent|appendMagicContextEntry" src
 # 权威完整性判据（真宿主 worker）
-node <tmp>/verify-all.cjs      # 判据：loader failures > 0 才详查；advisory 只记录
+# 权威完整性判据由内部诊断脚本执行（未随仓库发布）：loader failures > 0 才详查；advisory 只记录
 ```
 
 新增任何写入点时，必须在本表登记并回答三个问题：**哪个带触发 / 是否 append 型 / 目标是 live surface 还是持久态**。

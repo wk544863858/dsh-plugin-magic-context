@@ -8,31 +8,19 @@
 > 重新对齐适配器。先读「基线锚点」，再按「跟进流程」执行，对不上的地方查「对齐面
 > 清单」定位 MC 源码依据，接缝坏了查「DSH 接缝清单」。
 >
-> 工程目录：`packages/dsh-plugin`（适配器本体）；测试镜像：`src/**\/*.spec.ts`；
-> 可运行测试套：`<DSH-checkout>/packages/test-support/mc-dsh-poc/tests/`。
+> 工程目录：本仓库根（适配器本体）；测试：`tests/**/*.spec.ts`；
+> 可运行测试套：`tests/`（自包含，无需 DSH checkout）。
 
 ---
 
-## 0. 单插件模式（2026-10-09 收敛，先读这节）
+## 0. 单仓模式（2026-10-09 收敛，先读这节）
 
-适配器开发已收敛为**单轨**，本仓库降级为只读上游镜像：
+适配器自 2026-10-08 起独立成仓，开发、构建、测试均在本仓库闭环：
 
-- **插件唯一之家** = `<path>`（npm 包名
-  `dsh-plugin-magic-context`，含真 typecheck + 仓内 vitest 套件 + `npm run gate`）。
-  desktop profile 经 pnpm `link:` 加载它（`bundles: [dsh-plugin-magic-context]`，
-  loader row id 仍为 `magic-context-dsh`），HMR root 指向同一目录。
-- **开发循环**：在新家改代码 → `npm run gate` → HMR 热重载。一切构建/测试/体检
-  （`npm run doctor`）都在插件仓内闭环。
-- **本仓库剩余职能**：fetch 上游（cortexkit/magic-context）tag、读上游源码做对齐
-  面 diff。`dsh-track --apply` 与 `scripts/extract-standalone.ps1` 已随
-  `packages/dsh-plugin` 的删除而退役——上游跟进不再走 rebase+重放，而是：看上游
-  新 tag 的 diff → 按 §5 对齐面把相关变更移植进插件新家 → 那边 gate 全绿。
-- `packages/dsh-plugin` 目录已从 `dsh` 分支删除；其 60+ 提交的完整历史经
-  逐提交重放保留在插件新家的 git 历史里（树曾逐字节验证一致）。
-- **旧仓（`<path>`）已于 2026-10-09 删除**。其全部
-  git 历史（含 `dsh`/`dsh-base` 分支与本组文档）迁入插件新家
-  `refs/old-monorepo/*`；上游跟进前重新 clone cortexkit/magic-context 到任意
-  位置即可（本文档 `<上游 checkout>` 均指该新 clone）。
+- **插件仓库** = 本仓库（npm 包名 `dsh-plugin-magic-context`，含 typecheck + 仓内 vitest 套件 + `npm run gate`）。
+  desktop profile 经 pnpm `link:` 加载它（`bundles: [dsh-plugin-magic-context]`，loader row id 仍为 `magic-context-dsh`），HMR root 指向同一目录。
+- **开发循环**：改代码 → `npm run gate` → HMR 热重载。构建、测试、体检（`npm run doctor`）都在本仓内闭环。
+- **上游跟进**：把上游 `cortexkit/magic-context` clone 到任意位置，看新 tag 的 diff → 按 §5 对齐面把相关变更移植进本仓 → `npm run gate` 全绿。
 
 ---
 
@@ -42,9 +30,17 @@
 |---|---|---|
 | MC 版本 | **v0.46.0**（tag `651c105a9`，2026-10-08 发布） | MC 升级 → 重新 clone 上游后按 §4 对齐命令 diff |
 | MC 存储契约 | **schema v95**（`MEMORY_SCHEMA_MAX_VERSION = 95`，`memory-bridge.ts`） | MC 迁移 >95 → fence 只读降级（见 §3.3） |
-| DSH Desktop | **0.2.0-rc.2**（packaged app） | DSH 升级 → 查 §3 接缝 |
-| 适配器自有库 | schema **v6**（adapter store，`stores.ts` SCHEMA_VERSION） | 适配器内部，自洽 |
-| 测试基线 | **`mc-test --full` 7/7 PASS**（28 文件 / 255 测试全绿 + tsc + acceptance + audit + records） | 每次跟进的终验标准 |
+| DSH Desktop | **0.2.1-rc.1**（packaged app，checkout `1600d8a1e`；2026-10-17 起） | DSH 升级 → 查 §3 接缝 |
+| 适配器自有库 | schema **v10**（adapter store，`stores.ts` SCHEMA_VERSION） | 适配器内部，自洽 |
+| 测试基线 | **`mc-test --quick` 全绿**（typecheck + 73 文件 / 761 测试，2026-10-17 实测）；`--full` 另含 build/acceptance/audit/records | 每次跟进的终验标准 |
+
+> **2026-10-17 复核（0.2.0-rc.2 → 0.2.1-rc.1）**：把 `@deepseek-ai/*` 映射到
+> rc.1 副本后 `tsc` **0 错**（确认真解析 169 个 rc.1 d.ts）；套件 761 例中 756 过，
+> 5 例仅因沙箱禁写 `%USERPROFILE%` 失败（alpha.1 基线同），rc.1 别名下重跑结果一致；
+> live 在 rc.1 上 boot / telemetry / historian / compaction 全正常，`doctor` exit 0。
+> d.ts 面只有 llm/session/tools/token-meter/system-prompt/session-title 有变且均为新增
+> 或注释；`dsh-agent`、`dsh-compaction`、`cordis`、`schemastery` 逐字节相同，
+> `dsh-session/known-event-types.d.ts` 未变（无事件改名）。
 
 ## 2. 适配器三原则（为什么长这样）
 
@@ -136,7 +132,7 @@ git -C <上游 checkout> log v0.45.0..<NEW> --oneline -- \
    `ctx.llm` 流、client 座位。
 3. **回归（一条命令）**：
    ```powershell
-   cd <path>
+   cd <repo-root>
    node scripts/mc-test.mjs --full      # --quick = 只跑 typecheck + 套件
    ```
    `--full` = typecheck + vitest 套件（自包含 devDependencies，无需宿主
@@ -187,7 +183,7 @@ git -C <上游 checkout> log v0.45.0..<NEW> --oneline -- \
 - **重放**：跨 217 个上游提交，51 个本地提交重放到位；`dsh-base` = `651c105a9`（v0.46.0）。
 - **冲突**：唯一在 `.gitignore`，形态固定为"双方各自在文件末尾追加一行"（本地
   `desktop-runtime.json`、上游 `/scripts/ckmc-write-probe/migcheck/target`）→ 解决方式 =
-  保留双方。`--apply` 的离线备份落在 `<tmp>/v0.46.0-pre-replay/`（51 个补丁）。
+  保留双方。`--apply` 的离线备份落在一个不随仓库发布的本地目录（51 个补丁）。
 - **存储契约**：migration 95 = `migration-v95-perf-indexes.ts`，只新增 `temporal_decisions`、
   `git_commit_fts_rowid_map` 两表 + 覆盖索引，**无 `ALTER TABLE memories`** → fence 提到 95，
   29 列写契约不变。**门禁是有效 tripwire**：3 个 spec 把"fenced 版本"硬编码成 95，提 fence
@@ -216,6 +212,6 @@ git -C <上游 checkout> log v0.45.0..<NEW> --oneline -- \
 - `docs/dsh-plugin-memory-promotion-contract.md` — 提升契约
 - `docs/dsh-plugin-config-ui-contract.md` — 配置 UI 契约
 - `docs/dsh-plugin-ui-telemetry-contract.md` — 遥测/胶囊契约
-- `docs/dsh-plugin-project-memory-review-2026-10-06.md` — 项目级记忆复盘
+- 项目级记忆复盘（内部记录，未随仓库发布）
 - `docs/dsh-port-feasibility-2026-10-06.md` — 移植可行性（架构边界论证）
 - `docs/dsh-plugin-memory-acceptance.md` — 验收记录

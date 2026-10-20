@@ -1,18 +1,53 @@
 # dsh-plugin-magic-context — Magic Context 的 DeepSeek Harness 适配插件
 
+[![CI](https://github.com/wk544863858/dsh-plugin-magic-context/actions/workflows/ci.yml/badge.svg)](https://github.com/wk544863858/dsh-plugin-magic-context/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D22.19-brightgreen.svg)](package.json)
+[![DeepSeek Harness](https://img.shields.io/badge/DSH-0.2.1--rc.1-blue.svg)](package.json)
+
+> **English** · [中文](#它做什么)
+
+**dsh-plugin-magic-context** brings [Magic Context](https://github.com/cortexkit/magic-context)'s
+context management to **DeepSeek Harness (DSH)**: reversible tool-result reclaim, an out-of-band
+historian that compacts history without touching the live prefix, a frozen m[0]/m[1] memory
+baseline, and per-project memory with FTS + local vector search — packaged as a DSH desktop bundle.
+
+- **Reversible reclaim** — tag tool results with `§N§`; `ctx_reduce` only queues the drop, it lands
+  in the execute band as a `[dropped §N§]` placeholder, and `ctx_expand` restores the original text.
+- **Historian** — one out-of-band LLM call replays the real prefix and writes a four-level summary;
+  the next execute band publishes it as a range replacement (recoverable, never a spontaneous bust).
+- **Memory** — project memories in the plugin's own SQLite corpus, with local MiniLM embeddings
+  (WebAssembly, no native build) and fail-open fallback to FTS.
+- **UI** — a settings card and a telemetry pill in the DSH desktop UI, Chinese/English.
+- **Conservative by default** — the host `compaction-basic` engine stays in place unless you opt in.
+
+Requires **Node ≥ 22.19** and a **DSH 0.2.x** desktop host. Build and install:
+
+```bash
+npm install
+npm run build
+dsh plugin --profile desktop add https://github.com/wk544863858/dsh-plugin-magic-context
+```
+
+The Chinese sections below cover configuration, tools/commands, architecture and known limits in
+full. Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
+
+---
+
 > 把 [Magic Context](https://github.com/cortexkit/magic-context) 的上下文管理与共享记忆能力移植到
 > **DeepSeek Harness（DSH）** 的适配插件。以 DSH **bundle** 形态安装进 desktop profile：出现在
 > GUI 的"插件"页面，在运行中的应用里即时开始工作。
 >
 > 当前版本 **0.9.0** · 上游基线 **magic-context v0.46.0**（`651c105a9`）· devDeps 钉 **DSH
-> 0.2.1-alpha.1**（`e0f83cbfe`，peers `'*'`）· 已验证宿主 **0.2.0-rc.2**（本机 exe FileVersion
-> + 官方 nightly feed 双实锤，2026-10-14）· 状态：**已在真实 DSH Desktop 安装并日常运行**（2026-10-06 起）。
+> 0.2.1-rc.1**（peers `'*'`）· 已验证宿主 **0.2.1-rc.1**（2026-10-17）· 状态：**已在真实 DSH
+> Desktop 安装并日常运行**（2026-10-06 起）。
 >
 > 本包原本长在上游 `packages/dsh-plugin` 下，2026-10-08 抽出为独立仓库（60 个提交原样重放，
 > 作者与日期保留）。上游 MIT © 2025 Ufuk Altinok；本仓库新增部分 © 2026 wukai。出处与内嵌
-> 第三方文件见 [NOTICE](NOTICE)，许可见 [LICENSE](LICENSE)。数据库在 `~/.local/share/cortexkit/magic-context-dsh-poc/`
-> 下（插件自有 `memories.db`）：2026-10-13 起与上游 MC 库**彻底分家**，legacy 共享库封存仅作回滚保留；
-> 路径留在 cortexkit 命名空间是出于出处连续，非共享。
+> 第三方文件见 [NOTICE](NOTICE)，许可见 [LICENSE](LICENSE)。数据库在
+> `~/.local/share/cortexkit/magic-context-dsh-poc/` 下（插件自有 `memories.db`）：2026-10-13 起与
+> 上游 MC 库**彻底分家**，legacy 共享库封存仅作回滚保留；路径留在 cortexkit 命名空间是出于出处
+> 连续，非共享。
 
 ## 它做什么
 
@@ -165,7 +200,7 @@ historian 与基线（`historian` —— 含 start/done/failed 配对与 LLM 用
 ### 运维命令
 
 ```sh
-npm test               # vitest run（72 个 spec）
+npm test               # vitest run（73 个 spec / 761 个用例）
 npm run gate           # 全门禁：typecheck + 套件 + build + 验收 + 记忆审计 + records
 npm run doctor         # 只读健康报告：corpus fence / 事件车道心跳 / 悬空 run / embedding 车道
 
@@ -226,23 +261,20 @@ src/
 [hooks 覆盖](docs/dsh-plugin-hooks-coverage-2026-10-08.md)
 
 **设计决策**：[移植可行性（接缝地图）](docs/dsh-port-feasibility-2026-10-06.md) ·
-[执行计划](docs/dsh-plugin-execution-plan-2026-10-09.md) ·
 [平台接管与全域](docs/dsh-plugin-platform-takeover-and-global-domains-2026-10-09.md) ·
 [dreamer 向量决策](docs/dsh-plugin-dreamer-vector-decision-2026-10-08.md) ·
 [记忆机制清单](docs/memory-mechanisms-inventory-2026-10-09.md) ·
 [上游源码分析](docs/upstream-source-analysis-2026-10-09.md) ·
 [全域来源调查](docs/global-domain-source-finding-2026-10-10.md) ·
-[记忆架构挑战](docs/memory-architecture-challenge-2026-10-10.md) ·
-[用户画像评审](docs/user-profile-review-2026-10-09.md)
+[记忆架构挑战](docs/memory-architecture-challenge-2026-10-10.md)
 
-**复盘与运行**：[项目记忆复盘](docs/dsh-plugin-project-memory-review-2026-10-06.md) ·
-[测试设计审计](docs/dsh-plugin-test-design-audit-2026-10-07.md) ·
+**复盘与运行**：[测试设计审计](docs/dsh-plugin-test-design-audit-2026-10-07.md) ·
 [运维手册](docs/dsh-plugin-operations-runbook-2026-10-10.md) ·
-[creator 模式复盘](docs/dsh-plugin-creator-mode-review-2026-10-11.md) ·
 [surface 写审计](docs/dsh-surface-write-audit-2026-10-09.md) ·
-[巡检提示词](docs/patrol-prompt-v8.md)
+[本地向量运行时审计](docs/local-embedding-runtime-audit-2026-10-15.md)
 
-**报告**：`docs/reports/`（dreamer token 用量、记忆方案对比）
+**报告**：[dreamer token 用量](docs/reports/dreamer-token-usage.md) ·
+[记忆方案对比](docs/reports/memory-solutions-comparison.md)
 
 ## 已知边界
 
@@ -252,13 +284,23 @@ src/
 - 挂载时就是 off 的 journal，运行中打开需要重启（其余 journal / 阈值改动均即时生效）；
 - Desktop 不持久化 harness logger——可观测性完全由自记 journal 承担。
 
+## 贡献
+
+- 贡献指南：[CONTRIBUTING.md](CONTRIBUTING.md)（环境、代码约定、PR 流程）
+- 安全漏洞请走私密报告通道：[SECURITY.md](SECURITY.md)
+- 行为准则：[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- 变更记录：[CHANGELOG.md](CHANGELOG.md)
+
+本仓库以 npm 为唯一包管理器（`package-lock.json` 为准），CI 在 Node 22.x / 24.x 上跑
+typecheck → test → build → check:i18n。
+
 ## 出处与许可
 
 - **magic-context**（MIT © 2025 Ufuk Altinok）：本仓库的衍生来源。抽取自上游 tag
   v0.46.0（`651c105a9`）；适配器自有提交从本地 checkout `dsh` 分支的 `e34eda955`
   （2026-10-08）原样重放。
-- **DeepSeek Harness**（MIT）：以依赖消费，不含在内。代码针对 0.2.1-alpha.1 编写
-  （checkout `e0f83cbfe`，npm 协调 dist-tag `dsh-0-2-1-alpha-1`；注意这些包的 `latest`
+- **DeepSeek Harness**（MIT）：以依赖消费，不含在内。代码针对 0.2.1-rc.1 编写
+  （checkout `1600d8a1e`，npm 协调 dist-tag `next`；注意这些包的 `latest`
   标签落后一个发布线，精确钉版以 devDependencies 为准）。
 - 内嵌第三方：`vendor/onnx/`（onnxruntime-web WASM 子集，MIT © Microsoft）、
   `tests/helpers/mock-adapter.ts`（DSH 测试树原样内嵌）。明细见 [NOTICE](NOTICE)，

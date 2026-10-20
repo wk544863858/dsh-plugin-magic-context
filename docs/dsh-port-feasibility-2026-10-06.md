@@ -3,6 +3,8 @@
 状态：可行性已验证（源码级），阶段 0 PoC 进行中。
 分析对象：上游 `deepseek-ai/deepseek-harness`（master @ 5badb15，developer preview）；本仓库 `@cortexkit/opencode-magic-context` v0.45.0。
 
+> **路径说明（公开版）**：本文写于适配器仍位于上游 monorepo 的 `packages/dsh-plugin` 时期；文中该前缀对应当前仓库根，`packages/test-support/...` 指 DSH 源码树。
+
 ## 0. 结论
 
 **可行，但不是"加一层 wire 变换"那么简单。** DSH 在架构上禁止 magic-context 赖以工作的核心机制——发送前重写消息数组。移植的真实工作是把 MC 的"wire 层临时改写"语义**翻译**成 DSH 的"持久化 surface 变更"语义。两个系统的设计哲学高度同构（都在保护 provider cache），MC 的缓存纪律几乎可以一一映射；MC 的服务层（存储/记忆/historian/dreamer）与宿主无关，可原样复用。
@@ -76,7 +78,7 @@ MC 的 "drop 留 `[dropped §N§]` 占位符、原文经 ctx_expand 恢复" 与 
 
 ### 4.1 路线 A（推荐）：DSH 原生 surface 模型
 
-新包 `packages/dsh-plugin`（对标 pi-plugin：tsconfig paths 源码映射复用 `../plugin/src` 核心）。
+适配层（对标 pi-plugin：tsconfig paths 源码映射复用 `../plugin/src` 核心），即本仓库。
 
 **变换执行器（核心新增件）**：MC 的决策逻辑（scheduler、pass 分类、mutation gates、`mustMaterialize`）原样复用，但输出不是"改写后的数组"，而是**一组待落地的 surface ops**，在 `agent/pre-step` 中执行：
 
@@ -141,7 +143,7 @@ DSH 处于 developer preview（明示破坏性变更、无 semver 承诺），MC
 
 ## 7. 阶段 0 验收记录（2026-10-06，已完成）
 
-PoC 代码：`packages/dsh-plugin/`（适配层，含升级隔离契约）。集成测试位于
+PoC 代码：本仓库 `src/`（适配层，含升级隔离契约）。集成测试位于
 DSH 源码工作区 `packages/test-support/mc-dsh-poc/tests/poc.spec.ts`（驱动真实
 agent loop + mock adapter 的完整工具调用回合）。**四项验收全部通过：**
 
@@ -161,7 +163,7 @@ agent loop + mock adapter 的完整工具调用回合）。**四项验收全部�
 升级隔离契约（双端演进不重构适配层）：DSH 接触面全部收拢在 `src/dsh/`
 （事件名/payload/surface 词汇表的防腐层）；MC 核心未来经其既有 host seams
 接入（pi-plugin 先例）；自有存储带版本 fence；集成测试兼作接缝契约探针。
-详见 `packages/dsh-plugin/README.md`。
+详见 `README.md`。
 
 ### 7.1 阶段 1 MVP 验收记录（2026-10-06，已完成）
 
@@ -213,7 +215,7 @@ ctx_expand('2') 恢复带标原文；存储断言（队列清空/用量/标签�
 ### 7.3 阶段 2 完成记录（2026-10-06）：historian、基线、记忆、引擎
 
 四项建议全部实现并验证；测试 6 文件 23 例全绿 + 双阶段真实运行时冒烟 +
-真实 profile 进程取证 + 真实生产库只读探查。
+真实 profile 进程取证 + 生产环境实测库只读探查。
 
 1. **historian / compartments**：`core/compartments.ts`（契约：四层摘要 +
    importance + facts/events 的解析校验、分层衰减、渲染、基线合成/剥离）+
@@ -230,7 +232,7 @@ ctx_expand('2') 恢复带标原文；存储断言（队列清空/用量/标签�
    超前即禁用召回）；`memories` 无 harness 列 = 跨宿主共享；注入过滤
    `status IN ('active','permanent')` + 未过期 + 工作区 `shareable=1` 且
    类别在白名单；优先级 permanent→importance→max(last_seen,verified)→id，
-   预算裁剪后按 MC 类别序渲染。**真实库探查**（只读）：schema v94、757 条
+   预算裁剪后按 MC 类别序渲染。**实测库探查**（只读）：schema v94、757 条
    可注入（369 可共享）、按 `git:<sha>` 身份精确召回、工作区共享 10 行。
    **写入刻意不实现**：需复刻 normalized_hash（JS 空白集）、
    `project_memory_epoch` 的 bump 规则、`memory_mutation_log` 与 authority
@@ -255,8 +257,7 @@ surface，否则每个 pass 都是一次全额 cache bust。
 ### 7.4 修订（2026-10-08）：admission 不打 §N§ 标签，只给工具结果打标
 
 **症状。** 会话记录里出现 `§1§`、`§2§` 一类前缀：用户消息气泡、GUI 的
-"Current runtime context" 上下文卡片、以及侧栏标题都带标记。取证（本机会话
-`<session-id>-…`，逐 zstd 帧解码）：`seq 9` 的 `user/message` 文本为
+"Current runtime context" 上下文卡片、以及侧栏标题都带标记。取证（一次本机会话，逐 zstd 帧解码）：`seq 9` 的 `user/message` 文本为
 `§1§ 一个新的问题：…`；`seq 15` 的 `session/title` 为
 `§1§ 一个新的问题：现在会话`（`source: fallback`）；全会话 44 条 user/message
 里 41 条带标签，其中 **40 条是宿主注入的 runtime-context**。
@@ -298,10 +299,10 @@ reconstructability）。已有会话的旧记录无法回改（标签是持久�
 **验证。** 28 文件 / 248 测试全绿（含新回归）；`lib/` 重建（tsc build +
 copy-client）；desktop profile 的 `hmr.root` 使宿主半热重载。
 
-**顺带记录的沙箱事故。** 重建时写 `packages/dsh-plugin/**` 被 Windows 文件权限
+**顺带记录的沙箱事故。** 重建时写 `src/**` 被 Windows 文件权限
 拒绝（连新建文件都失败，而 `edit` 工具可以写）——是本次会话的沙箱授权在该子树
 上缺项，不是仓库问题；用 `diagnose-windows-sandbox-acl` 的单条命令补齐当前用户
-完全控制（含回滚脚本，报告在 `<path>`）后
+完全控制（含回滚脚本，报告在 `<workdir>\`）后
 构建恢复正常。
 
 ### 7.5 合成节点的 source（2026-10-08 同日追加）
@@ -349,7 +350,7 @@ source.compactionId 与 `compaction/start` 一致、且该事件是 replace。28
 **起因**：用户报告"今天下午出现过一次上下文对话显示错误，出现了 `<summary>`
 标记的原始消息"，问是否与本插件相关。取证如下（会话日志 + 适配器 journal）。
 
-**A. 那条 `<summary>` 消息与插件无关（模型漂移）。** backend 后端会话
+**A. 那条 `<summary>` 消息与插件无关（模型漂移）。** 一次后端会话
 `<session-id>` 16:48:33 本地（08:48:33Z）的 `seq=2380` 是**普通助手消息
 append**：`source.kind='model'`、`provider=provider-a`、
 `responseModel=model-b`、`stopReason='stop'`，正文 24,263 字符，

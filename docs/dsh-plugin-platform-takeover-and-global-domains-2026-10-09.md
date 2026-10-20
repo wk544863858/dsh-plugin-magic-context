@@ -7,7 +7,7 @@
 > | 编号 | 变更 | 性质 |
 > |---|---|---|
 > | A1 | **不再接管 workspace 表**。Pi 也将移除 ⇒ 契约内的 workspace 已无消费者。组织成员改住适配器自有表，三个域共用"适配器自建 peer 车道"；`workspaces`/`workspace_members`/`project_state` 全部**转休眠（只读不写）** | 架构反转 |
-> | A2 | 向量回填：**必须逐字节写同一个 dominant `model_id`**（真库现有两个：`embedding-provider:c447…` 827 行 / `embedding-provider:ac1a…` 97 行），写入前用闸门自证 | 补漏 |
+> | A2 | 向量回填：**必须逐字节写同一个 dominant `model_id`**（实测库现有两个：`embedding-provider:c447…` 827 行 / `embedding-provider:ac1a…` 97 行），写入前用闸门自证 | 补漏 |
 > | A3 | **"改写"不再走 HARD**：改写 = supersede + 新增（走加法车道）；**只有 dismiss/delete 走 HARD** | 不变量修改 |
 > | A4 | 契约冻结分两层：**L1 语义冻结（必须守住）/ L2 结构冻结（可撤销的默认 + 加列流程）** | 放松过度约束 |
 > | A5 | 域激活**必须在构造 peer 身份列表时决定（SQL 之前）**，禁止 JS 后置过滤 | 新不变量 |
@@ -17,7 +17,7 @@
 > | B5 | 新增"稳态运维"一节（人的操作回路） | 补漏 |
 > | C1/C3/C4 | 补测试策略；`memory_mutation_log.mutation_type` CHECK 入不变量；迁移幂等与回滚 | 补漏 |
 >
-> **用户裁决（2026-10-09）**：① Pi 也要删除；② 约束型必须通过提问做二次确认；③ 存量 17 条做一次人工复核（见 `docs/user-profile-review-2026-10-09.md`）。
+> **人工裁定（2026-10-09）**：① Pi 也要删除；② 约束型必须通过提问做二次确认；③ 存量 17 条做一次人工复核（复核记录属内部运维资料，未随仓库发布）。
 >
 > **前置事实文档**：`docs/memory-mechanisms-inventory-2026-10-09.md`（本仓机制现况）、
 > `docs/upstream-source-analysis-2026-10-09.md`（上游 v0.46.1 画像 / workspace 逐行分析）；
@@ -25,7 +25,7 @@
 
 ---
 
-## 0. 触发条件（用户裁决）
+## 0. 触发条件（人工裁定）
 
 1. **`context.db` 与契约锁死后留下**（schema 冻结；不再有 MC 侧迁移）。
 2. **MC dashboard（Rust）不会留下**。
@@ -61,7 +61,7 @@
 | 向量回填 | MC embedding backfill | 停摆 | **接管**：写同一个 dominant `model_id`（A2） |
 | 契约迁移 | MC migrations | 冻结 | 不迁移；L1 语义冻结（A4） |
 
-**一次性导入**：`workspaces`/`workspace_members`（真库现有 1 个工作区、5 个成员）→ 适配器表 `domains` / `domain_members`，导入后契约表只读。
+**一次性导入**：`workspaces`/`workspace_members`（实测库现有 1 个工作区、5 个成员）→ 适配器表 `domains` / `domain_members`，导入后契约表只读。
 
 ---
 
@@ -71,7 +71,7 @@
 - 不改既有列的语义；不删列/表；不破坏既有索引与触发器（尤其 `memories_fts` 的同步触发器）。
 - 遵守既有 CHECK：`memory_mutation_log.mutation_type IN ('archive','delete','update','superseded')`（C3）。
 - 遵守既有主键/外键：`memory_embeddings` PK `(memory_id, model_id)` + `ON DELETE CASCADE`。
-- `memories.category` 虽无 CHECK，但**语义上只允许 v2 五类**（真库 957 行全部落在这五类内），不新造类别值。
+- `memories.category` 虽无 CHECK，但**语义上只允许 v2 五类**（实测库 957 行全部落在这五类内），不新造类别值。
 
 ### L2 结构冻结（可撤销的默认）
 - 默认不加列、不加表。若确实需要（例如域归属列），必须走流程：
@@ -116,7 +116,7 @@
 | 评审 | maintenance tick：`候选数 ≥ 阈值 且 距上次评审 > 24h` |
 | 渲染 | m[0] `<user-profile>`（预算 4000）+ m[1] `<new-user-profile>`（25% = 1000） |
 
-**约束型二次确认的确切流程（B4 + 用户裁决②）**
+**约束型二次确认的确切流程（B4 + 人工裁定②）**
 ```
 候选 → 分类器判定 directive-shaped（对齐上游 curator 的 directive-shaped 判据）
   ├─ 描述型 → 正常评审 → 可自动写入 user_memories
@@ -128,7 +128,7 @@
               → 确认后才写 user_memories 并 bump 水位
 ```
 - 未确认的约束型条目**永不进入注入池**（这是"不能被误用"的实现点）。
-- 存量 17 条里的约束型条目已生效 ⇒ 按 `docs/user-profile-review-2026-10-09.md` 逐条复核（保留 / 改写为描述型 / 退役）。
+- 存量 17 条里的约束型条目已生效 ⇒ 按内部复核记录逐条复核（保留 / 改写为描述型 / 退役），该记录未随仓库发布。
 
 **水位**：不再使用 `project_user_profile_version`；在适配器 `baseline_state` 加每会话画像 m[1] 水位（schema v8）。
 
@@ -253,4 +253,4 @@
 3. 命令面的命名与粒度。
 4. 向量回填的限额与节拍。
 5. `machine` 域的项目排除配置形状。
-6. **存量 17 条的复核结论**（见 `docs/user-profile-review-2026-10-09.md`）。
+6. **存量 17 条的复核结论**（内部复核记录，未随仓库发布）。

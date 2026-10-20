@@ -100,8 +100,8 @@ describe('desk section', () => {
     expect(desk).toContain('they carry no handle')
     expect(desk).not.toContain('Every message and every tool output')
     expect(desk).not.toContain('Never stamp a user message')
-    // Compaction belongs to the adapter: an observed runaway model (backend session,
-    // 2026-10-08 16:48) answered a long turn with a Claude-Code `<analysis>`/
+    // Compaction belongs to the adapter: an observed runaway model (a long backend
+    // session, 2026-10-08 16:48) answered a long turn with a Claude-Code `<analysis>`/
     // `<summary>` checkpoint block, i.e. it continued a compaction template. The
     // desk text must say whose job that is, or nothing does.
     expect(desk).toContain('Compaction is Magic Context\'s job, not yours')

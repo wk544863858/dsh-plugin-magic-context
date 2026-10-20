@@ -8,7 +8,7 @@
  *
  * 退役口径（2026-10-10 TTL 排查定案）：契约 TTL 阀门工作正常但进料为零——
  * CATEGORY_DEFAULT_TTL 只管 WORKFLOW_RULES/KNOWN_ISSUES 两个 legacy 类别，
- * 真库 1399 行里这两个类别为 0，所以 expired 恒 0 是数据现实不是缺陷。
+ * 实测库中这两个类别为 0，所以 expired 恒 0 是数据现实不是缺陷。
  * sidecar 的 local_archived 从出生起就没有写者（setter 已删）——真正的退役
  * 机制是 S(t) 在 recall 现场计算（score < archiveThreshold 即不注入），
  * 仪表按同一公式现场重算，单一事实来源。

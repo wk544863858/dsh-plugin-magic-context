@@ -1,7 +1,7 @@
 /**
  * 域命中与配额跳过的纯聚合用例（C-7 产品判据埋点）。
  *
- * 语料形状取自真库 memory-recall 载荷（projects 是被注入行 project_path 的去重
+ * 语料形状取自实测库 memory-recall 载荷（projects 是被注入行 project_path 的去重
  * 列表，截断到 24 字符——`dir:global:org` 14 字符、`dir:global:machine` 18 字符，
  * 均不会被截断）与 route-health 跳过行的 summary 前缀。
  */

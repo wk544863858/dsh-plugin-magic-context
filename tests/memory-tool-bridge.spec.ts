@@ -267,7 +267,7 @@ describe('ctx_memory under the real host defineTool', () => {
 
     // dedup: the same content (different case/whitespace) only bumps seen_count
     const again = await built.tool.execute(
-      { action: 'write', category: 'CONFIG_VALUES', content: '  The Datahub PORT is 5432 ' },
+      { action: 'write', category: 'CONFIG_VALUES', content: '  The Example-Service PORT is 5432 ' },
       exec,
     ) as { outcome?: string }
     expect(again.outcome).toContain('Already known')
@@ -290,12 +290,12 @@ describe('ctx_memory under the real host defineTool', () => {
 
     // merge: a second row of the same category folds into the first
     const second = await built.tool.execute(
-      { action: 'write', category: 'CONFIG_VALUES', content: 'the example-service host is db.internal' },
+      { action: 'write', category: 'CONFIG_VALUES', content: 'the example-service host is db.example.internal' },
       exec,
     ) as { outcome?: string }
     const secondId = Number(/memory (\d+)/.exec(second.outcome!)![1])
     const merged = await built.tool.execute(
-      { action: 'merge', target_id: id, ids: [secondId], content: 'the example-service endpoint is db.internal:6543' },
+      { action: 'merge', target_id: id, ids: [secondId], content: 'the example-service endpoint is db.example.internal:6543' },
       exec,
     ) as { outcome?: string }
     expect(merged.outcome).toBe(`Merged 1 row(s) into memory ${String(id)}.`)
@@ -438,13 +438,13 @@ describe('isolated snapshot round-trip through the real loop', () => {
         toolCallResponse('call-w1', 'ctx_memory', { action: 'write', category: 'CONFIG_VALUES', content: 'the example-service port is 5432' }),
         textResponse('noted'),
         // Same fact, different case and spacing: the UNIQUE dedup key must hit.
-        toolCallResponse('call-w2', 'ctx_memory', { action: 'write', category: 'CONFIG_VALUES', content: '  The Datahub PORT is 5432 ' }),
+        toolCallResponse('call-w2', 'ctx_memory', { action: 'write', category: 'CONFIG_VALUES', content: '  The Example-Service PORT is 5432 ' }),
         textResponse('noted'),
-        toolCallResponse('call-w3', 'ctx_memory', { action: 'write', category: 'CONFIG_VALUES', content: 'the example-service host is db.internal' }),
+        toolCallResponse('call-w3', 'ctx_memory', { action: 'write', category: 'CONFIG_VALUES', content: 'the example-service host is db.example.internal' }),
         textResponse('noted'),
         toolCallResponse('call-u1', 'ctx_memory', { action: 'update', id: 1, content: 'the example-service port is 6543', importance: 70 }),
         textResponse('noted'),
-        toolCallResponse('call-m1', 'ctx_memory', { action: 'merge', target_id: 1, ids: [2], content: 'the example-service endpoint is db.internal:6543' }),
+        toolCallResponse('call-m1', 'ctx_memory', { action: 'merge', target_id: 1, ids: [2], content: 'the example-service endpoint is db.example.internal:6543' }),
         textResponse('noted'),
         toolCallResponse('call-g1', 'ctx_memory', { action: 'get', id: 1 }),
         textResponse('noted'),
@@ -478,7 +478,7 @@ describe('isolated snapshot round-trip through the real loop', () => {
     expect(observed[2]).toContain('Saved as memory 2 [CONFIG_VALUES].')
     expect(observed[3]).toContain('Updated memory 1.')
     expect(observed[4]).toContain('Merged 1 row(s) into memory 1.')
-    expect(observed[5]).toContain('the example-service endpoint is db.internal:6543')
+    expect(observed[5]).toContain('the example-service endpoint is db.example.internal:6543')
     expect(observed[6]).toContain('Archived memory 1.')
     expect(observed[7]).toContain('Saved as memory 3 [NAMING].')
     expect(observed[8]).toContain('the replica is db.replica.internal')

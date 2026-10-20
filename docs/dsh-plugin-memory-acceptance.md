@@ -1,19 +1,19 @@
 # DSH 适配器 · 记忆功能验收与实测证据
 
-> 本文记录 `@cortexkit/dsh-magic-context` 记忆功能在**真实 Magic Context 记忆库**上的
+> 本文记录 `dsh-plugin-magic-context` 记忆功能在**实测 Magic Context 记忆库**上的
 > 端到端验收结果与可复跑方式。所有数字都来自本机实测（适配器库
 > `%USERPROFILE%\.local\share\cortexkit\magic-context-dsh-poc\dsh-magic-context.db`
 > 与共享记忆库 `%USERPROFILE%\.local\share\cortexkit\magic-context\context.db`，
 > 两者均以 `readOnly` 打开）。
 >
-> 验收命令：`node packages/dsh-plugin/scripts/mc-acceptance.mjs`
+> 验收命令：`node scripts/mc-acceptance.mjs`
 
 ## 1. 一键验收
 
 ```powershell
-node packages/dsh-plugin/scripts/mc-acceptance.mjs                     # 默认 24h 窗口
-node packages/dsh-plugin/scripts/mc-acceptance.mjs --hours 72 --json   # 机器可读
-node packages/dsh-plugin/scripts/mc-acceptance.mjs --dsh-db <path> --mc-db <path>
+node scripts/mc-acceptance.mjs                     # 默认 24h 窗口
+node scripts/mc-acceptance.mjs --hours 72 --json   # 机器可读
+node scripts/mc-acceptance.mjs --dsh-db <path> --mc-db <path>
 ```
 
 退出码：`0` = 无 FAIL（可含 WARN）；`1` = 至少一条 FAIL；`2` = 参数/环境错误。
@@ -40,7 +40,7 @@ node packages/dsh-plugin/scripts/mc-acceptance.mjs --dsh-db <path> --mc-db <path
 | `authority.guard` | authority 表为空、`context_privilege_state` 未启用 | ✓ 0 / 0 / enabled=0 |
 | `historian.orphan`（WARN） | 被进程重启杀死的运行无法落账 | ! 14 次（重建/重启所致，非静默失败） |
 
-## 3. 端到端链路时间线（真实运行，会话 `825e7c0e`）
+## 3. 端到端链路时间线（实际运行，会话 `<session-id>`）
 
 ```
 start   (139 nodes, maxTokens 8192)
@@ -55,7 +55,7 @@ memory-promote         promoted 9 fact(s) into project memory
 `compartment-published 6`、`memory-promote 6`。修复前 `done/failed/stored` 与
 `memory-promote` **全部为 0**。
 
-### 3.2 契约版本 fence 实测（真实库副本，不碰生产库）
+### 3.2 契约版本 fence 实测（实测库副本，不碰生产库）
 
 用 `VACUUM INTO` 复制真实记忆库做两个副本，其中一个把 `schema_migrations` 抬到 95：
 
@@ -122,15 +122,15 @@ memory-promote         promoted 9 fact(s) into project memory
 
 ```powershell
 # 契约验收（只读）
-node packages/dsh-plugin/scripts/mc-acceptance.mjs
+node scripts/mc-acceptance.mjs
 
 # 复盘报告（只读）
-node packages/dsh-plugin/scripts/mc-report.mjs --days 7
+node scripts/mc-report.mjs --days 7
 
-# 测试套件 + 一致性（一条命令；宿主自动解析，默认项目内 <tmp>/）
-node packages/dsh-plugin/scripts/mc-test.mjs --quick
+# 测试套件 + 一致性（一条命令；宿主自动解析；临时测试宿主目录不随仓库发布）
+node scripts/mc-test.mjs --quick
 # 需要构建/验收/审计/记录检查时用 --full；宿主缺失时 node scripts/bootstrap-testhost.mjs --install
 
 # 构建（转译，热重载到运行中的桌面实例）
-Set-Location packages\dsh-plugin; .\node_modules\.bin\tsc.CMD -p tsconfig.build.json
+Set-Location <repo-root>; .\node_modules\.bin\tsc.CMD -p tsconfig.build.json
 ```

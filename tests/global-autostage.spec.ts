@@ -143,13 +143,13 @@ describe('autoStageGlobalCandidates', () => {
   it('routes an org-classified candidate into the org pool', async () => {
     const s = storeWithDomains(true, true)
     const contract = makeContract([
-      { id: 12, content: 'project-a/project-b 跨仓库推送必须严格串行。', category: 'CONSTRAINTS', seen: 2 },
+      { id: 12, content: '跨仓库流水线必须严格串行。', category: 'CONSTRAINTS', seen: 2 },
     ])
     const result = await autoStageGlobalCandidates({
       store: s,
       corpusDbPath: contract,
       now: NOW,
-      llm: classifyLlm({ 'project-a/project-b 跨仓库推送必须严格串行。': { domain: 'org', reason: 'org workflow' } }),
+      llm: classifyLlm({ '跨仓库流水线必须严格串行。': { domain: 'org', reason: 'org workflow' } }),
       route: { provider: 'mock', model: 'mock' },
     })
     expect(result.staged).toHaveLength(1)
