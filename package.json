@@ -91,7 +91,7 @@
     "@huggingface/tokenizers": "0.2.0",
     "@types/node": "^24.19.1",
     "onnxruntime-common": "1.31.0-dev.20260911-2a43ec07e",
-    "typescript": "^5.9.3",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.8"
   },
   "dependencies": {
