@@ -60,8 +60,8 @@ const CLASSIFY_MAX_TOKENS = 2048
 
 const CLASSIFY_INSTRUCTION = [
   'You are classifying a recurring project memory for possible global promotion. Judge which audience it belongs to:',
-  '- "machine": useful to every project on THIS machine — local tooling, local conventions, machine environment facts.',
-  '- "org": an organisation-wide rule or workflow that every member project should follow.',
+  '- "machine" (the GLOBAL domain, visible to every project on this machine): local tooling, machine-wide conventions, environment facts.',
+  '- "org" (the WORK domain, visible only to a curated set of work projects): company/team infrastructure, cross-repo workflows, shared internal systems.',
   '- "project": project-specific only; must NOT be promoted.',
   'Reply with ONLY a JSON object: {"domain":"machine"|"org"|"project","reason":"<one line>"}',
 ].join('\n')

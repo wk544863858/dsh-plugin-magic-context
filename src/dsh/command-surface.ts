@@ -201,9 +201,17 @@ export function planProfileCommand(
 
 // ── /ctx-global ────────────────────────────────────────────────────────────
 
+/** Display label for a domain kind (2026-10-25 naming: the axis is AUDIENCE — machine=全局, org=工作). */
+function kindLabel(kind: string): string {
+  if (kind === 'machine') return '全局'
+  if (kind === 'org') return '工作'
+  if (kind === 'user') return '画像'
+  return kind
+}
+
 function domainLine(store: AdapterStores, domain: ReturnType<AdapterStores['listDomains']>[number]): string {
   const members = store.listDomainMembers(domain.domainId).length
-  return `- ${domain.domainId} [${domain.kind}] ${domain.enabled ? 'enabled' : 'disabled'}`
+  return `- ${domain.domainId} [${domain.kind}·${kindLabel(domain.kind)}] ${domain.enabled ? 'enabled' : 'disabled'}`
     + ` · budget ${String(domain.budgetTokens)} tok · cap ${String(domain.cap)}`
     + ` · shares ${domain.shareCategories.length === 0 ? '(nothing)' : domain.shareCategories.join(', ')}`
     + ` · ${String(members)} member(s)`
@@ -245,7 +253,7 @@ export function planGlobalCommand(
       return { kind: 'error', text: `Magic Context: /ctx-global create needs <domain>. Usage: ${GLOBAL_USAGE}` }
     }
     if (!isDomainKind(kind)) {
-      return { kind: 'error', text: `Magic Context: --kind must be org or machine (got '${kind}'). Usage: ${GLOBAL_USAGE}` }
+      return { kind: 'error', text: `Magic Context: --kind must be org (工作域, curated work projects) or machine (全局域, every project on this machine) — got '${kind}'. Usage: ${GLOBAL_USAGE}` }
     }
     if (store.getDomain(domainId) !== undefined) {
       return { kind: 'error', text: `Magic Context: domain '${domainId}' already exists.` }
@@ -330,7 +338,7 @@ export function planGlobalCommand(
         text: 'Magic Context: recurrence scan found 0 cross-project candidates.\n'
           + 'That is the expected result on this corpus (measured 2026-10-10: 1292 active rows across 33 projects, '
           + 'no normalized hash shared by two projects) — historian facts are project-bound. '
-          + 'Use /ctx-global promote <memoryId> for human-judged organisation knowledge.',
+          + 'Use /ctx-global promote <memoryId> for human-judged work-domain knowledge.',
       }
     }
     return {

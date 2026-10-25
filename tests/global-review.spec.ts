@@ -145,7 +145,7 @@ describe('reviewGlobalCandidates', () => {
     // Batch-lane card copy: neutral, statistics live in the question, the
     // detail carries only the body.
     const batchCard = raisedCards[0]![0]!
-    expect(batchCard.question).toBe('发布这条自动暂存的 [CONSTRAINTS] 记忆到机器域？（0 个项目独立观察 / 0 次）')
+    expect(batchCard.question).toBe('发布这条自动暂存的 [CONSTRAINTS] 记忆到全局域？（0 个项目独立观察 / 0 次）')
     expect(batchCard.detail).toBe('> 共享事实：测试构建走 npm run gate')
     expect(batchCard.detail).not.toContain('git:abc')
     expect(batchCard.options?.some(option => option.label === '跳过')).toBe(true)
@@ -391,7 +391,7 @@ describe('reviewGlobalCandidates', () => {
     // body in the detail, no "skip" non-option.
     const card = raised[0]![0]!
     expect(card.question).toBe('')
-    expect(card.header).toBe('记忆发布审批 · 机器域')
+    expect(card.header).toBe('记忆发布审批 · 全局域')
     expect(card.detail).toBe('> just promoted')
     expect(card.detail).not.toContain('来源')
     expect(card.detail).not.toContain('独立观察')
@@ -399,7 +399,7 @@ describe('reviewGlobalCandidates', () => {
     expect(labels).toContain('批准发布')
     expect(labels).not.toContain('跳过')
     expect(labels).toContain('拒绝')
-    expect(card.options?.find(option => option.label === '批准发布')?.description).toBe('写入机器域，该域所有成员项目可见')
+    expect(card.options?.find(option => option.label === '批准发布')?.description).toBe('写入全局域，该域所有成员项目可见')
     expect(outcome.approved).toBe(1)
     expect(calls).toHaveLength(1)
     expect(calls[0]).toMatchObject({ identity: 'dir:global:machine' })
@@ -467,7 +467,7 @@ describe('reviewGlobalCandidates', () => {
     const { journal, rows } = fakeJournal()
     const outcome = await reviewGlobalCandidates({
       store,
-      ask: fakeAsker(askId => ({ answers: [{ id: askId, selected: ['发布到组织域'] }] })),
+      ask: fakeAsker(askId => ({ answers: [{ id: askId, selected: ['发布到工作域'] }] })),
       publisher: port,
       journal,
       now: () => NOW,
@@ -482,7 +482,7 @@ describe('reviewGlobalCandidates', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0]).toMatchObject({ identity: 'dir:global:org' })
     const row = rows.find(entry => entry.kind === 'global-review')
-    expect(row?.payload).toMatchObject({ decision: 'reclassified', toDomain: 'dir:global:org', answer: '发布到组织域' })
+    expect(row?.payload).toMatchObject({ decision: 'reclassified', toDomain: 'dir:global:org', answer: '发布到工作域' })
   })
 
   it('retires the original as a duplicate when the target domain already holds the content', async () => {
@@ -505,7 +505,7 @@ describe('reviewGlobalCandidates', () => {
     const { journal, rows } = fakeJournal()
     const outcome = await reviewGlobalCandidates({
       store,
-      ask: fakeAsker(askId => ({ answers: [{ id: askId, selected: ['发布到组织域'] }] })),
+      ask: fakeAsker(askId => ({ answers: [{ id: askId, selected: ['发布到工作域'] }] })),
       publisher: port,
       journal,
       now: () => NOW,
@@ -529,7 +529,7 @@ describe('reviewGlobalCandidates', () => {
       publisher: fakePublisher().port,
       now: () => NOW,
     })
-    expect(calls[0]![0]!.options?.some(option => option.label === '发布到组织域')).toBe(true)
+    expect(calls[0]![0]!.options?.some(option => option.label === '发布到工作域')).toBe(true)
     // Flip org off: the reroute option disappears from the card.
     store.upsertDomain({
       domainId: 'dir:global:org', kind: 'org', enabled: false, budgetTokens: 512,
@@ -547,7 +547,7 @@ describe('reviewGlobalCandidates', () => {
       publisher: fakePublisher().port,
       now: () => NOW,
     })
-    expect(calls2[0]![0]!.options?.some(option => option.label === '发布到组织域')).toBe(false)
+    expect(calls2[0]![0]!.options?.some(option => option.label === '发布到工作域')).toBe(false)
     expect(store.getGlobalCandidate(second)?.state).toBe('pending')
   })
 })

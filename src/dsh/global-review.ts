@@ -53,8 +53,8 @@ const OPTION_APPROVE = '批准发布'
 const OPTION_SKIP = '跳过'
 const OPTION_REJECT = '拒绝'
 /** Reclassification options: the card names the OTHER global domain explicitly. */
-const OPTION_REROUTE_MACHINE = '发布到机器域'
-const OPTION_REROUTE_ORG = '发布到组织域'
+const OPTION_REROUTE_MACHINE = '发布到全局域'
+const OPTION_REROUTE_ORG = '发布到工作域'
 
 export interface GlobalReviewOutcome {
   readonly approved: number
@@ -69,9 +69,16 @@ export interface GlobalReviewOutcome {
   readonly remaining: number
 }
 
+/**
+ * Display names follow the 2026-10-25 naming decision (docs/domain-naming-
+ * work-global-2026-10-25.md): the domain axis is AUDIENCE, not distribution —
+ * `machine` renders to every project on this machine (全局域), `org` to a
+ * hand-curated set of work projects (工作域). The internal tokens
+ * ('org'/'machine', dir:global:*) are storage keys and stay untouched.
+ */
 function domainLabel(domainId: string): string {
-  if (domainId === 'dir:global:machine') return '机器域'
-  if (domainId === 'dir:global:org') return '组织域'
+  if (domainId === 'dir:global:machine') return '全局域'
+  if (domainId === 'dir:global:org') return '工作域'
   return domainId
 }
 

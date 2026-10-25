@@ -2,6 +2,12 @@
  * The adapter's global domains: `user` (the person), `org` (organisation
  * knowledge), `machine` (this machine's environment).
  *
+ * Display naming (2026-10-25, docs/domain-naming-work-global-2026-10-25.md):
+ * the axis is AUDIENCE, not distribution — `machine` surfaces as 全局/global
+ * (every project on this machine), `org` as 工作/work (a hand-curated member
+ * set of work projects). The internal tokens below are storage keys and never
+ * rename.
+ *
  * Why domains exist at all
  * ------------------------
  * A *global* memory is one that is not owned by any single project. Magic
