@@ -5,6 +5,7 @@
  * preStep/SystemPrompt wiring uses.
  */
 import { describe, expect, it } from 'vitest'
+import { injectReduceGuidance, type PreStepDeps } from '../src/dsh/pre-step.ts'
 import {
   appendToLastText,
   buildChannel1Reminder,
@@ -135,5 +136,94 @@ describe('tracker and message helpers', () => {
     expect(messageHasDeskSection(withDesk)).toBe(true)
     expect(message.content[0]?.text).toBe('system head') // original untouched
     expect(withDesk.content[0]?.text).toBe('system head\n\n## Magic Context\n\ndesk')
+  })
+})
+
+describe('injectReduceGuidance wiring — the sticky gap survives the real call site', () => {
+  /**
+   * 2026-10-25 live incident, pinned: the SystemPrompt context provider called
+   * reduceTracker.record(sessionId, nudge, 0) — a literal turn — so
+   * lastOrdinalTurn never advanced and the same-band sticky gap read as the
+   * WHOLE realUserTurnCount. Any session past 5 user turns re-fired its
+   * channel2 reminder on EVERY system-prompt assembly (33 reminders in 11
+   * minutes on one session, each double-journaled by the host's assemble →
+   * preStep-append → reassemble cycle). The pure decideReduceNudge tests above
+   * stayed green because they hand-feed lastOrdinalTurn; this test drives the
+   * actual wiring.
+   */
+  it('records the real user-turn count, so same-band reminders hold between assemblies and refire only after 5 user turns', () => {
+    // Capture the dynamic context provider registered with the SystemPrompt service.
+    let render: ((assembly: unknown) => string) | undefined
+    const systemPrompt = {
+      section: () => () => {},
+      context: (def: { text: (assembly: unknown) => string }) => { render = def.text; return () => {} },
+    }
+    const scope = {
+      systemPrompt,
+      effect: (fn: () => unknown) => { fn(); return () => {} },
+    }
+    const ctx = { inject: (_deps: readonly string[], fn: (scope: unknown) => void) => { fn(scope) } }
+
+    // One tagged, undropped tool result worth exactly 60k tokens: severity 100%
+    // over the 60k tail floor and past the 50k channel2 floor → band channel2.
+    const session = {
+      id: 's1',
+      snapshotEvents: () => [
+        { seq: 1, type: 'tool/call', data: { callId: 'c1', name: 'pwsh' } },
+        { seq: 2, type: 'tool/result', data: { turn: 6, step: 1, message: { toolCallId: 'c1', content: [{ type: 'text', text: 'x'.repeat(240_000) }] } } },
+      ],
+      surface: { nodes: [2] },
+    }
+    const assembly = { agent: { session } }
+
+    const entries: Array<{ kind: string; summary: string; sessionId?: string }> = []
+    const journal = {
+      info: (kind: string, summary: string, _data?: unknown, sessionId?: string) => { entries.push({ kind, summary, sessionId }) },
+      warn: () => {},
+      error: () => {},
+    }
+
+    const tracker = new ReduceNudgeTracker()
+    injectReduceGuidance({
+      ctx,
+      config: {},
+      stores: { getTag: () => 7 },
+      journal,
+      reduceTracker: tracker,
+      lane: { memoryEnabled: true },
+    } as unknown as PreStepDeps)
+
+    expect(render).toBeDefined()
+    const text = render as (assembly: unknown) => string
+    const nudges = () => entries.filter(entry => entry.summary.startsWith('reduce nudge')).length
+
+    // Six real user turns already — the precondition that made the literal-0
+    // call site fire on every single assembly.
+    for (let turn = 1; turn <= 6; turn += 1) tracker.observeUserMessage('s1', `m${turn}`)
+
+    // First assembly of the turn: fires channel2 exactly once.
+    expect(text(assembly)).toContain('Your next step: call ctx_reduce')
+    expect(tracker.state('s1').lastOrdinalTurn).toBe(6)
+    expect(nudges()).toBe(1)
+
+    // The host's per-step double assembly (assemble → preStep append →
+    // reassemble), same band, 0 turns later: held — no reminder, no journal row.
+    expect(text(assembly)).toBe('')
+    expect(nudges()).toBe(1)
+
+    // Four more user turns: still held (gap < 5).
+    for (let turn = 7; turn <= 10; turn += 1) {
+      tracker.observeUserMessage('s1', `m${turn}`)
+      expect(text(assembly)).toBe('')
+    }
+    expect(nudges()).toBe(1)
+
+    // The 5th user turn past the last ordinal: refires, ordinal 2, and the
+    // recorded turn advanced with it.
+    tracker.observeUserMessage('s1', 'm11')
+    expect(text(assembly)).toContain('Your next step: call ctx_reduce')
+    expect(tracker.state('s1').lastOrdinal).toBe(2)
+    expect(tracker.state('s1').lastOrdinalTurn).toBe(11)
+    expect(nudges()).toBe(2)
   })
 })

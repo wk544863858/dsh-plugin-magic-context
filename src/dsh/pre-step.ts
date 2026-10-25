@@ -656,7 +656,15 @@ export function injectReduceGuidance(deps: PreStepDeps): void {
             lastOrdinal: state.lastOrdinal,
             ...state.lastOrdinalTurn === undefined ? {} : { lastOrdinalTurn: state.lastOrdinalTurn },
           })
-          reduceTracker.record(sessionId, nudge, 0)
+          // The turn MUST be the session's real user-turn count, not a literal:
+          // record persists it as lastOrdinalTurn, and decideReduceNudge's
+          // sticky gap is realUserTurnCount - lastOrdinalTurn. A literal 0 made
+          // the gap read as the WHOLE turn count, so any session past 5 user
+          // turns re-fired its channel2 reminder on every system-prompt
+          // assembly (measured live 2026-10-25: 33 reminders in 11 minutes,
+          // each double-journaled by the host's assemble→preStep-append→
+          // reassemble cycle).
+          reduceTracker.record(sessionId, nudge, state.realUserTurnCount)
           if (!nudge.fire || nudge.level === undefined) return ''
           const hints = undropped.slice(0, 4).map(node => ({ tagNumber: node.tagNumber as number }))
           const reminder = nudge.level === 'channel2'
