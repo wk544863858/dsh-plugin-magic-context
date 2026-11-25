@@ -47,6 +47,7 @@ import type { MemoryWriter } from '../core/memory-write.ts'
 import type { ProfileWriter } from '../core/profile-write.ts'
 import { errText } from '../core/types.ts'
 import { autoStageGlobalCandidates, type AutoStageLlm } from '../core/global-autostage.ts'
+import { gateProfileCandidate, listApprovedConfirmations } from '../core/profile-confirmation.ts'
 import type { HistorianLlm } from './historian.ts'
 import type { MagicContextDshConfig } from './config.ts'
 import type { PreStepProjects } from './pre-step.ts'
@@ -212,6 +213,18 @@ export function wireMaintenance(input: {
           writer: profileWriter,
           sessionId: 'mc-maintenance',
           journal,
+          // WP6: the human gate for directive-shaped promotions. Wired here
+          // rather than inside the review so the pure planner stays testable
+          // without a store, and so the gate is impossible to bypass by calling
+          // the review directly in a live composition.
+          confirmations: {
+            enqueue: (candidate) => gateProfileCandidate(
+              stores,
+              { contractCandidateId: candidate.contractCandidateId, content: candidate.content },
+              Date.now(),
+            ),
+            approved: () => listApprovedConfirmations(stores),
+          },
           ...(tickLlmReady && tickRoute !== undefined && llm !== undefined
             ? { llm: llm as unknown as ProfileReviewLlm, route: tickRoute }
             : {}),

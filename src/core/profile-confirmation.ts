@@ -76,6 +76,24 @@ export function decideConfirmation(
 }
 
 /**
+ * Answers a human has given, keyed by the CONTRACT candidate id — the shape the
+ * review pass needs to let an approved directive-shaped promotion land.
+ *
+ * An `approved` row is the only durable record that a human saw this exact text
+ * and accepted that it applies in every session. The review compares the
+ * promotion's own text against the approved set rather than the candidate id,
+ * because the model merges candidates into one promotion whose wording usually
+ * differs from any single observation.
+ */
+export function listApprovedConfirmations(
+  store: AdapterStores,
+): ReadonlyMap<number, string> {
+  const approved = new Map<number, string>()
+  for (const row of store.listProfileConfirmations('approved')) approved.set(row.contractCandidateId, row.content)
+  return approved
+}
+
+/**
  * The one-line summary a session notice carries. Deliberately includes the
  * command surface, because a question with no way to answer it is just noise.
  */

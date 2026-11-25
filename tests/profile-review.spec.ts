@@ -595,4 +595,229 @@ describe('runProfileReview', () => {
     // A failed call is never stamped: the next tick retries it.
     expect(calls.some(call => call.level === 'warn' && call.summary.includes('deadline'))).toBe(true)
   })
+
+  /**
+   * WP6 — the directive-shaped gate.
+   *
+   * The failure this block exists to prevent: a behavioural rule ("always do X")
+   * reaching the profile, which is injected into EVERY session on the machine.
+   * `classifyProfileShape` and the confirmation queue existed but nothing on the
+   * promotion path called them, so the gate was dead code (measured 2026-11-25).
+   */
+  describe('the directive-shaped gate', () => {
+    /** A two-session batch that would otherwise promote cleanly. */
+    function seedTwoSessions(path: string, content: string): void {
+      seedCandidate(path, content, T0)
+      seedCandidate(path, content, T0, 'sess-b')
+      seedCandidate(path, 'unrelated note', T0, 'sess-b')
+    }
+
+    function gate(onEnqueue: (input: { contractCandidateId: number; content: string }) => { shape: 'descriptive' | 'directive' }, approved: ReadonlyMap<number, string> = new Map()) {
+      return {
+        enqueue: onEnqueue,
+        approved: () => approved,
+      }
+    }
+
+    it('holds a directive-shaped promotion and queues it instead of publishing', async () => {
+      const path = makeDb()
+      seedTwoSessions(path, 'always answer in Chinese')
+      const calls: Call[] = []
+      const enqueued: string[] = []
+      const outcome = await withWriter(path, writer => runProfileReview({
+        writer,
+        llm: answerLlm(JSON.stringify({
+          promote: [{ content: 'always answer in Chinese', consume_candidate_ids: [1, 2] }],
+          reject: [3],
+        })).llm as never,
+        route: { provider: 'mock', model: 'mock' },
+        sessionId: 'mc-maintenance',
+        journal: recordingJournal(calls),
+        now: () => T0,
+        confirmations: gate(input => { enqueued.push(input.content); return { shape: 'directive' } }),
+      }))
+      expect(outcome.promoted).toBe(0)
+      expect(profiles(path)).toEqual([])
+      // Queued, and NOT consumed — a human can still approve it later.
+      expect(enqueued).toEqual(['always answer in Chinese', 'always answer in Chinese'])
+      expect(candidateContents(path)).toContain('always answer in Chinese')
+      expect(calls.some(call => call.summary.includes('directive-shaped'))).toBe(true)
+    })
+
+    it('promotes a descriptive candidate through the same gate untouched', async () => {
+      const path = makeDb()
+      seedTwoSessions(path, 'answers in Chinese')
+      const enqueued: string[] = []
+      const outcome = await withWriter(path, writer => runProfileReview({
+        writer,
+        llm: answerLlm(JSON.stringify({
+          promote: [{ content: 'answers in Chinese', consume_candidate_ids: [1, 2] }],
+          reject: [3],
+        })).llm as never,
+        route: { provider: 'mock', model: 'mock' },
+        sessionId: 'mc-maintenance',
+        journal: recordingJournal([]),
+        now: () => T0,
+        confirmations: gate(input => { enqueued.push(input.content); return { shape: 'directive' } }),
+      }))
+      expect(outcome.promoted).toBe(1)
+      expect(enqueued, 'a description must never be queued as a question').toEqual([])
+    })
+
+    it('lets a human-approved promotion land', async () => {
+      // Approval is keyed by the CANDIDATE id, not the promotion text: the
+      // reviewer rewrites (`always answer in Chinese` → `never push without
+      // asking` here stays verbatim, but in general the wording differs), so a
+      // text match made an approval unlandable forever (measured 2026-11-25).
+      const path = makeDb()
+      seedTwoSessions(path, 'never push without asking')
+      const enqueued: string[] = []
+      const outcome = await withWriter(path, writer => runProfileReview({
+        writer,
+        llm: answerLlm(JSON.stringify({
+          promote: [{ content: 'never push without asking', consume_candidate_ids: [1, 2] }],
+          reject: [3],
+        })).llm as never,
+        route: { provider: 'mock', model: 'mock' },
+        sessionId: 'mc-maintenance',
+        journal: recordingJournal([]),
+        now: () => T0,
+        confirmations: gate(
+          input => { enqueued.push(input.content); return { shape: 'directive' } },
+          new Map([[1, 'never push without asking'], [2, 'never push without asking']]),
+        ),
+      }))
+      expect(enqueued, 'an approved candidate must not be re-queued').toEqual([])
+      expect(outcome.promoted).toBe(1)
+      expect(profiles(path).map(row => row.content)).toEqual(['never push without asking'])
+    })
+
+    it('keeps the historical behaviour when no gate is wired', async () => {
+      // Tests and stand-alone callers construct no queue; they must not start
+      // failing because the gate exists.
+      const path = makeDb()
+      seedTwoSessions(path, 'always answer in Chinese')
+      const outcome = await withWriter(path, writer => runProfileReview({
+        writer,
+        llm: answerLlm(JSON.stringify({
+          promote: [{ content: 'always answer in Chinese', consume_candidate_ids: [1, 2] }],
+          reject: [3],
+        })).llm as never,
+        route: { provider: 'mock', model: 'mock' },
+        sessionId: 'mc-maintenance',
+        journal: recordingJournal([]),
+        now: () => T0,
+      }))
+      expect(outcome.promoted).toBe(1)
+    })
+
+    it('does not ask the human about a promotion already held back for recurrence', async () => {
+      // Ordering: the cross-session hold runs FIRST, so a promotion that cannot
+      // land anyway never manufactures a question the human would answer for
+      // nothing.
+      const path = makeDb()
+      seedCandidate(path, 'always answer in Chinese', T0, 'sess-a')
+      seedCandidate(path, 'always answer in Chinese', T0, 'sess-a')
+      seedCandidate(path, 'unrelated note', T0, 'sess-b')
+      const enqueued: string[] = []
+      await withWriter(path, writer => runProfileReview({
+        writer,
+        llm: answerLlm(JSON.stringify({
+          promote: [{ content: 'always answer in Chinese', consume_candidate_ids: [1, 2] }],
+          reject: [3],
+        })).llm as never,
+        route: { provider: 'mock', model: 'mock' },
+        sessionId: 'mc-maintenance',
+        journal: recordingJournal([]),
+        now: () => T0,
+        confirmations: gate(input => { enqueued.push(input.content); return { shape: 'directive' } }),
+      }))
+      expect(enqueued).toEqual([])
+    })
+
+    it('requires EVERY directive source to be approved, not just one', async () => {
+      // A rule merged from an approved observation plus an unapproved one must
+      // not land: approving one input does not sanction text the human never saw.
+      const path = makeDb()
+      seedCandidate(path, 'never push without asking', T0)
+      seedCandidate(path, 'always run the full suite', T0, 'sess-b')
+      seedCandidate(path, 'unrelated note', T0, 'sess-b')
+      const outcome = await withWriter(path, writer => runProfileReview({
+        writer,
+        llm: answerLlm(JSON.stringify({
+          promote: [{ content: 'never push without asking and always run the full suite', consume_candidate_ids: [1, 2] }],
+          reject: [3],
+        })).llm as never,
+        route: { provider: 'mock', model: 'mock' },
+        sessionId: 'mc-maintenance',
+        journal: recordingJournal([]),
+        now: () => T0,
+        // Only candidate 1 was approved; candidate 2 was never answered.
+        confirmations: gate(() => ({ shape: 'directive' }), new Map([[1, 'never push without asking']])),
+      }))
+      expect(outcome.promoted).toBe(0)
+      expect(profiles(path)).toEqual([])
+    })
+
+    it('alarms when held-back candidates fill the batch window (starvation)', async () => {
+      // Held candidates are deliberately NOT consumed so an approval can still
+      // land them. The pool is read oldest-first, so if enough of them pile up
+      // they occupy the window every pass and newer observations never get a
+      // verdict. That is a silent stop, not an error — hence the alarm.
+      const path = makeDb()
+      // batch=2, threshold=1, and 3 candidates total: a full window with more
+      // waiting behind it is exactly the starvation precondition.
+      seedCandidate(path, 'always answer in Chinese', T0)
+      seedCandidate(path, 'always answer in Chinese', T0, 'sess-b')
+      seedCandidate(path, 'newer observation hiding behind the window', T0 + 1000, 'sess-c')
+      const calls: Call[] = []
+      await withWriter(path, writer => runProfileReview({
+        writer,
+        llm: answerLlm(JSON.stringify({
+          promote: [{ content: 'answers in Chinese', consume_candidate_ids: [1, 2] }],
+          reject: [],
+        })).llm as never,
+        route: { provider: 'mock', model: 'mock' },
+        sessionId: 'mc-maintenance',
+        journal: recordingJournal(calls),
+        now: () => T0,
+        threshold: 1,
+        batch: 2,
+        confirmations: gate(() => ({ shape: 'directive' })),
+      }))
+      const alarm = calls.find(call => call.data?.reason === 'batch-window-full')
+      expect(alarm).toBeDefined()
+      expect(alarm?.level).toBe('warn')
+      expect(alarm?.data).toMatchObject({ batch: 2, total: 3 })
+    })
+
+    it('is not bypassed by the reviewer rewriting the imperative away', async () => {
+      // The reviewer is instructed to merge and rewrite into a standalone
+      // statement, so it routinely drops the imperative: `always answer in
+      // Chinese` → `answers in Chinese`. That rewrite classifies as DESCRIPTIVE,
+      // so a promotion-text-only gate let a rule into the profile without ever
+      // asking. The contributing candidate must be checked too.
+      const path = makeDb()
+      seedCandidate(path, 'always answer in Chinese', T0)
+      seedCandidate(path, 'always answer in Chinese', T0, 'sess-b')
+      seedCandidate(path, 'unrelated note', T0, 'sess-b')
+      const enqueued: string[] = []
+      const outcome = await withWriter(path, writer => runProfileReview({
+        writer,
+        llm: answerLlm(JSON.stringify({
+          promote: [{ content: 'answers in Chinese', consume_candidate_ids: [1, 2] }],
+          reject: [3],
+        })).llm as never,
+        route: { provider: 'mock', model: 'mock' },
+        sessionId: 'mc-maintenance',
+        journal: recordingJournal([]),
+        now: () => T0,
+        confirmations: gate(input => { enqueued.push(input.content); return { shape: 'directive' } }),
+      }))
+      expect(outcome.promoted).toBe(0)
+      expect(profiles(path)).toEqual([])
+      expect(enqueued).toHaveLength(2)
+      expect(candidateContents(path)).toContain('always answer in Chinese')
+    })
+  })
 })

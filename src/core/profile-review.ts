@@ -38,6 +38,7 @@
 import type { Journal } from './journal.ts'
 import type { ProfileCandidateRow, ProfileWriter } from './profile-write.ts'
 import { LlmDeadlineError, withDeadline } from './llm-deadline.ts'
+import { classifyProfileShape } from './directive-detect.ts'
 import { errText } from './types.ts'
 
 /** The review LLM seam: the same call shape the maintenance tick uses. */
@@ -259,6 +260,19 @@ export interface ProfileReviewDeps {
   readonly minSessions?: number
   /** Wall-clock budget for the review call. Defaults to {@link PROFILE_REVIEW_TIMEOUT_MS}. */
   readonly reviewTimeoutMs?: number
+  /**
+   * WP6/WP7: the human gate for directive-shaped promotions. Absent (tests,
+   * stand-alone callers) means no queue is consulted and every promotion is
+   * treated as descriptive — the historical behaviour. The production caller
+   * wires {@link gateProfileCandidate} + {@link listApprovedConfirmations}, so
+   * a behavioural rule cannot enter the profile without a human answer.
+   */
+  readonly confirmations?: {
+    /** Queue a directive-shaped candidate and return its verdict shape. */
+    readonly enqueue: (input: { contractCandidateId: number; content: string }) => { readonly shape: 'descriptive' | 'directive' }
+    /** Contract candidate ids a human has APPROVED, mapped to the approved text. */
+    readonly approved: () => ReadonlyMap<number, string>
+  }
 }
 
 /** One LLM call, collected by block index — the same shape the tick uses. */
@@ -434,9 +448,90 @@ export async function runProfileReview(deps: ProfileReviewDeps): Promise<Profile
       { heldBack: [...new Set(heldBack)].sort((left, right) => left - right), reason: 'too-few-sessions' },
     )
   }
+  // WP6 — the directive-shaped gate, deliberately AFTER the recurrence holds so
+  // a promotion that cannot land anyway never asks the human a question.
+  //
+  // A promotion whose text reads like an INSTRUCTION ("always…", "never…",
+  // "必须…") may not enter the profile on the model's say-so: the profile is
+  // injected into EVERY session on the machine, so a hallucinated behavioural
+  // rule changes what the agent does everywhere. It passes only when the text
+  // reads as a description of the user, or when a human already APPROVED the
+  // queue entry feeding it. Otherwise it is queued once, held, and its
+  // candidates are NOT consumed — approval on the next review can still land it.
+  //
+  // The check covers the CONTRIBUTING CANDIDATES as well as the promotion text,
+  // and that is load-bearing. The reviewer is told to "merge near-duplicates and
+  // rewrite into a standalone statement", so a rewritten promotion routinely
+  // loses the imperative that made its input a directive: `always answer in
+  // Chinese` becomes `answers in Chinese`, which classifies as descriptive. A
+  // promotion-text-only gate would therefore be bypassed by ordinary rephrasing —
+  // the model would launder a rule into the profile without ever being asked.
+  //
+  // Approval is matched by CANDIDATE ID, not by text, for the same rewrite
+  // reason: a human approves the observation they were shown, and the promotion
+  // that observation feeds is worded differently by the reviewer. Matching on the
+  // promotion text made an approval unlandable forever (measured: approved queue
+  // entry, zero promotions, 2026-11-25). Every directive-shaped source must be
+  // approved — one approved input does not sanction a rule merged from an
+  // unapproved one — while descriptive sources corroborate and need no approval.
+  const approvedIds = new Set(deps.confirmations?.approved().keys() ?? [])
+  const approvedText = new Set(
+    [...(deps.confirmations?.approved().values() ?? [])].map(normalizeProfileContent),
+  )
+  const promoted: Array<{ content: string; consume: readonly number[] }> = []
+  const queued = new Set<number>()
+  for (const promotion of kept) {
+    const sources = promotion.consume
+      .map(id => byId.get(id))
+      .filter((row): row is NonNullable<typeof row> => row !== undefined)
+    const directiveSources = sources.filter(row => classifyProfileShape(row.content).shape === 'directive')
+    const promotionIsDirective = classifyProfileShape(promotion.content).shape === 'directive'
+    const directiveShaped = promotionIsDirective || directiveSources.length > 0
+    // Approved when the human sanctioned the directive observations behind it,
+    // or (for a rewrite that turned descriptive inputs into an imperative the
+    // human was shown verbatim) the promotion's own text.
+    const sanctioned = directiveSources.length > 0
+      ? directiveSources.every(row => approvedIds.has(row.id))
+      : approvedText.has(normalizeProfileContent(promotion.content))
+    if (deps.confirmations === undefined || !directiveShaped || sanctioned) {
+      promoted.push(promotion)
+      continue
+    }
+    for (const row of sources) {
+      const verdict = deps.confirmations.enqueue({ contractCandidateId: row.id, content: row.content })
+      if (verdict.shape === 'directive') queued.add(row.id)
+    }
+    heldBack.push(...promotion.consume)
+  }
+  if (queued.size > 0) {
+    deps.journal.warn(
+      'maintenance',
+      `profile review queued ${String(queued.size)} directive-shaped candidate(s) for human confirmation (nothing from them was promoted)`,
+      { reason: 'directive-shaped', queued: [...queued].sort((left, right) => left - right) },
+    )
+  }
+  // Starvation alarm (2026-11-25). The gate HOLDS the candidates behind a
+  // directive-shaped promotion instead of consuming them (so approval can still
+  // land it), and the batch window is `created_at ASC`. Once enough held rows
+  // accumulate they fill the window every pass and newer observations never
+  // reach a verdict — a silent stop, not an error. The pool is ordered oldest
+  // first, so a full window is the observable precondition.
+  const totalCandidates = writer.countCandidates()
+  if (candidates.length >= batch && totalCandidates > batch) {
+    deps.journal.warn(
+      'maintenance',
+      `profile review batch window is full (${String(batch)} of ${String(totalCandidates)} candidate(s)); newer observations cannot be judged until the oldest ones are promoted or expire`,
+      {
+        reason: 'batch-window-full',
+        batch,
+        total: totalCandidates,
+        heldBack: [...new Set(heldBack)].sort((left, right) => left - right),
+      },
+    )
+  }
   const promotedIds: number[] = []
   const landed: number[] = []
-  for (const promotion of kept) {
+  for (const promotion of promoted) {
     const id = writer.promoteProfile({
       content: promotion.content,
       candidateIds: promotion.consume,

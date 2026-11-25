@@ -105,6 +105,28 @@
       "id": "synthetic-zh-descriptive-1",
       "expected": "descriptive",
       "text": "用户偏好一次性拿到完整背景，不喜欢被反复追问细节。"
+    },
+    {
+      "id": "observed-en-directive-1",
+      "note": "The historian prompt names this exact sentence as a userObservations example. It has an obligation but no tool-action cue, so it escaped as descriptive until a communication cue was added (2026-11-25).",
+      "expected": "directive",
+      "text": "always answer in Chinese"
+    },
+    {
+      "id": "observed-en-directive-2",
+      "expected": "directive",
+      "text": "Respond in Simplified Chinese and keep answers under three sentences."
+    },
+    {
+      "id": "observed-zh-directive-1",
+      "expected": "directive",
+      "text": "必须用简体中文回答，结论放在第一句。"
+    },
+    {
+      "id": "observed-en-descriptive-3",
+      "note": "Negative control for the new communication cue: the noun 'writes' describes the person and must NOT fire.",
+      "expected": "descriptive",
+      "text": "The user writes in Chinese and prefers terse answers."
     }
   ]
 }

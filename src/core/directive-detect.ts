@@ -92,6 +92,20 @@ const SOFT_RULES: readonly Rule[] = [
   { rule: 'process:强制', weight: 1, pattern: /强制/ },
   { rule: 'process:严格执行', weight: 1, pattern: /严格执行/ },
   { rule: 'process:严格顺序', weight: 1, pattern: /严格顺序/ },
+  /**
+   * A BARE IMPERATIVE — the sentence opens with a verb telling the agent what to
+   * do, with no obligation word at all ("Respond in Simplified Chinese and keep
+   * answers under three sentences"). It has the same force as `must`, so it
+   * carries the same weight.
+   *
+   * Anchored to the start on purpose. Mid-sentence "reply"/"answer" is usually
+   * about the user's habits ("the user replies briefly"), which is a description;
+   * a sentence that OPENS with the verb is addressed to whoever reads it, i.e. the
+   * agent. Joined with an action cue below, so `Respond…` is directive while
+   * `The user answers briefly` stays descriptive.
+   */
+  { rule: 'imperative:en-bare', weight: 2, pattern: /^\s*(?:please\s+)?(answer|reply|respond|use|keep|prefer|avoid|always|never|do not|don't|ensure|make sure|treat|run|write|give|return)\b/i },
+  { rule: 'imperative:zh-bare', weight: 2, pattern: /^\s*(?:请)?(回答|回复|使用|保持|避免|不要|务必|一律|优先|确保|直接)/ },
 ]
 
 /**
@@ -118,6 +132,21 @@ const ACTION_RULES: readonly Rule[] = [
   { rule: 'action:遵循/遵守', weight: 0, pattern: /遵循|遵守/ },
   { rule: 'action:备份/安装/配置', weight: 0, pattern: /备份|安装|配置/ },
   { rule: 'action:切换/回退', weight: 0, pattern: /切换|回退|切回/ },
+  /**
+   * Communication is something an agent DOES, and it is the single most likely
+   * shape for a standing rule to take: the historian's own prompt names
+   * "always answer in Chinese" as a userObservations example. Without this cue
+   * that exact sentence scored 2 (obligation only) and was classified
+   * DESCRIPTIVE — i.e. the canonical example of the failure this module exists
+   * to prevent would have entered every session unreviewed (measured 2026-11-25,
+   * caught by tests/profile-review.spec.ts).
+   *
+   * Deliberately excludes the noun "write": `The user writes in Chinese` is a
+   * description of the person, and only the verb forms of communication that an
+   * instruction would use ("answer", "reply", "respond") are cues here.
+   */
+  { rule: 'action:en-communicate', weight: 0, pattern: /\b(answer|reply|respond|speak|communicate|explain|address)\b/i },
+  { rule: 'action:zh-communicate', weight: 0, pattern: /回答|回复|作答|沟通|交流|说话|措辞/ },
   { rule: 'action:en-verb', weight: 0, pattern: /\b(run|push|commit|test|write|delete|deploy|verify|confirm|wait|backup|review|ensure|check|update|refactor)\b/i },
 ]
 

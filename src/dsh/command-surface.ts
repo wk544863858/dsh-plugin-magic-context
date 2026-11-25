@@ -146,8 +146,9 @@ export function planProfileCommand(
     if (decided === undefined) return { kind: 'error', text: `Magic Context: #${String(id)} is not waiting for a decision.` }
     return {
       kind: 'success',
-      text: `Magic Context: #${String(id)} confirmed. It is now an approved profile rule and takes effect in every session.\n`
-        + 'Promotion into the shared profile happens on the next maintenance tick; nothing is written from this command.',
+      text: `Magic Context: #${String(id)} confirmed. The candidate may now enter the profile and take effect in every session.\n`
+        + 'Promotion itself happens on the next maintenance review, and still requires the candidate to be corroborated across '
+        + 'sessions — so a confirm can take up to a day to show up, and one that never gains a second session will expire instead.',
     }
   }
 
