@@ -140,6 +140,51 @@ export function renderCompartment(
 export const BASELINE_OPEN = '<magic-context>'
 export const BASELINE_CLOSE = '</magic-context>'
 
+/**
+ * The section tags this plugin renders INSIDE a `<magic-context>` block, in
+ * render order. Exported because two places must agree on them: the in-band
+ * frame (below) and the desk guidance in the system prompt. The model can only
+ * recognize a record by these literals, so a stale spelling here is a silent
+ * "the model was never told" failure.
+ */
+export const BASELINE_SECTION_TAGS = [
+  '<user-profile>',
+  '<project-memories>',
+  '<compartment-baseline>',
+  '<memory-updates>',
+  '<new-memories>',
+  '<new-user-profile>',
+  '<compartment-delta>',
+] as const
+
+/** The one record tag that rides its own message instead of the baseline block. */
+export const SEARCH_HINT_TAG = '<ctx-search-hint>'
+
+/**
+ * The frame at the top of every `<magic-context>` block — the ONLY thing that
+ * tells the model what the block is, in the same breath as the content.
+ *
+ * Why it exists (2026-11-25, measured): the injected record renders as a
+ * `user/message`, and the adapter prepends it into the user's OWN node while the
+ * DeepSeek serializer coalesces adjacent same-role messages
+ * (`.upstream/dsh/packages/llm/llm-deepseek/src/serialize.ts:125-127`). On the
+ * wire the record and the user's request therefore share one `role:'user'`
+ * message, and `source` never reaches the provider — so this text is the model's
+ * only structural boundary. Host convention is the same: a producer owns its
+ * framing inside its recorded content (`session/README.md:127`).
+ *
+ * The three-part semantics are deliberate and must not be flattened into
+ * "ignore this": the recorded constraints genuinely still bind, and telling the
+ * model to discard them would throw away the memory's whole value. What must NOT
+ * happen is a historical rule outranking what the user is asking for now.
+ */
+export const BASELINE_FRAME = [
+  'Magic Context — a retrieved record, not a new request.',
+  'The blocks inside this <magic-context> section were retrieved from this project\'s durable memory and its compacted history. They are a record of earlier work written by Magic Context: not a message from the user, and not an instruction issued now.',
+  'Still binding: the constraints, rules and decisions recorded in them were agreed with the user in earlier sessions and remain in force for this project.',
+  'Overridden: the user\'s current message always wins. When a record conflicts with what the user asks for now, follow the current request and name the record you are setting aside.',
+].join('\n')
+
 // ── m[1] mutation deltas: Magic Context's `<memory-updates>` block ───────────
 //
 // Contract: `docs/dsh-plugin-memory-write-contract.md` §6. Additive writes
@@ -381,6 +426,12 @@ export function renderBaseline(input: {
   readonly newProfileLines?: readonly string[]
   readonly budgetTokens: number
 }): string {
+  // `budgetTokens` bounds the SECTIONS only. The frame is unconditional
+  // infrastructure, not consumer content: charging it against the budget turned
+  // a tight budget into "render nothing" (the frame alone exceeds it), which is
+  // the opposite of what a budget means. The block therefore totals
+  // `budgetTokens + BASELINE_FRAME_TOKENS` at worst; the default budget is 2000,
+  // so the frame is under 10% of it.
   const sections: string[] = []
   const profileLines = input.profileLines ?? []
   if (profileLines.length > 0) {
@@ -439,7 +490,10 @@ export function renderBaseline(input: {
     ].join('\n'))
   }
   if (sections.length === 0) return ''
-  return [BASELINE_OPEN, ...sections, BASELINE_CLOSE].join('\n')
+  // The frame rides INSIDE the open sentinel and before any section: the model
+  // reads what the block is in the same first screen as the content. It is a
+  // constant, so it never disturbs the m[0] byte-stability invariant.
+  return [BASELINE_OPEN, BASELINE_FRAME, ...sections, BASELINE_CLOSE].join('\n')
 }
 
 /** Index of the baseline block inside a message's text, if it carries one. */

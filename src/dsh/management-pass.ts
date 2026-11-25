@@ -15,6 +15,7 @@
  * bust permission, and every step above is a durable mutation that spends it.
  */
 import {
+  BASELINE_FRAME,
   compactedPlaceholder,
   estimateTokens,
   findBaselineRange,
@@ -581,6 +582,15 @@ function refreshBaseline(
       },
       bytes: block.length,
       estTokens: estimateTokens(block),
+      // Telemetry (2026-11-25): which block VERSION a landing carried. The
+      // in-band frame is a static constant, so it changes no digest and cannot
+      // force a HARD rebuild — a session keeps serving its old baseline until the
+      // next execute-band pass happens to rewrite it. Without this flag "the fix
+      // is not working" and "this session has not refreshed yet" look identical in
+      // the journal, which is exactly the question a rollout has to answer:
+      //   SELECT json_extract(data,'$.frame'), COUNT(*) FROM journal
+      //    WHERE kind='baseline' GROUP BY 1;
+      frame: block.includes(BASELINE_FRAME) ? 1 : 0,
       ...memoriesChanged ? { reason: 'memory-digest-changed' } : {},
       ...profileChanged ? { reason: 'profile-digest-changed' } : {},
       ...routeChanged ? { reason: 'route-changed' } : {},

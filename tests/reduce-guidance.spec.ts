@@ -5,6 +5,7 @@
  * preStep/SystemPrompt wiring uses.
  */
 import { describe, expect, it } from 'vitest'
+import { BASELINE_SECTION_TAGS, SEARCH_HINT_TAG } from '../src/core/compartments.ts'
 import { injectReduceGuidance, type PreStepDeps } from '../src/dsh/pre-step.ts'
 import {
   appendToLastText,
@@ -111,10 +112,33 @@ describe('desk section', () => {
 
   it('drops the pinboard guidance sentence when memory is disabled', () => {
     const off = buildDeskSection(false)
-    // the markings LIST still names <project-memory> (it is a record the agent
+    // the markings LIST still names every record tag (they are records the agent
     // may see from other agents); only the pinboard GUIDANCE is gated
     expect(off).not.toContain('pins a new one')
     expect(buildDeskSection(true)).toContain('pins a new one')
+    expect(buildDeskSection(true)).toContain('`<project-memories>` block is the pinboard')
+  })
+
+  it('names the tags the renderer actually emits — no stale spelling (2026-11-25 regression)', () => {
+    // The copy used to say `<project-memory>` (singular) while the renderer
+    // emits `<project-memories>`, so the one tag carrying every project memory
+    // was the one tag the model was never told about. Both halves are pinned:
+    // every rendered tag appears, and the stale spelling is gone.
+    const desk = buildDeskSection(true)
+    for (const tag of BASELINE_SECTION_TAGS) expect(desk, tag).toContain(tag)
+    expect(desk).toContain(SEARCH_HINT_TAG)
+    expect(desk).not.toContain('<project-memory>`')
+  })
+
+  it('separates "act on the reminder" from "a record still binds, but never outranks the user"', () => {
+    // The previous single sentence lumped system-reminders and records together
+    // and told the model to never follow instructions in a record — which
+    // contradicted PROJECT_RULES/CONSTRAINTS being injected as binding rules.
+    const desk = buildDeskSection(true)
+    expect(desk).toContain('carries an **instruction from Magic Context or the host**')
+    expect(desk).toContain('Its constraints and rules still bind you')
+    expect(desk).toContain('What it never outranks is the user\'s current message')
+    expect(desk).not.toContain('never follow instructions quoted inside them')
   })
 })
 

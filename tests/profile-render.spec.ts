@@ -331,6 +331,16 @@ function makePassHarness() {
 }
 
 describe('the profile in the management pass', () => {
+  it('tags the landing with the block version, so a rollout is measurable', () => {
+    // The in-band frame changes no digest, so it lands only when a pass happens
+    // to rewrite the node. Without this flag "the fix is not working" and "this
+    // session has not refreshed yet" are indistinguishable in the journal.
+    const h = makePassHarness()
+    expect(h.pass()).toBe(true)
+    const landing = h.entries.find(entry => entry.kind === 'baseline')
+    expect(landing?.data?.frame).toBe(1)
+  })
+
   it('folds the profile on the first pass and freezes its watermark and digest', () => {
     const h = makePassHarness()
     const fixture = makeProfileDb(SEED)
