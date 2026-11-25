@@ -124,6 +124,13 @@ export interface MemoryRecallResult {
   readonly eligibleIds: readonly number[]
   /** The visible rows themselves (pre-budget), for forced-line rendering. */
   readonly eligibleRows: readonly MemoryRow[]
+  /**
+   * Tag-shaped spans neutralized before injection (see
+   * {@link countForgeableMarkup}). Cumulative over the rendered pool AND the
+   * delta lines, because either can carry a forged boundary. Telemetry: absent
+   * or 0 means no row in this recall needed neutralizing.
+   */
+  readonly neutralizedTags?: number
   /** The identity the recall resolved (recorded in the activity journal). */
   readonly identity?: string
   /** The domains that contributed shared rows, when any are active. */
@@ -433,15 +440,49 @@ function categoryRank(category: string): number {
   return memoryCategoryOrder(category)
 }
 
+/**
+ * Neutralize content that could forge the injected block's boundaries.
+ *
+ * The renderers below put a stored string into a `<magic-context>` block. A
+ * memory whose text contains `</project-memories>` or a literal
+ * `<system-reminder>` would otherwise end the section early (or fabricate a
+ * host-voice reminder) for every session the row is injected into. Storage keeps
+ * the original bytes — this is a RENDER concern only, and the tests that pin
+ * "content is data, not markup" keep asserting exactly that.
+ *
+ * Scope is deliberately narrow: only the tag-shaped text that the injected block
+ * and the host reminder convention use. Angle brackets in ordinary prose (code
+ * snippets, `a < b`, HTML in a memory about HTML) must survive intact, so this
+ * is not general HTML escaping.
+ */
+const FORGEABLE_TAG = /<\/?(?:magic-context|project-memories|project-memory|user-profile|new-user-profile|new-memories|memory-updates|compartment-baseline|compartment-delta|system-reminder|ctx-search-hint)\b[^>]*>/gi
+
+export function neutralizeInjectedMarkup(text: string): string {
+  return text.replace(FORGEABLE_TAG, match => match.replace(/</g, '‹').replace(/>/g, '›'))
+}
+
+/**
+ * How many tag-shaped spans {@link neutralizeInjectedMarkup} would rewrite.
+ *
+ * Telemetry only (2026-11-25): neutralization is otherwise invisible, so a regex
+ * that silently stopped matching — the one way this defence fails — would look
+ * exactly like a corpus that never contained markup. A non-zero count also says
+ * something about the MEMORY itself: a row that carries block tags is a row
+ * whose text is not what it appears, and that is worth seeing.
+ */
+export function countForgeableMarkup(text: string): number {
+  return text.match(FORGEABLE_TAG)?.length ?? 0
+}
+
 /** Render one memory as a baseline line (category-tagged, MC render order). */
 export function renderMemoryLine(row: MemoryRow): string {
   const badge = row.permanent ? ', permanent' : ''
-  return `- [${row.category || 'MEMORY'}${badge}] ${row.content.replace(/\s+/g, ' ').trim()}`
+  return `- [${row.category || 'MEMORY'}${badge}] ${neutralizeInjectedMarkup(row.content).replace(/\s+/g, ' ').trim()}`
 }
 
 /** Render one profile row as a baseline line. */
 export function renderProfileLine(row: ProfileRow): string {
-  return `- ${row.content.replace(/\s+/g, ' ').trim()}`
+  return `- ${neutralizeInjectedMarkup(row.content).replace(/\s+/g, ' ').trim()}`
 }
 
 /**
@@ -1121,6 +1162,8 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
             .digest('hex')
           // B1: visibility-qualified max (own eligible + peers eligible AND shared).
           const currentMaxMemoryId = maxVisibleId(identities, peerIdentities, [...shared], request.now)
+          const neutralizedTags = [...orderedPool, ...orderedAdditions]
+            .reduce((total, row) => total + countForgeableMarkup(row.content), 0)
           return {
             rows: orderedPool,
             lines: orderedPool.map(renderMemoryLine),
@@ -1130,6 +1173,8 @@ export function openMemoryBridge(options: MemoryBridgeOptions): MemoryBridge {
             currentMaxMemoryId,
             eligibleIds: rows.map(row => row.id),
             eligibleRows: rows,
+            // Only when it happened: an always-present 0 is noise in every recall row.
+            ...neutralizedTags === 0 ? {} : { neutralizedTags },
             ...context,
           }
           } finally {

@@ -453,6 +453,9 @@ export function preStepListener(deps: PreStepDeps): PreStepListener {
               domains: memories.domains,
               members: memories.members?.length,
               projects: [...new Set(memories.rows.map(row => row.projectPath.slice(0, 24)))],
+              // Telemetry: a non-zero count means a row's text carried block tags
+              // and was neutralized before injection. Absent = nothing to hide.
+              ...memories.neutralizedTags === undefined ? {} : { neutralizedTags: memories.neutralizedTags },
             },
             sessionId,
           )
