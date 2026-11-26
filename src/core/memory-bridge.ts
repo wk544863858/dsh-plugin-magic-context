@@ -441,34 +441,54 @@ function categoryRank(category: string): number {
 }
 
 /**
- * Neutralize content that could forge the injected block's boundaries.
+ * Neutralize content that could forge the injected block's structure.
  *
- * The renderers below put a stored string into a `<magic-context>` block. A
- * memory whose text contains `</project-memories>` or a literal
- * `<system-reminder>` would otherwise end the section early (or fabricate a
- * host-voice reminder) for every session the row is injected into. Storage keeps
- * the original bytes — this is a RENDER concern only, and the tests that pin
- * "content is data, not markup" keep asserting exactly that.
+ * The renderers below put a stored string into a `<magic-context>` block. Exactly
+ * two shapes can forge structure, and nothing else can:
  *
- * Scope is deliberately narrow: only the tag-shaped text that the injected block
- * and the host reminder convention use. Angle brackets in ordinary prose (code
- * snippets, `a < b`, HTML in a memory about HTML) must survive intact, so this
- * is not general HTML escaping.
+ *  1. A CLOSING tag — `</project-memories>`, `</magic-context>` — ends the
+ *     section early, so everything after it reads as if it sat outside the
+ *     record. This is the real boundary forgery.
+ *  2. `<system-reminder>` — the host's own instruction envelope. Injecting one
+ *     fabricates a host-voice command inside a memory row.
+ *
+ * An OPENING tag (`<project-memories>`) forges nothing: the block is parsed as
+ * text, not as a DOM, so it cannot terminate a section, and a reader already
+ * inside the same section gains no authority from it.
+ *
+ * That distinction is load-bearing, not pedantry. Measured on the live corpus
+ * (2026-11-26, 4607 active rows): 50 opening tags, ZERO closing tags, 2
+ * `<system-reminder>`. Neutralizing openers too rewrote 50 documentation
+ * references — rows that legitimately describe the renderer's output, e.g. "the
+ * renderer emits `<project-memories>`" — and only 1 of the 20 affected rows was
+ * made safer by it. Defence with zero added protection but a real accuracy cost
+ * is just damage.
+ *
+ * Storage keeps the original bytes — this is a RENDER concern only, and the tests
+ * that pin "content is data, not markup" keep asserting exactly that. Ordinary
+ * angle brackets (code, `a < b`, HTML in a memory about HTML) also survive.
  */
-const FORGEABLE_TAG = /<\/?(?:magic-context|project-memories|project-memory|user-profile|new-user-profile|new-memories|memory-updates|compartment-baseline|compartment-delta|system-reminder|ctx-search-hint)\b[^>]*>/gi
+const BLOCK_TAG_NAMES = 'magic-context|project-memories|project-memory|user-profile|new-user-profile|new-memories|memory-updates|compartment-baseline|compartment-delta|ctx-search-hint'
+
+/**
+ * The two forgeable shapes, in one pattern:
+ *  - a CLOSING tag of a section this block emits (ends the section early);
+ *  - `<system-reminder>` / `</system-reminder>` (the host's instruction
+ *    envelope, which a row must not be able to fabricate).
+ * An opening section tag is deliberately NOT matched — see the comment above.
+ */
+const FORGEABLE_TAG = new RegExp(`</(?:${BLOCK_TAG_NAMES})\\b[^>]*>|</?system-reminder\\b[^>]*>`, 'gi')
 
 export function neutralizeInjectedMarkup(text: string): string {
   return text.replace(FORGEABLE_TAG, match => match.replace(/</g, '‹').replace(/>/g, '›'))
 }
 
 /**
- * How many tag-shaped spans {@link neutralizeInjectedMarkup} would rewrite.
+ * How many spans {@link neutralizeInjectedMarkup} actually rewrites.
  *
  * Telemetry only (2026-11-25): neutralization is otherwise invisible, so a regex
  * that silently stopped matching — the one way this defence fails — would look
- * exactly like a corpus that never contained markup. A non-zero count also says
- * something about the MEMORY itself: a row that carries block tags is a row
- * whose text is not what it appears, and that is worth seeing.
+ * exactly like a corpus that never contained markup.
  */
 export function countForgeableMarkup(text: string): number {
   return text.match(FORGEABLE_TAG)?.length ?? 0
